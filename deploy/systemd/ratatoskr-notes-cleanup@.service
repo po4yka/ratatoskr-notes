@@ -25,7 +25,9 @@ Environment=XDG_CONFIG_HOME=/mnt/nvme/ratatoskr/notes/connections/%i/ob-home
 # leading `-` lets the unit continue, because the next line removes the state anyway.
 ExecStart=-/usr/bin/ob sync-unlink --path /mnt/nvme/ratatoskr/notes/connections/%i/tree
 ExecStart=/bin/rm -rf -- /mnt/nvme/ratatoskr/notes/connections/%i/tree /mnt/nvme/ratatoskr/notes/connections/%i/ob-home
-TimeoutStartSec=300
+# The owner's disconnect request waits for this unit, and Edge ends a request after 300 seconds.
+# The sync unit's stop and this unit together must finish well inside that budget.
+TimeoutStartSec=120
 
 NoNewPrivileges=yes
 PrivateTmp=yes
@@ -37,6 +39,17 @@ ProtectKernelModules=yes
 ProtectControlGroups=yes
 RestrictSUIDSGID=yes
 LockPersonality=yes
+ProtectKernelLogs=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+RestrictNamespaces=yes
+RestrictRealtime=yes
+CapabilityBoundingSet=
+# ob is Node.js: no MemoryDenyWriteExecute=, because the JIT needs writable and executable pages.
+RestrictAddressFamilies=AF_UNIX
+SystemCallFilter=@system-service
+SystemCallArchitectures=native
 # The leading `-` accepts a connection whose login never created the directory.
 ReadWritePaths=-/mnt/nvme/ratatoskr/notes/connections/%i
 # Only ob sync-unlink could reach the network, and it only edits local files.

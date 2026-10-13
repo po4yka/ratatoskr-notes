@@ -133,7 +133,7 @@ Stop assuming:
 - **spare memory or CPU.** The host runs other services and has no disk swap. Each `ob` process costs memory, so each sync unit carries `MemoryMax=`. Every queue, cache, batch, connection pool and worker pool carries an explicit bound.
 - **the boot device.** New durable state gets an absolute path under `/mnt/nvme`, named in the deployment unit.
 - **that a dependency runs here.** Every crate, image and binary needs a `linux/arm64` build against glibc 2.36 that works on 16 KiB pages. `PrivatePIDs=` needs systemd 257 and is not available.
-- **a free port.** The domain API is `8099` and the operator listener is `9471`, both allocated in the port table. A compiled default is for a developer machine only. Never widen a bind to `0.0.0.0`.
+- **a free port.** The domain API is `8099` and the operator listener is `9471`, both planned for the port table in `ratatoskr-workspace/docs/DEPLOYMENT_TARGET.md` (OBS-023 task 14.5). A compiled default is for a developer machine only. Never widen a bind to `0.0.0.0`.
 
 The domain API is reached only through Edge on loopback, and it trusts only the claims that Edge mints. The operator listener (`/health/*`, `/metrics`, `/version`), PostgreSQL and NATS are never reachable from outside the host.
 
