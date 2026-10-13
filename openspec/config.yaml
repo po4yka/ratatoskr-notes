@@ -1,0 +1,46 @@
+schema: spec-driven
+
+references:
+  - { id: ratatoskr-workspace, remote: "git@github.com:po4yka/ratatoskr-workspace.git" }
+
+context: |
+  `ratatoskr-notes` — The notes bounded context. It connects the owner's Obsidian vaults through exactly one channel each (`sync`, `plugin` or `cli`), keeps a complete and current copy of each vault, records file revisions and their bytes, indexes Markdown files with Obsidian's link rules, and publishes the notes events that Knowledge consumes.
+
+  Stack: Rust/Tokio, axum, SQLx/PostgreSQL, systemd template units driven through the D-Bus API, Obsidian Headless (`ob`, Node.js 22) for the `sync` channel, tracing.
+
+  The service foundation exists: a two-package Rust workspace, strict configuration, the operator plane, one editable `notes` schema, disposable-database tests, and CI. The cross-repository plan is the workspace change `add-notes-vault-connections` (OBS-023) and its specs `notes-vault-connections`, `notes-device-channels`, `notes-file-changes` and `notes-file-index`.
+
+  The gate command list is the fenced block in DEVELOPMENT.md. That list and .github/workflows/ci.yml are one list, and a step in ci.yml fails when they differ, so change both or neither.
+
+  Development status, binding and overriding anything that plans otherwise: one version only — no v2, no version negotiation, no deprecation window; no database migrations — a schema change edits the schema definition in place; the product is Ratatoskr and never "Ratatoskr Next". Only the repository owner changes this status.
+
+  Behaviour visible to more than one repository belongs in the ratatoskr-workspace store, not here.
+
+  Artefacts are written in English, in ASD-STE100 Simplified Technical English.
+
+rules:
+  specs:
+    - Every scenario must be executable as a test. If you cannot name the test it becomes, the
+      scenario is too vague to accept.
+    - Scenarios use WHEN and THEN. State the observable outcome, never the implementation that
+      produces it.
+  tasks:
+    - A task that changes behaviour is a pair. The first task adds a test that fails. The second
+      makes it pass. Never one task that does both.
+    - The failing-test task names the file, the test name, and the assertion that must fail.
+    - A refactor task comes only after the tests are green. It adds no test and changes no behaviour.
+    - A task that cannot start from a failing test states why in one line. Configuration,
+      documentation and generated files are the usual reasons.
+
+operations:
+  apply:
+    guidance:
+      - Run the new test before you write the implementation. Confirm it fails for the reason the
+        task states, and not for a compile error or a typo.
+      - Run the command list in this repository's DEVELOPMENT.md before the change is complete. That
+        list and .github/workflows/ci.yml are one list, and a step in ci.yml fails when they differ.
+      - Do not tick a task whose test has not been run.
+  archive:
+    guidance:
+      - Do not archive while any task is unticked. The openspec workflow fails on that in CI, and
+        finding it there costs a round trip.

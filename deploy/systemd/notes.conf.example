@@ -1,0 +1,15 @@
+# Operator example for ratatoskr-notes, a systemd EnvironmentFile (EnvironmentFile=/etc/ratatoskr/notes.conf).
+# Copy it to /etc/ratatoskr/notes.conf, replace every CHANGE-ME, and keep the file readable by the service user only.
+# `ratatoskr-notes check-config` validates it without starting anything (exit 0 valid, exit 78 invalid).
+
+# Operator listener: /health/live, /health/ready, /metrics, /version. Host only; allocated in docs/DEPLOYMENT_TARGET.md of ratatoskr-workspace.
+RATATOSKR__ADMIN__BIND=127.0.0.1:9471
+
+# Domain API (/v1/notes). Loopback; Edge is the only client. Allocated in docs/DEPLOYMENT_TARGET.md of ratatoskr-workspace.
+RATATOSKR__API__LISTEN_ADDRESS=127.0.0.1:8099
+
+# SECRET: the URL carries the password.
+# The shared database `ratatoskr` and the role `ratatoskr_notes`, which deploy/postgres/role.sql creates (a PostgreSQL administrator runs it once, then sets the password with `\password ratatoskr_notes`). The service creates its own schema, `notes`, on the first start.
+RATATOSKR__DATABASE__URL=postgres://ratatoskr_notes:CHANGE-ME@127.0.0.1:5432/ratatoskr
+
+RATATOSKR__TELEMETRY__LOG_FORMAT=json

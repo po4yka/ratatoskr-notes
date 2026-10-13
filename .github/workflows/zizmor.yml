@@ -1,0 +1,22 @@
+# The checks live once, in ratatoskr-workspace's `.github/workflows/reusable-zizmor.yml`. This wrapper
+# says when they run, and it is identical in every Ratatoskr repository: `drift.yml` fails when it
+# differs anywhere or pins an older revision than the workspace's `main`.
+name: zizmor
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: zizmor-${{ github.ref }}
+  # A pull request only needs its newest run; on `main` a cancelled run would leave a commit with no
+  # verdict at all.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  zizmor:
+    uses: po4yka/ratatoskr-workspace/.github/workflows/reusable-zizmor.yml@b7bd2a15b4ed75371a6471c0c5de90d7ba342b46 # main

@@ -1,0 +1,48 @@
+# What `cargo deny check` enforces, and why each section is here rather than left to taste.
+#
+# The shape follows ratatoskr-platform/deny.toml so the two files can be compared rather than
+# reasoned about separately. Notes starts with a smaller graph; the lists below are the shared
+# fleet policy, and entries unused in this graph are the price of the lists being identical.
+
+[advisories]
+version = 2
+yanked  = "deny"          # a yanked lockfile entry is a build that cannot be reproduced
+
+[licenses]
+version = 2
+allow = [
+    "Apache-2.0",
+    "MIT",
+    "MIT-0",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Zlib",
+    "CDLA-Permissive-2.0",
+]
+# One shared list covers every Rust repository in the fleet, so some entries are unused here.
+unused-allowed-license = "allow"
+
+[bans]
+# Two versions of one crate is usually accidental rather than wrong, so this warns rather than fails.
+multiple-versions = "warn"
+
+# Replacement allocators are denied because of page-size assumptions on the deployment target, not
+# because of the allocators; see ratatoskr-workspace/docs/DEPLOYMENT_TARGET.md. None of them is in
+# this graph today, which is exactly when the denial is cheapest to write.
+deny = [
+    { name = "tikv-jemallocator" },
+    { name = "jemallocator" },
+    { name = "mimalloc" },
+    { name = "snmalloc-rs" },
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git      = "deny"
+# The rule Cargo.toml states in prose, now with an exit code behind it: a git dependency must pin a
+# full commit SHA, never a branch or a tag.
+required-git-spec = "rev"
+# The fleet contracts repository is the only git source: the envelope, the error envelope and the
+# notes events (OBS-023).
+allow-git = ["https://github.com/po4yka/ratatoskr-contracts"]

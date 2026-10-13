@@ -1,0 +1,6 @@
+# One line rather than a list of extensions, because a list would have to be kept in step with what
+# the repository actually contains, and most of these repositories contain only documents so far.
+# `text=auto` lets git detect which files are text; `eol=lf` fixes what lands in a working tree on
+# every platform, so a checkout on Windows cannot introduce CRLF that the first code commit then
+# silently rewrites.
+* text=auto eol=lf

@@ -1,0 +1,115 @@
+# The gate DEVELOPMENT.md documents, enforced. The command list here and the command list in
+# DEVELOPMENT.md are the same list; if they drift, DEVELOPMENT.md is wrong.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    # Weekly on main, so a date-dependent test or a runner change is caught without a push.
+    - cron: "17 5 * * 1"
+
+# SECURITY.md: deny by default. The gate reads the tree and needs nothing else.
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  # On a pull request only the newest push matters, so a superseded run is cancelled. On `main` a
+  # cancelled run leaves that commit with no verdict, so runs on `main` are never cancelled.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    # The integration suite talks to a real PostgreSQL on purpose: the persistence layer uses
+    # runtime-checked queries, so this suite is what verifies them.
+    services:
+      postgres:
+        # Pinned by digest, not by tag. `postgres:17` as it stood on 2026-08-19 (PostgreSQL 17.11),
+        # byte-identical to ratatoskr-platform/ci.yml and ratatoskr-vault/ci.yml.
+        image: postgres:17@sha256:e38411452a464af89e5adadb8d223bf53b898d47d6ef918b2d58c08707350449
+        env:
+          POSTGRES_USER: notes
+          POSTGRES_PASSWORD: notes
+          POSTGRES_DB: notes
+          # Byte-identical to compose.yaml, so the runner and a laptop sort text the same way.
+          POSTGRES_INITDB_ARGS: "--locale-provider=icu --icu-locale=und-x-icu --encoding=UTF8"
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U notes -d notes"
+          --health-interval 1s
+          --health-timeout 5s
+          --health-retries 30
+
+    env:
+      # Where the suite creates and drops its disposable databases. Matches compose.yaml, so the
+      # same command works on a laptop and here.
+      NOTES_TEST_DATABASE_URL: postgres://notes:notes@127.0.0.1:5432/notes
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The gate reads the tree and pushes nothing, so the checkout credential is not kept.
+          persist-credentials: false
+
+      - name: Show the pinned toolchain
+        run: rustup show           # rust-toolchain.toml is the only supported toolchain
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+
+      - run: cargo fetch --locked
+
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+      # The one size limit clippy cannot express: no Rust lint counts the lines in a file. The
+      # number is the fleet ratchet from ratatoskr-workspace/docs/QUALITY_GATES.md. `*.rs` only, so
+      # Cargo.lock and schema.sql need no exclusion list.
+      - run: git ls-files -z "*.rs" | xargs -0 -r wc -l | awk '$2 != "total" && $1 > 850 { print; bad = 1 } END { exit bad }'
+
+      - run: cargo build --workspace --locked
+      - run: cargo test --workspace --locked
+      - run: cargo build --workspace --locked --release
+
+      # This file and DEVELOPMENT.md are one list by rule, and this step enforces the rule. The awk
+      # reads only the `gate` job: a top-level job key is a bare name at two spaces.
+      - name: The gate and DEVELOPMENT.md are one list
+        run: |
+          set -euo pipefail
+          in_ci=$(awk '
+            /^  [a-z][a-z0-9_-]*:[[:space:]]*$/ { in_gate = ($0 ~ /^  gate:[[:space:]]*$/) }
+            in_gate && /^[[:space:]]+- run: cargo / { sub(/^[[:space:]]+- run: /, ""); print }
+          ' .github/workflows/ci.yml)
+          in_doc=$(awk '/^### Rust — also the CI gate/{f=1} f&&/^cargo /{print} f&&/^```$/{exit}' \
+                   DEVELOPMENT.md)
+          if [ "$in_ci" != "$in_doc" ]; then
+            echo "::error::ci.yml and DEVELOPMENT.md have drifted. DEVELOPMENT.md is the one that is wrong."
+            diff <(echo "$in_ci") <(echo "$in_doc") || true
+            exit 1
+          fi
+          echo "the two lists are identical:"
+          echo "$in_ci" | awk '{print "  " $0}'
+
+  # Separate from the gate, so a new RustSec advisory cannot hide a clippy or test failure.
+  deny:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Show the pinned toolchain
+        run: rustup show           # rust-toolchain.toml is the only supported toolchain
+
+      # Reads RustSec, the licence set, duplicate versions and the source policy.
+      - uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe # v2.87.27
+        with:
+          tool: cargo-deny
+      - run: cargo deny check

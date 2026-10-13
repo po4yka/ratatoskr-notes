@@ -1,0 +1,25 @@
+# Did the dependency graph that was clean yesterday stop being clean? The check lives once, in
+# ratatoskr-workspace's `.github/workflows/reusable-advisories.yml`; this wrapper carries the daily
+# schedule and is identical in every repository with a root Cargo.toml.
+name: advisories
+
+on:
+  schedule:
+    # Daily, not on the hour: GitHub queues everyone's `0 * * * *` together and delays them.
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: advisories
+  # A scheduled run has nothing newer to yield to; a manual dispatch queues behind it.
+  cancel-in-progress: false
+
+jobs:
+  advisories:
+    permissions:
+      contents: read
+      issues: write  # the called job files the finding as an issue
+    uses: po4yka/ratatoskr-workspace/.github/workflows/reusable-advisories.yml@b7bd2a15b4ed75371a6471c0c5de90d7ba342b46 # main

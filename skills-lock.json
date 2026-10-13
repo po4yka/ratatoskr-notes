@@ -1,0 +1,113 @@
+{
+  "version": 1,
+  "skills": {
+    "cargo-workflows": {
+      "source": "po4yka/rust-skills",
+      "sourceType": "github",
+      "skillPath": "skills/cargo-workflows/SKILL.md",
+      "computedHash": "8c99a7367307eaea5020456bcf74d255a5ca495f394c55a124b57e70a0303286"
+    },
+    "rust-async-internals": {
+      "source": "po4yka/rust-skills",
+      "sourceType": "github",
+      "skillPath": "skills/rust-async-internals/SKILL.md",
+      "computedHash": "406fe476332f9b083cfa2c8e720e2e87233c90fb60d747bddfa5b9bc8ed6a07f"
+    },
+    "rust-borrow-semantics": {
+      "source": "po4yka/rust-skills",
+      "sourceType": "github",
+      "skillPath": "skills/rust-borrow-semantics/SKILL.md",
+      "computedHash": "ebcd08ff4efdc384c5b940cc1de541c5fc696eb594776ae9dc07ee1d15781322"
+    },
+    "rust-cli": {
+      "source": "po4yka/rust-skills",
+      "sourceType": "github",
+      "skillPath": "skills/rust-cli/SKILL.md",
+      "computedHash": "ddb2c02a2359a65cac803f4809f9a900b0c909ebef10d3bd1c4f1f2bffeb9fc0"
+    },
+    "rust-code-style": {
+      "source": "po4yka/rust-skills",
+      "sourceType": "github",
+      "skillPath": "skills/rust-code-style/SKILL.md",
+      "computedHash": "49b829fce96c417cc00d55244a4efeae2d7c10cb79d27a709e9f6db2568d6709"
+    },
+    "rust-compiler-errors": {
+      "source": "po4yka/rust-skills",
+      "sourceType": "github",
+      "skillPath": "skills/rust-compiler-errors/SKILL.md",
+      "computedHash": "ee5e5127165d600ef7f32274625fd27f010c05baf15da37371b7a7a30a0861a1"
+    },
+    "rust-crate-architecture": {
+      "source": "po4yka/rust-skills",
+      "sourceType": "github",
+      "skillPath": "skills/rust-crate-architecture/SKILL.md",
+      "computedHash": "67ea975ff329c29f3436bc2f489b3a0a7fa695c7ca7f60ec9e6588d11fa3b9f6"
+    },
+    "rust-database": {
+      "source": "po4yka/rust-skills",
+      "sourceType": "github",
+      "skillPath": "skills/rust-database/SKILL.md",
+      "computedHash": "05ddab1bb2b4dc452a397573c68bcec41cfbd3db5e71dff736244c4acf1f3266"
+    },
+    "rust-discipline": {
+      "source": "po4yka/rust-skills",
+      "sourceType": "github",
+      "skillPath": "skills/rust-discipline/SKILL.md",
+      "computedHash": "8cf30898607f32a6ee6adc5d97599ee7ad7e1e7a3874861648e4dac3a4a0078f"
+    },
+    "rust-lints": {
+      "source": "po4yka/rust-skills",
+      "sourceType": "github",
+      "skillPath": "skills/rust-lints/SKILL.md",
+      "computedHash": "7f182a1499886dbf51468780c861999819593e78b59440ab43a2db60e519dd14"
+    },
+    "rust-networking": {
+      "source": "po4yka/rust-skills",
+      "sourceType": "github",
+      "skillPath": "skills/rust-networking/SKILL.md",
+      "computedHash": "979718549d1afd26f2f48eaaef0265fee9144185aa452afed6d3100e37f73933"
+    },
+    "rust-observability": {
+      "source": "po4yka/rust-skills",
+      "sourceType": "github",
+      "skillPath": "skills/rust-observability/SKILL.md",
+      "computedHash": "ec59c1726bf06d6195df444afb12b43d3c234d519c98bd024bf4a8fb846ee97f"
+    },
+    "rust-panic-safety": {
+      "source": "po4yka/rust-skills",
+      "sourceType": "github",
+      "skillPath": "skills/rust-panic-safety/SKILL.md",
+      "computedHash": "5ef69f598f90098af3093ef5f8878e1f00c148f19cf1080369ca916b1194643f"
+    },
+    "rust-pattern-semantics": {
+      "source": "po4yka/rust-skills",
+      "sourceType": "github",
+      "skillPath": "skills/rust-pattern-semantics/SKILL.md",
+      "computedHash": "5ddd737b71fded972e4757c71eff40a64e094bbd5ddc8f6e09e15ad1b57e9749"
+    },
+    "rust-security": {
+      "source": "po4yka/rust-skills",
+      "sourceType": "github",
+      "skillPath": "skills/rust-security/SKILL.md",
+      "computedHash": "3a96e73565118597656f005cf370ebbae1b80878e9023046efb18386ae5547de"
+    },
+    "rust-serde": {
+      "source": "po4yka/rust-skills",
+      "sourceType": "github",
+      "skillPath": "skills/rust-serde/SKILL.md",
+      "computedHash": "607251183c9191d685ba9f5cf59f36cd13fcda250165e852df0afadffe409ca9"
+    },
+    "rust-tdd": {
+      "source": "po4yka/rust-skills",
+      "sourceType": "github",
+      "skillPath": "skills/rust-tdd/SKILL.md",
+      "computedHash": "d02c0f01d0963656a6364ecdb802be6bef029f8c2be5e7199087be0febfd8c06"
+    },
+    "rust-test-tools": {
+      "source": "po4yka/rust-skills",
+      "sourceType": "github",
+      "skillPath": "skills/rust-test-tools/SKILL.md",
+      "computedHash": "e2b8dce94542a19131b59620a3e58d5269b5bf7fe60f32620befd11f8db1f992"
+    }
+  }
+}

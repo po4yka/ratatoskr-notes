@@ -1,0 +1,32 @@
+# Only the github-actions ecosystem for version updates. `cargo` is deliberately absent: this
+# repository commits its Cargo.lock and runs every command with `--locked`, which makes a dependency
+# bump a deliberate act rather than a chore. A monthly pull request rewriting the lockfile would be
+# reviewing our own noise.
+#
+# A security fix is the exception, and it needs no entry here. Dependabot security updates are
+# enabled in the repository settings, so an advisory against a locked crate opens its own pull
+# request once GitHub's advisory database carries it. `cargo deny check` finds the same advisory, but
+# only as a red gate that someone then fixes by hand in every repository: RUSTSEC-2026-0285 in rustls
+# turned twelve repositories red that way in September 2026.
+#
+# Action pins are the opposite case: they rot silently, and a pin whose `# vX.Y.Z` comment no longer
+# matches its SHA cannot be checked by reading the diff. Dependabot updates the SHA and the comment
+# together, which is exactly the class of mistake that broke this workflow's first run.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      actions:
+        patterns: ["*"]          # one pull request, not one per action
+    commit-message:
+      prefix: chore
+    # Seven days between an action's release and the pull request that proposes it. A SHA pin defends
+    # against a tag being moved under us; it does nothing about a release that is malicious on the day
+    # it is published, because Dependabot would then hand us the attacker's commit with a version
+    # comment that looks correct. A week is the window in which such a release is normally withdrawn.
+    # zizmor reports the absence of one as `dependabot-cooldown`.
+    cooldown:
+      default-days: 7

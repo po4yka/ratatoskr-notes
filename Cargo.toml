@@ -1,0 +1,84 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/persistence",
+    "services/notes",
+]
+
+[workspace.package]
+version      = "0.1.0"
+edition      = "2024"
+rust-version = "1.97"                       # equals the pinned toolchain; no MSRV promise we cannot check
+license      = "BSD-3-Clause"
+repository   = "https://github.com/po4yka/ratatoskr-notes"
+
+[workspace.dependencies]
+# ---- in-repo ----
+ratatoskr-notes-persistence = { version = "0.1.0", path = "crates/persistence" }
+
+# ---- fleet contracts ----
+# One revision for every `ratatoskr-*` git dependency: Cargo treats two revisions of one git
+# repository as two different crates, so a mixed pin would split the envelope types in two.
+# a9289e27 is the contracts commit that holds `ratatoskr-notes-contracts` (OBS-023, tasks 4.1, 4.2).
+ratatoskr-error-contracts = { git = "https://github.com/po4yka/ratatoskr-contracts.git", rev = "a9289e27bcf53f496b5917889580965d97ff2358" }
+ratatoskr-event-envelope  = { git = "https://github.com/po4yka/ratatoskr-contracts.git", rev = "a9289e27bcf53f496b5917889580965d97ff2358" }
+ratatoskr-identifiers     = { git = "https://github.com/po4yka/ratatoskr-contracts.git", rev = "a9289e27bcf53f496b5917889580965d97ff2358" }
+ratatoskr-notes-contracts = { git = "https://github.com/po4yka/ratatoskr-contracts.git", rev = "a9289e27bcf53f496b5917889580965d97ff2358" }
+
+# ---- persistence ----
+# No `migrate` feature: the schema is one file, `include_str!`d into the binary by
+# `ratatoskr-notes-persistence`, so a deployment cannot drift from its schema and there is no
+# ledger to record (development status: no migrations; a schema change edits `schema.sql` in place).
+sqlx = { version = "0.8.6", default-features = false, features = [
+    "runtime-tokio", "tls-rustls-ring", "postgres", "uuid",
+] }
+
+# ---- async runtime and HTTP ----
+tokio = { version = "1.46", features = ["rt-multi-thread", "macros", "signal", "net", "time", "sync", "fs", "io-util", "process"] }
+axum  = { version = "0.8", default-features = false, features = ["http1", "json", "tokio", "tracing"] }
+
+# ---- configuration ----
+figment = { version = "0.10", features = ["env"] }
+secrecy = { version = "0.10", features = ["serde"] }
+
+# ---- telemetry ----
+tracing            = "0.1"
+tracing-subscriber = { version = "0.3", default-features = false, features = ["std", "registry", "env-filter", "fmt", "json", "ansi"] }
+metrics-exporter-prometheus = { version = "0.17", default-features = false }
+
+# ---- identifiers, serialization and errors ----
+uuid       = { version = "1.11", features = ["v7", "serde"] }
+serde      = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror  = "2.0"
+
+# ---- dev only ----
+tower          = { version = "0.5", default-features = false, features = ["util"] }
+http-body-util = "0.1"
+
+[workspace.lints.rust]
+unsafe_code                   = "forbid"
+missing_docs                  = "deny"
+missing_debug_implementations = "deny"
+unreachable_pub               = "deny"
+
+[workspace.lints.clippy]
+pedantic           = { level = "warn", priority = -1 }
+unwrap_used        = "deny"
+expect_used        = "deny"
+panic              = "deny"
+missing_errors_doc = "deny"
+missing_panics_doc = "deny"
+dbg_macro          = "deny"
+todo               = "deny"
+print_stdout       = "deny"     # startup failures go to stderr; a stray println bypasses the subscriber
+# `panic`, `unwrap_used` and `expect_used` close every EXPLICIT panic path and leave the most
+# common implicit one open. Both are `allow` by default and in `clippy::restriction`, so
+# `pedantic` does not enable them.
+indexing_slicing   = "deny"     # `v[i]` and `&s[a..b]` panicking out of bounds
+string_slice       = "deny"     # `&s[..n]` panicking because n is not a UTF-8 char boundary
+
+# Release profile: `panic` is left at the default `unwind` ON PURPOSE, so a caught handler panic
+# can render as a response rather than aborting the process with no diagnostics.
+[profile.release]
+debug = 1          # line tables only: a usable backtrace in the ERROR log, no full debuginfo

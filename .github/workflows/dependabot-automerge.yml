@@ -1,0 +1,16 @@
+# Dependabot's pull requests merge themselves once every required check is green. The job lives once,
+# in ratatoskr-workspace's `.github/workflows/reusable-dependabot-automerge.yml`, which also states
+# what this does not cover; this wrapper is identical in every Ratatoskr repository.
+name: dependabot
+
+on:
+  pull_request:
+
+permissions: {}
+
+jobs:
+  automerge:
+    permissions:
+      contents: write       # auto-merge squashes onto the base branch
+      pull-requests: write  # to enable auto-merge on the pull request
+    uses: po4yka/ratatoskr-workspace/.github/workflows/reusable-dependabot-automerge.yml@b7bd2a15b4ed75371a6471c0c5de90d7ba342b46 # main

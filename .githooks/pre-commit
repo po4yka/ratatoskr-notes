@@ -1,0 +1,79 @@
+#!/bin/sh
+# Pre-commit hook, identical in every Ratatoskr repository.
+#
+# ACTIVATION IS NOT AUTOMATIC, and pretending otherwise would be the point of failure. A committed
+# hook directory does nothing until a clone is told to use it:
+#
+#     git config core.hooksPath .githooks
+#
+# Any clone that has not run that — a second machine, a CI checkout, a clone into a different parent
+# directory — has no hooks at all. There is no way to make a repository opt a clone in; git treats
+# that as the security boundary it is.
+#
+# This is also bypassable with `git commit --no-verify`, which coding agents can pass. So the hook is
+# a convenience that catches a mistake early, and the real gate is CI plus the branch ruleset. It is
+# deliberately small and fast for that reason: a hook that costs seconds gets disabled, and a disabled
+# hook protects nothing.
+#
+# What it does NOT do, and why:
+#   - no clippy: the workspace-wide run contends for the same target directory as rust-analyzer, and
+#     it can block for an unbounded time. It belongs in CI, which has the tree to itself.
+#   - no commit-message format check: the subjects in this project's history are already correct, and
+#     a regex would reject `Initial commit` and locally created merge subjects, both of which are real.
+#   - no third-party secret scanner: GitHub push protection already covers provider tokens on these
+#     public repositories, and installing a binary on every machine to cover the rest is a worse trade
+#     than the twelve lines below.
+set -eu
+
+added=$(git diff --cached -U0 --diff-filter=ACM | grep '^+' | grep -v '^+++' || true)
+[ -n "$added" ] || added=''
+fail=0
+
+# A credential embedded in a URL is the one class push protection does not catch: it scans for known
+# provider token shapes, and a database password is not one. On a public repository the only remedy
+# after a push is rotation, so this is worth catching a second earlier.
+#
+# Loopback hosts and the RFC 2606 reserved names are excluded, because those appear legitimately in
+# these repositories: `postgres://platform:platform@127.0.0.1:5432/platform` is the documented local
+# database, and `https://otel:LEAKME@collector.example:4317` is a test asserting that a credential in
+# an OTLP endpoint is REJECTED. Verified against all sixteen repositories: zero matches today, while a
+# real host still matches.
+cred='[a-z][a-z0-9+.-]*://[^/:@[:space:]"]+:[^/@[:space:]"]+@'
+safe='@(127\.0\.0\.1|localhost|\[::1\]|::1|[^/[:space:]"]*\.(example|invalid|test|local)([:/]|$)|example\.(com|org|net)([:/]|$))'
+if printf '%s\n' "$added" | grep -IhE "$cred" 2>/dev/null | grep -qvE "$safe" 2>/dev/null; then
+    echo "pre-commit: a staged line embeds a credential in a URL:" >&2
+    printf '%s\n' "$added" | grep -IhE "$cred" | grep -vE "$safe" | sed 's/^/  /' >&2
+    echo "  If the host is a real one, remove it and rotate the credential — these repositories are public." >&2
+    fail=1
+fi
+
+# A header ALONE is not a key, and this repository set contains header specimens on purpose:
+# `tools/contractsc/tests/secrets.rs` asserts that contracts' own secret scanner fires on
+# "-----BEGIN RSA PRIVATE KEY-----". Blocking that commit would make the hook something to disable.
+# A real key also brings its base64 body, so both are required. Verified: the specimen passes, a real
+# OpenSSH key is refused.
+if printf '%s\n' "$added" | grep -qE -- '-----BEGIN [A-Z ]*PRIVATE KEY-----' 2>/dev/null \
+   && printf '%s\n' "$added" | grep -qE '^\+[A-Za-z0-9+/]{40,}={0,2}$' 2>/dev/null; then
+    echo "pre-commit: a staged private key. Remove it and treat the key as compromised." >&2
+    fail=1
+fi
+
+# Whole-file formatting, because rustfmt is whole-file: checking only the staged hunks would pass a
+# commit that leaves the file unformatted. Runs only where there is something to format, which is what
+# lets one hook file be correct in a Rust repository and in a documents-only one without knowing which
+# it is in.
+#
+# It also runs only when the commit itself carries Rust, and that condition was added because the hook
+# was refusing a CI-only commit while unrelated work in progress sat unformatted in the tree. That is
+# not a weakening: a `.rs` file that is unformatted in the working tree and absent from this commit has
+# not entered history, and the check fires on the commit that puts it there. A hook that blocks a
+# commit it has no business blocking is a hook that gets bypassed, and then stays bypassed.
+if [ -f Cargo.toml ] && command -v cargo >/dev/null 2>&1 \
+   && git diff --cached --name-only --diff-filter=ACM | grep -q '\.rs$'; then
+    if ! cargo fmt --all -- --check >/dev/null 2>&1; then
+        echo "pre-commit: cargo fmt --all -- --check fails. Run 'cargo fmt --all'." >&2
+        fail=1
+    fi
+fi
+
+exit "$fail"

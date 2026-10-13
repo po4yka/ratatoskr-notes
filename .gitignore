@@ -1,0 +1,29 @@
+# Rust / Cargo build output
+target/
+*.rs.bk
+
+# Test and coverage output
+*.profraw
+*.profdata
+/coverage/
+
+# Local environment and credentials (database URL, nkey seed, the secrets key)
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.nkey
+/secrets/
+
+# Editors
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+
+# Agent session state
+.omc/
+.omo/

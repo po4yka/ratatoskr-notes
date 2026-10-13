@@ -1,0 +1,35 @@
+# Local dependencies for developing Ratatoskr Notes.
+#
+# `docker compose up -d` then `cargo test` works with no further setup: the database URL below is
+# byte-identical to the default in `crates/persistence/src/test_support.rs` and to
+# `NOTES_TEST_DATABASE_URL` in `.github/workflows/ci.yml`, so the three places that must agree hold
+# one string.
+#
+# If the postgres of another Ratatoskr repository already uses 5432 on this machine, stop it first
+# or point the suite elsewhere with `NOTES_TEST_DATABASE_URL`.
+services:
+  postgres:
+    # Pinned by digest, not by tag. Digest of `postgres:17` as of 2026-08-22, byte-identical to
+    # ratatoskr-platform/compose.yaml and ratatoskr-vault/compose.yaml, so one pull serves every
+    # repository.
+    image: postgres:17@sha256:e38411452a464af89e5adadb8d223bf53b898d47d6ef918b2d58c08707350449
+    container_name: ratatoskr-notes-postgres
+    environment:
+      POSTGRES_USER: notes
+      POSTGRES_PASSWORD: notes
+      POSTGRES_DB: notes
+      # Byte-identical to ci.yml. Test databases copy template0 with the same locale stated again,
+      # so every database in the fleet sorts identically.
+      POSTGRES_INITDB_ARGS: "--locale-provider=icu --icu-locale=und-x-icu --encoding=UTF8"
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U notes -d notes"]
+      interval: 1s
+      timeout: 5s
+      retries: 30
+
+volumes:
+  postgres-data:

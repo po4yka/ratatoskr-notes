@@ -1,0 +1,31 @@
+msrv = "1.97"
+
+# Test bodies may assert with unwrap/expect; production code may not (the workspace lints deny both).
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+# Same rule, same reason, for the two slicing lints the workspace denies. A test that indexes a
+# fixture it built asserts a shape it controls; a service that indexes a slice it was given returns
+# a failure.
+allow-indexing-slicing-in-tests = true
+
+disallowed-methods = [
+  { path = "std::env::var",    reason = "configuration is read only by ratatoskr_notes::config" },
+  { path = "std::env::var_os", reason = "configuration is read only by ratatoskr_notes::config" },
+]
+
+# ---- Size limits ----
+#
+# The numbers are the ones `ratatoskr-workspace/docs/QUALITY_GATES.md` records for the fleet. This
+# tree starts far below all of them; the limits are here so that a regression fails. Clippy fires
+# when the count EXCEEDS the threshold, so an item exactly on a number is silent. An exception is
+# taken at the site as `#[expect(clippy::too_many_lines, reason = "...")]`, never by raising a
+# number here.
+
+# Function length; clippy's own default, written down so a toolchain bump cannot loosen it.
+too-many-lines-threshold = 100
+
+# Signature width; clippy's own default. The eighth argument fails CI; use a parameter struct.
+too-many-arguments-threshold = 7
+
+# The default is 0, which disables the lint; this line turns `excessive_nesting` on.
+excessive-nesting-threshold = 5
