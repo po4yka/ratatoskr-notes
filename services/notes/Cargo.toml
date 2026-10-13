@@ -13,11 +13,13 @@ path = "src/main.rs"
 
 [dependencies]
 ratatoskr-error-contracts.workspace   = true
+ratatoskr-event-envelope.workspace    = true
 ratatoskr-identifiers.workspace       = true
 ratatoskr-notes-contracts.workspace   = true
 ratatoskr-notes-persistence.workspace = true
 axum.workspace                        = true
 figment.workspace                     = true
+futures-util.workspace                = true
 metrics-exporter-prometheus.workspace = true
 secrecy.workspace                     = true
 serde.workspace                       = true
@@ -27,9 +29,9 @@ tokio.workspace                       = true
 tracing.workspace                     = true
 tracing-subscriber.workspace          = true
 uuid.workspace                        = true
+zbus.workspace                        = true
 
 [dev-dependencies]
-ratatoskr-event-envelope.workspace = true
 ratatoskr-notes-persistence = { workspace = true, features = ["test-support"] }
 tempfile.workspace          = true
 http-body-util.workspace    = true

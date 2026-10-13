@@ -88,3 +88,115 @@ impl Database {
         Err(PersistenceError::Contended)
     }
 }
+
+/// A connection of one owner that is not removed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConnectionRecord {
+    /// The connection.
+    pub connection_id: Uuid,
+    /// The wire word of its channel.
+    pub channel: String,
+    /// The display name of the vault.
+    pub vault_display_name: String,
+}
+
+/// One event for the outbox.
+#[derive(Debug, Clone, Copy)]
+pub struct OutboxEvent<'a> {
+    /// The envelope's event id.
+    pub event_id: Uuid,
+    /// The envelope's event type, for example `notes.vault.disconnected.v1`.
+    pub event_type: &'a str,
+    /// The kind of the aggregate, for example `notes_connection`.
+    pub aggregate_type: &'a str,
+    /// The envelope's aggregate reference, for example `notes_connection:<uuid>`.
+    pub aggregate_id: &'a str,
+    /// The whole envelope.
+    pub envelope: &'a serde_json::Value,
+}
+
+impl Database {
+    /// The connection with this id if this owner holds it and it is not removed.
+    ///
+    /// A connection of another owner reads as absent, so a caller cannot tell it from one that
+    /// does not exist.
+    ///
+    /// # Errors
+    ///
+    /// [`PersistenceError::Query`] when the statement fails.
+    pub async fn connection_of_owner(
+        &self,
+        owner_id: Uuid,
+        connection_id: Uuid,
+    ) -> Result<Option<ConnectionRecord>, PersistenceError> {
+        let row: Option<(Uuid, String, String)> = sqlx::query_as(
+            "select connection_id, channel, vault_display_name from notes.connections
+             where connection_id = $1 and owner_id = $2 and state <> 'removed'",
+        )
+        .bind(connection_id)
+        .bind(owner_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(PersistenceError::Query)?;
+        Ok(row.map(
+            |(connection_id, channel, vault_display_name)| ConnectionRecord {
+                connection_id,
+                channel,
+                vault_display_name,
+            },
+        ))
+    }
+
+    /// Remove a connection in one transaction: mark it `removed`, delete its stored ciphertext,
+    /// and write `event` to the outbox.
+    ///
+    /// Returns `false` and writes nothing when the connection is already removed or is not this
+    /// owner's, so two concurrent removals write one event.
+    ///
+    /// # Errors
+    ///
+    /// [`PersistenceError::Query`] when a statement fails; nothing is committed then.
+    pub async fn remove_connection(
+        &self,
+        owner_id: Uuid,
+        connection_id: Uuid,
+        event: &OutboxEvent<'_>,
+    ) -> Result<bool, PersistenceError> {
+        let mut transaction = self.pool.begin().await.map_err(PersistenceError::Query)?;
+        let removed = sqlx::query(
+            "update notes.connections set state = 'removed', updated_at = now()
+             where connection_id = $1 and owner_id = $2 and state <> 'removed'",
+        )
+        .bind(connection_id)
+        .bind(owner_id)
+        .execute(&mut *transaction)
+        .await
+        .map_err(PersistenceError::Query)?;
+        if removed.rows_affected() == 0 {
+            return Ok(false);
+        }
+        sqlx::query("delete from notes.connection_secrets where connection_id = $1")
+            .bind(connection_id)
+            .execute(&mut *transaction)
+            .await
+            .map_err(PersistenceError::Query)?;
+        sqlx::query(
+            "insert into notes.outbox
+                 (event_id, event_type, aggregate_type, aggregate_id, payload, created_at)
+             values ($1, $2, $3, $4, $5, now())",
+        )
+        .bind(event.event_id)
+        .bind(event.event_type)
+        .bind(event.aggregate_type)
+        .bind(event.aggregate_id)
+        .bind(event.envelope)
+        .execute(&mut *transaction)
+        .await
+        .map_err(PersistenceError::Query)?;
+        transaction
+            .commit()
+            .await
+            .map_err(PersistenceError::Query)?;
+        Ok(true)
+    }
+}

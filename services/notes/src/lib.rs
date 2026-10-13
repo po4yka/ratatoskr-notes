@@ -14,6 +14,7 @@
 pub mod admin;
 pub mod api;
 pub mod config;
+pub mod events;
 pub mod systemd;
 
 use std::process::ExitCode;
@@ -132,7 +133,7 @@ async fn serve(config: &NotesConfig, metrics: PrometheusHandle) -> Result<(), St
     );
     let api_task = spawn_server(
         api,
-        domain_router(ApiState::new(database.clone(), DbusSystemd)),
+        domain_router(ApiState::new(database.clone(), DbusSystemd::new())),
         stop_receiver,
     );
 

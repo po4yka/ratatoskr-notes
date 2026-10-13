@@ -19,7 +19,7 @@ use std::time::Duration;
 use secrecy::{ExposeSecret as _, SecretString};
 use sqlx::postgres::{PgPool, PgPoolOptions};
 
-pub use crate::connections::{CreateOutcome, NewConnection};
+pub use crate::connections::{ConnectionRecord, CreateOutcome, NewConnection, OutboxEvent};
 
 /// The schema, embedded at compile time.
 ///

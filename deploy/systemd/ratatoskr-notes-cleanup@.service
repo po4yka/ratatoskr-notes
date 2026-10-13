@@ -1,0 +1,43 @@
+# Removes the Obsidian Sync client of one removed connection: the Sync configuration that
+# `ob sync-setup` wrote, the working tree, and the client state (`ob-home`). The instance name is the
+# connection id. ratatoskr-notes starts it through the systemd D-Bus API when the owner removes a
+# `sync` connection, after it has stopped ratatoskr-notes-sync@<id>.service, and waits for it to
+# finish (workspace change add-notes-vault-connections, design D3).
+#
+# services/notes/tests/connections.rs runs the ExecStart= lines of this file through the fake
+# systemd bus, with the connections root and `ob` moved into a temporary directory. Keep each
+# command on one line, without quotes or shell syntax.
+[Unit]
+Description=Ratatoskr notes: remove the Sync client of connection %i
+Documentation=https://github.com/po4yka/ratatoskr-notes
+After=ratatoskr-notes-sync@%i.service
+
+[Service]
+Type=oneshot
+# The owner of the working tree and of ob-home, which the login unit and the sync unit write.
+User=ratatoskr-notes-sync
+Group=ratatoskr-notes-sync
+UMask=0077
+# ob keeps its state under $XDG_CONFIG_HOME/obsidian-headless on Linux (spike 3.2).
+Environment=HOME=/mnt/nvme/ratatoskr/notes/connections/%i/ob-home
+Environment=XDG_CONFIG_HOME=/mnt/nvme/ratatoskr/notes/connections/%i/ob-home
+# A connection whose setup never finished has no Sync configuration, and ob then exits 3. The
+# leading `-` lets the unit continue, because the next line removes the state anyway.
+ExecStart=-/usr/bin/ob sync-unlink --path /mnt/nvme/ratatoskr/notes/connections/%i/tree
+ExecStart=/bin/rm -rf -- /mnt/nvme/ratatoskr/notes/connections/%i/tree /mnt/nvme/ratatoskr/notes/connections/%i/ob-home
+TimeoutStartSec=300
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+# The leading `-` accepts a connection whose login never created the directory.
+ReadWritePaths=-/mnt/nvme/ratatoskr/notes/connections/%i
+# Only ob sync-unlink could reach the network, and it only edits local files.
+PrivateNetwork=yes

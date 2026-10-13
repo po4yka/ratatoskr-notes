@@ -87,6 +87,7 @@ in place, and the next test database has it.
 | `deploy/postgres/role.sql` | Creates the role `ratatoskr_notes` in the shared database. |
 | `deploy/nats/identity.conf` | A copy of the `NOTES` stanza of Platform's NATS authorization file. |
 | `deploy/systemd/notes.conf.example` | The environment file of the service on the host. |
+| `deploy/systemd/ratatoskr-notes-cleanup@.service` | The oneshot unit that removes the Sync client, the working tree and the client state of a removed `sync` connection. |
 
 ## Workflow
 

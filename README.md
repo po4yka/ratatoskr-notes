@@ -45,7 +45,7 @@ The design is in `ratatoskr-workspace`: ADR-0010, `docs/NOTES_AND_SITES.md`, and
 | Operator plane `/health/live`, `/health/ready`, `/metrics`, `/version` | `127.0.0.1:9471` (`RATATOSKR__ADMIN__BIND`) | The host only |
 | Database | schema `notes`, role `ratatoskr_notes`, database `ratatoskr` | This service only |
 
-The domain API serves `POST /v1/notes/connections`.
+The domain API serves `POST /v1/notes/connections` and `DELETE /v1/notes/connections/{id}`.
 
 ## Project status
 

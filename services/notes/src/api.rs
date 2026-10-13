@@ -5,19 +5,20 @@
 
 use std::sync::Arc;
 
-use axum::extract::rejection::JsonRejection;
-use axum::extract::{DefaultBodyLimit, State};
+use axum::extract::rejection::{JsonRejection, PathRejection};
+use axum::extract::{DefaultBodyLimit, Path, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum::routing::post;
+use axum::routing::{delete, post};
 use axum::{Json, Router};
 use ratatoskr_error_contracts::{ErrorCode, ErrorEnvelope};
 use ratatoskr_identifiers::SafeMessage;
 use ratatoskr_notes_contracts::{VaultChannel, VaultDisplayName};
-use ratatoskr_notes_persistence::{CreateOutcome, Database, NewConnection};
+use ratatoskr_notes_persistence::{CreateOutcome, Database, NewConnection, OutboxEvent};
 use uuid::Uuid;
 
-use crate::systemd::SystemdBus;
+use crate::events;
+use crate::systemd::{JobResult, SystemdBus, UnitName};
 
 /// The owner claim that Edge mints.
 const USER_HEADER: &str = "x-ratatoskr-user-id";
@@ -59,6 +60,10 @@ impl<B: SystemdBus> ApiState<B> {
 pub fn domain_router<B: SystemdBus>(state: ApiState<B>) -> Router {
     Router::new()
         .route("/v1/notes/connections", post(create_connection::<B>))
+        .route(
+            "/v1/notes/connections/{connection_id}",
+            delete(remove_connection::<B>),
+        )
         .layer(DefaultBodyLimit::max(MAX_REQUEST_BYTES))
         .with_state(state)
 }
@@ -130,6 +135,103 @@ async fn create_connection<B: SystemdBus>(
     }
 }
 
+/// `DELETE /v1/notes/connections/{id}`: remove a connection of this owner.
+///
+/// A `sync` connection first stops its sync unit and runs its cleanup unit, which deletes the
+/// working tree and the client state. Only then does one transaction mark the connection removed,
+/// delete the stored ciphertext, and write `notes.vault.disconnected.v1` to the outbox. When the
+/// cleanup fails nothing is committed, and the owner can repeat the request.
+async fn remove_connection<B: SystemdBus>(
+    State(state): State<ApiState<B>>,
+    headers: HeaderMap,
+    connection_id: Result<Path<Uuid>, PathRejection>,
+) -> Result<StatusCode, ApiFault> {
+    let owner_id = owner(&headers)?;
+    // An id that is not a UUID cannot name a connection.
+    let Path(connection_id) = connection_id.map_err(|_| ApiFault::NotFound)?;
+    let connection = state
+        .database
+        .connection_of_owner(owner_id, connection_id)
+        .await
+        .map_err(|error| {
+            tracing::error!(%error, "a connection could not be read");
+            ApiFault::Unavailable
+        })?
+        .ok_or(ApiFault::NotFound)?;
+
+    if connection.channel == "sync" {
+        clean_up_sync_client(state.systemd.as_ref(), connection_id).await?;
+    }
+
+    let event_id = Uuid::now_v7();
+    let envelope = events::vault_disconnected(
+        event_id,
+        owner_id,
+        connection_id,
+        &connection.channel,
+        &connection.vault_display_name,
+    )
+    .and_then(|envelope| {
+        serde_json::to_value(&envelope).map_err(|_| events::EnvelopeBuildError::SERIALIZE)
+    })
+    .map_err(|error| {
+        tracing::error!(%error, %connection_id, "the disconnect event could not be built");
+        ApiFault::Unavailable
+    })?;
+    let aggregate_id = events::connection_aggregate(connection_id);
+    let removed = state
+        .database
+        .remove_connection(
+            owner_id,
+            connection_id,
+            &OutboxEvent {
+                event_id,
+                event_type: "notes.vault.disconnected.v1",
+                aggregate_type: events::CONNECTION_AGGREGATE,
+                aggregate_id: &aggregate_id,
+                envelope: &envelope,
+            },
+        )
+        .await
+        .map_err(|error| {
+            tracing::error!(%error, %connection_id, "a connection could not be removed");
+            ApiFault::Unavailable
+        })?;
+    if removed {
+        tracing::info!(%connection_id, channel = %connection.channel, "a connection was removed");
+    }
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Stop the sync unit, then run the cleanup unit and wait for it (workspace design D3).
+async fn clean_up_sync_client<B: SystemdBus>(
+    systemd: &B,
+    connection_id: Uuid,
+) -> Result<(), ApiFault> {
+    for (unit, stop) in [
+        (UnitName::sync(connection_id), true),
+        (UnitName::cleanup(connection_id), false),
+    ] {
+        let job = if stop {
+            systemd.stop_unit(&unit).await
+        } else {
+            systemd.start_unit(&unit).await
+        };
+        match job {
+            Ok(JobResult::Done) => {}
+            Ok(JobResult::NotDone(result)) => {
+                tracing::error!(%unit, %result, "a systemd job did not finish");
+                return Err(ApiFault::CleanupFailed);
+            }
+            Err(error) => {
+                tracing::error!(%unit, %error, "a systemd call failed");
+                return Err(ApiFault::CleanupFailed);
+            }
+        }
+    }
+    Ok(())
+}
+
 /// The owner from the minted claim.
 fn owner(headers: &HeaderMap) -> Result<Uuid, ApiFault> {
     headers
@@ -165,6 +267,8 @@ enum ApiFault {
         connection_id: Uuid,
         channel: String,
     },
+    NotFound,
+    CleanupFailed,
     Unavailable,
 }
 
@@ -174,7 +278,8 @@ impl ApiFault {
             Self::Unauthenticated => StatusCode::UNAUTHORIZED,
             Self::InvalidRequest => StatusCode::BAD_REQUEST,
             Self::VaultAlreadyConnected { .. } => StatusCode::CONFLICT,
-            Self::Unavailable => StatusCode::SERVICE_UNAVAILABLE,
+            Self::NotFound => StatusCode::NOT_FOUND,
+            Self::CleanupFailed | Self::Unavailable => StatusCode::SERVICE_UNAVAILABLE,
         }
     }
 
@@ -191,6 +296,16 @@ impl ApiFault {
                 "This vault already has a connection. Remove it before you connect the vault \
                  through another channel.",
                 false,
+            ),
+            Self::NotFound => (
+                "notes.connection.not_found",
+                "The connection does not exist.",
+                false,
+            ),
+            Self::CleanupFailed => (
+                "notes.connection.cleanup_failed",
+                "The connection could not be removed now. Repeat the request later.",
+                true,
             ),
             Self::Unavailable => (
                 "notes.service.unavailable",

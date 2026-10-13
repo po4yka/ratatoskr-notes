@@ -37,6 +37,13 @@ sqlx = { version = "0.8.6", default-features = false, features = [
 tokio = { version = "1.46", features = ["rt-multi-thread", "macros", "signal", "net", "time", "sync", "fs", "io-util", "process"] }
 axum  = { version = "0.8", default-features = false, features = ["http1", "json", "tokio", "tracing"] }
 
+# ---- systemd ----
+# The client of the systemd D-Bus API (workspace design D3): StartUnit, StopUnit and the JobRemoved
+# signal on the system bus. Pure Rust on the tokio runtime that the service already runs; no
+# libsystemd and no second async runtime.
+zbus         = { version = "5", default-features = false, features = ["tokio"] }
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
+
 # ---- configuration ----
 figment = { version = "0.10", features = ["env"] }
 secrecy = { version = "0.10", features = ["serde"] }

@@ -96,3 +96,31 @@ create table notes.connection_secrets (
 
 comment on table notes.connection_secrets is
     'Ciphertext of the Obsidian account password and end-to-end password; never the MFA code.';
+
+-- ---------------------------------------------------------------------------------------------
+-- outbox: events Notes owes the bus, written in the same transaction as their cause
+-- ---------------------------------------------------------------------------------------------
+
+create table notes.outbox (
+    event_id       uuid        primary key,
+    event_type     text        not null,
+    aggregate_type text        not null,
+    -- An entity reference, for example `notes_connection:<uuid>`.
+    aggregate_id   text        not null,
+    -- The whole event envelope. It carries ids, the channel and the display name, never a secret
+    -- and never file content.
+    payload        jsonb       not null,
+    created_at     timestamptz not null,
+    published_at   timestamptz,
+
+    -- A CLOSED list: a type that Notes does not produce yet cannot be inserted.
+    constraint outbox_event_type_is_known
+        check (event_type in ('notes.vault.disconnected.v1')),
+    constraint outbox_aggregate_type_is_bounded
+        check (length(aggregate_type) between 1 and 64)
+);
+
+comment on table notes.outbox is
+    'Transactional outbox. The relay to JetStream under the NOTES identity reads it.';
+
+create index outbox_unpublished_idx on notes.outbox (created_at) where published_at is null;
