@@ -12,10 +12,14 @@
 #[cfg(feature = "test-support")]
 pub mod test_support;
 
+mod connections;
+
 use std::time::Duration;
 
 use secrecy::{ExposeSecret as _, SecretString};
 use sqlx::postgres::{PgPool, PgPoolOptions};
+
+pub use crate::connections::{CreateOutcome, NewConnection};
 
 /// The schema, embedded at compile time.
 ///
@@ -46,6 +50,11 @@ pub enum PersistenceError {
     /// A query failed.
     #[error("a database query failed")]
     Query(#[source] sqlx::Error),
+
+    /// Concurrent writers changed a row between two statements more often than the operation
+    /// retries. Repeating the request can succeed.
+    #[error("concurrent writers changed the row; repeat the request")]
+    Contended,
 }
 
 /// The pool, and the only handle through which Notes reaches `PostgreSQL`.

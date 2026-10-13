@@ -12,6 +12,9 @@ name = "ratatoskr-notes"
 path = "src/main.rs"
 
 [dependencies]
+ratatoskr-error-contracts.workspace   = true
+ratatoskr-identifiers.workspace       = true
+ratatoskr-notes-contracts.workspace   = true
 ratatoskr-notes-persistence.workspace = true
 axum.workspace                        = true
 figment.workspace                     = true
@@ -23,6 +26,7 @@ thiserror.workspace                   = true
 tokio.workspace                       = true
 tracing.workspace                     = true
 tracing-subscriber.workspace          = true
+uuid.workspace                        = true
 
 [dev-dependencies]
 ratatoskr-notes-persistence = { workspace = true, features = ["test-support"] }
