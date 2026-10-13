@@ -1,6 +1,6 @@
 ## 1. Connections and the one-channel rule (workspace tasks 5.2, 5.3)
 
-- [ ] 1.1 RED: add `services/notes/tests/connections.rs::second_channel_for_one_vault_is_refused`, which asserts `409` with `notes.connection.vault_already_connected` for a `plugin` connection after a `sync` connection with the same vault key, and `two_owners_may_connect_one_remote_vault`, which asserts that two owners each get a connection for one remote vault id. Run them and confirm that both fail because the route does not exist (`404`).
+- [x] 1.1 RED: add `services/notes/tests/connections.rs::second_channel_for_one_vault_is_refused`, which asserts `409` with `notes.connection.vault_already_connected` for a `plugin` connection after a `sync` connection with the same vault key, and `two_owners_may_connect_one_remote_vault`, which asserts that two owners each get a connection for one remote vault id. Run them and confirm that both fail because the route does not exist (`404`).
 - [ ] 1.2 GREEN: add `notes.connections`, the uniqueness of `(owner, vault_key)` among the connections that are not removed, and `POST /v1/notes/connections`. Verify both tests of 1.1.
 
 ## 2. Disconnect (workspace tasks 5.4, 5.5)
