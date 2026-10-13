@@ -3,6 +3,8 @@
 //! Every route reads the owner from the claim that Edge mints, `x-ratatoskr-user-id`. Edge strips
 //! any client-supplied copy, and this listener is reachable only on loopback.
 
+use std::sync::Arc;
+
 use axum::extract::rejection::JsonRejection;
 use axum::extract::{DefaultBodyLimit, State};
 use axum::http::{HeaderMap, StatusCode};
@@ -15,6 +17,8 @@ use ratatoskr_notes_contracts::{VaultChannel, VaultDisplayName};
 use ratatoskr_notes_persistence::{CreateOutcome, Database, NewConnection};
 use uuid::Uuid;
 
+use crate::systemd::SystemdBus;
+
 /// The owner claim that Edge mints.
 const USER_HEADER: &str = "x-ratatoskr-user-id";
 
@@ -25,23 +29,36 @@ const MAX_REQUEST_BYTES: usize = 16 * 1024;
 const MAX_VAULT_KEY_CHARS: usize = 255;
 
 /// What the domain handlers share.
-#[derive(Debug, Clone)]
-pub struct ApiState {
+#[derive(Debug)]
+pub struct ApiState<B> {
     database: Database,
+    systemd: Arc<B>,
 }
 
-impl ApiState {
+impl<B> Clone for ApiState<B> {
+    fn clone(&self) -> Self {
+        Self {
+            database: self.database.clone(),
+            systemd: Arc::clone(&self.systemd),
+        }
+    }
+}
+
+impl<B: SystemdBus> ApiState<B> {
     /// The state of the domain routes.
     #[must_use]
-    pub const fn new(database: Database) -> Self {
-        Self { database }
+    pub fn new(database: Database, systemd: B) -> Self {
+        Self {
+            database,
+            systemd: Arc::new(systemd),
+        }
     }
 }
 
 /// The domain router. It is served only on the domain listener, never on the operator listener.
-pub fn domain_router(state: ApiState) -> Router {
+pub fn domain_router<B: SystemdBus>(state: ApiState<B>) -> Router {
     Router::new()
-        .route("/v1/notes/connections", post(create_connection))
+        .route("/v1/notes/connections", post(create_connection::<B>))
         .layer(DefaultBodyLimit::max(MAX_REQUEST_BYTES))
         .with_state(state)
 }
@@ -63,8 +80,8 @@ struct ConnectAccepted {
     state: &'static str,
 }
 
-async fn create_connection(
-    State(state): State<ApiState>,
+async fn create_connection<B: SystemdBus>(
+    State(state): State<ApiState<B>>,
     headers: HeaderMap,
     body: Result<Json<ConnectRequest>, JsonRejection>,
 ) -> Result<(StatusCode, Json<ConnectAccepted>), ApiFault> {

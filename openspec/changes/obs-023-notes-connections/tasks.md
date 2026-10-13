@@ -5,7 +5,7 @@
 
 ## 2. Disconnect (workspace tasks 5.4, 5.5)
 
-- [ ] 2.1 RED: add `services/notes/tests/connections.rs::disconnect_removes_unit_tree_state_and_secrets`, which asserts that disconnect writes one `notes.vault.disconnected.v1` event, stops the sync unit and starts the cleanup unit through a fake systemd bus, and that the tree, the client state and the ciphertext are gone. Run it and confirm that it fails because disconnect does not exist (`404`).
+- [x] 2.1 RED: add `services/notes/tests/connections.rs::disconnect_removes_unit_tree_state_and_secrets`, which asserts that disconnect writes one `notes.vault.disconnected.v1` event, stops the sync unit and starts the cleanup unit through a fake systemd bus, and that the tree, the client state and the ciphertext are gone. Run it and confirm that it fails because disconnect does not exist (`404`).
 - [ ] 2.2 GREEN: implement disconnect, the outbox, the `SystemdBus` trait with its D-Bus implementation, and ship `deploy/systemd/ratatoskr-notes-cleanup@.service`. Verify 2.1.
 
 ## 3. Secret custody and the login unit (workspace tasks 5.6 to 5.9)

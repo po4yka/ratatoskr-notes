@@ -67,3 +67,32 @@ comment on table notes.connections is
 create unique index connections_one_per_owner_and_vault_key
     on notes.connections (owner_id, vault_key)
     where state <> 'removed';
+
+-- ---------------------------------------------------------------------------------------------
+-- connection_secrets: the encrypted Obsidian passwords of a `sync` connection
+-- ---------------------------------------------------------------------------------------------
+
+-- XChaCha20-Poly1305 under the key in /etc/ratatoskr/notes-secrets.key (workspace design D4). The
+-- account password and the end-to-end password only: the MFA code is never stored, and the CHECK
+-- refuses any other kind. A disconnect deletes the rows.
+create table notes.connection_secrets (
+    connection_id uuid        not null references notes.connections (connection_id),
+    secret_kind   text        not null,
+    nonce         bytea       not null,
+    ciphertext    bytea       not null,
+    created_at    timestamptz not null,
+
+    primary key (connection_id, secret_kind),
+
+    constraint connection_secrets_kind_is_known
+        check (secret_kind in ('account_password', 'e2e_password')),
+    -- XChaCha20 takes a 24-byte nonce.
+    constraint connection_secrets_nonce_is_24_bytes
+        check (length(nonce) = 24),
+    -- Poly1305 appends a 16-byte tag, so a ciphertext of a non-empty secret is longer than 16.
+    constraint connection_secrets_ciphertext_holds_a_tag
+        check (length(ciphertext) > 16)
+);
+
+comment on table notes.connection_secrets is
+    'Ciphertext of the Obsidian account password and end-to-end password; never the MFA code.';

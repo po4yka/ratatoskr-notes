@@ -14,6 +14,7 @@
 pub mod admin;
 pub mod api;
 pub mod config;
+pub mod systemd;
 
 use std::process::ExitCode;
 use std::sync::Arc;
@@ -29,6 +30,7 @@ use tracing_subscriber::util::SubscriberInitExt as _;
 use crate::admin::{RuntimeState, admin_router};
 use crate::api::{ApiState, domain_router};
 use crate::config::{LogFormat, NotesConfig, TelemetryConfig};
+use crate::systemd::DbusSystemd;
 
 /// The whole process lifecycle.
 ///
@@ -130,7 +132,7 @@ async fn serve(config: &NotesConfig, metrics: PrometheusHandle) -> Result<(), St
     );
     let api_task = spawn_server(
         api,
-        domain_router(ApiState::new(database.clone())),
+        domain_router(ApiState::new(database.clone(), DbusSystemd)),
         stop_receiver,
     );
 

@@ -7,6 +7,8 @@
     reason = "test scaffolding; not every test binary uses every helper"
 )]
 
+pub(crate) mod systemd;
+
 use axum::Router;
 use axum::body::Body;
 use axum::http::{Method, Request, StatusCode};
