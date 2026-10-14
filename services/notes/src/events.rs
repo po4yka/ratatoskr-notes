@@ -60,6 +60,8 @@ pub struct FileChange<'a> {
     pub kind: FileChangeKind,
     /// The NFC path after the change.
     pub path: &'a str,
+    /// The NFC path before a rename; `None` for every other kind.
+    pub previous_path: Option<&'a str>,
     /// The lowercase hex SHA-256 of the bytes.
     pub revision: &'a str,
     /// The media type of the bytes.
@@ -99,7 +101,11 @@ pub fn file_changed(
         connection_sequence: change.connection_sequence,
         change_kind: change.kind,
         path: VaultPath::parse(change.path).map_err(|_| EnvelopeBuildError("path"))?,
-        previous_path: None,
+        previous_path: change
+            .previous_path
+            .map(VaultPath::parse)
+            .transpose()
+            .map_err(|_| EnvelopeBuildError("previous_path"))?,
         revision,
         media_type,
         blob,

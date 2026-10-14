@@ -21,6 +21,13 @@ pub(super) enum ApiFault {
     NotFound,
     FileNotFound,
     ChannelMismatch,
+    SequenceGap {
+        committed: u64,
+    },
+    BatchTooLarge,
+    BytesMissing {
+        missing: Vec<String>,
+    },
     Login(LoginFailure),
     CleanupFailed,
     Unavailable,
@@ -31,7 +38,11 @@ impl ApiFault {
         match self {
             Self::Unauthenticated => StatusCode::UNAUTHORIZED,
             Self::InvalidRequest => StatusCode::BAD_REQUEST,
-            Self::VaultAlreadyConnected { .. } | Self::ChannelMismatch => StatusCode::CONFLICT,
+            Self::VaultAlreadyConnected { .. }
+            | Self::ChannelMismatch
+            | Self::SequenceGap { .. }
+            | Self::BytesMissing { .. } => StatusCode::CONFLICT,
+            Self::BatchTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
             Self::NotFound | Self::FileNotFound => StatusCode::NOT_FOUND,
             Self::Login(_) => StatusCode::UNPROCESSABLE_ENTITY,
             Self::CleanupFailed | Self::Unavailable => StatusCode::SERVICE_UNAVAILABLE,
@@ -61,6 +72,22 @@ impl ApiFault {
                 "notes.channel_mismatch",
                 "This vault is connected through another channel or device. To use the vault on \
                  more devices, connect it through Obsidian Sync.",
+                false,
+            ),
+            Self::SequenceGap { .. } => (
+                "notes.channel.sequence_gap",
+                "The batch does not continue the committed sequence. Send the changes after the \
+                 committed sequence.",
+                false,
+            ),
+            Self::BatchTooLarge => (
+                "notes.channel.batch_too_large",
+                "A batch holds at most 256 changes.",
+                false,
+            ),
+            Self::BytesMissing { .. } => (
+                "notes.channel.bytes_missing",
+                "Upload the bytes of the listed hashes, then send the batch again.",
                 false,
             ),
             Self::FileNotFound => (
@@ -93,18 +120,36 @@ impl IntoResponse for ApiFault {
             return StatusCode::INTERNAL_SERVER_ERROR.into_response();
         };
         let mut envelope = ErrorEnvelope::new(code, message, retryable);
-        if let Self::VaultAlreadyConnected {
-            connection_id,
-            channel,
-        } = &self
-        {
-            envelope.extensions.insert(
-                "connection_id",
-                serde_json::Value::String(connection_id.to_string()),
-            );
-            envelope
-                .extensions
-                .insert("channel", serde_json::Value::String(channel.clone()));
+        match &self {
+            Self::VaultAlreadyConnected {
+                connection_id,
+                channel,
+            } => {
+                envelope.extensions.insert(
+                    "connection_id",
+                    serde_json::Value::String(connection_id.to_string()),
+                );
+                envelope
+                    .extensions
+                    .insert("channel", serde_json::Value::String(channel.clone()));
+            }
+            Self::SequenceGap { committed } => {
+                envelope
+                    .extensions
+                    .insert("committed_sequence", serde_json::Value::from(*committed));
+            }
+            Self::BatchTooLarge => {
+                envelope.extensions.insert(
+                    "max_changes",
+                    serde_json::Value::from(crate::channel::MAX_BATCH_CHANGES),
+                );
+            }
+            Self::BytesMissing { missing } => {
+                envelope
+                    .extensions
+                    .insert("missing_sha256", serde_json::Value::from(missing.clone()));
+            }
+            _ => {}
         }
         (self.status(), Json(envelope)).into_response()
     }

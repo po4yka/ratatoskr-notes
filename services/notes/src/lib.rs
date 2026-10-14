@@ -14,6 +14,7 @@
 pub mod admin;
 pub mod api;
 pub mod blobs;
+pub mod channel;
 pub mod config;
 pub mod events;
 pub mod files;

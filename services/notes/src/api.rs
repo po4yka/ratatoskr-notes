@@ -30,6 +30,7 @@ use crate::tree_sync::Pipeline;
 
 pub use connect::OPERATION_HEADER;
 
+mod channel;
 mod connect;
 mod fault;
 mod read;
@@ -160,6 +161,12 @@ impl<B: SystemdBus> ApiState<B> {
         self.max_file_bytes = max_file_bytes;
         self.refresh_pipeline();
         self
+    }
+
+    /// The recorder of the file changes, with the blob store and the size limit of the settings.
+    fn recorder(&self) -> FileRecorder {
+        FileRecorder::new(self.database.clone(), self.blobs.clone())
+            .with_max_file_bytes(self.max_file_bytes)
     }
 
     /// Give the supervisor the pipeline of the working trees that the settings name now.
@@ -323,6 +330,10 @@ pub fn domain_router<B: SystemdBus>(state: ApiState<B>) -> Router {
         .route(
             "/v1/notes/connections/{connection_id}/excluded-folders",
             put(set_excluded_folders::<B>),
+        )
+        .route(
+            "/v1/notes/connections/{connection_id}/changes",
+            post(channel::post_changes::<B>).layer(DefaultBodyLimit::max(channel::MAX_BATCH_BYTES)),
         )
         .layer(DefaultBodyLimit::max(MAX_REQUEST_BYTES))
         .with_state(state)

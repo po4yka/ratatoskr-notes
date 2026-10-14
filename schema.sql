@@ -57,6 +57,10 @@ create table notes.connections (
     -- takes the next number under the lock of this row, in the transaction that writes it to the
     -- outbox, so the numbers start at 1 and have no gap (workspace design D7).
     last_sequence      bigint      not null default 0,
+    -- The highest change sequence of the device of a `plugin` or `cli` connection that Notes
+    -- committed. A batch continues at the next number; a batch that starts later is a gap, and a
+    -- change at or below it is a repeat that changes nothing (workspace design D5). 0 for `sync`.
+    device_sequence    bigint      not null default 0,
     created_at         timestamptz not null,
     updated_at         timestamptz not null,
 
@@ -78,6 +82,8 @@ create table notes.connections (
         check (logged_in_at is null or channel = 'sync'),
     constraint connections_last_sequence_is_not_negative
         check (last_sequence >= 0),
+    constraint connections_device_sequence_is_not_negative
+        check (device_sequence >= 0),
     constraint connections_excluded_folders_are_bounded
         check (cardinality(excluded_folders) <= 64)
 );

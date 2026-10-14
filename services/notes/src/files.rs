@@ -18,7 +18,9 @@ use ratatoskr_notes_contracts::{FileChangeKind, VaultPath};
 use ratatoskr_notes_index::paths::{
     Admission, Current, DEFAULT_MAX_FILE_BYTES, PathRules, admit, nfc_path, path_key,
 };
-use ratatoskr_notes_persistence::{Database, FileRow, FileTransaction, NewRevision, OutboxEvent};
+use ratatoskr_notes_persistence::{
+    Database, FileRow, FileTransaction, LockedConnection, NewRevision, OutboxEvent,
+};
 use uuid::Uuid;
 
 use crate::blobs::BlobStore;
@@ -118,6 +120,18 @@ impl FileRecorder {
         self
     }
 
+    /// The blob store that holds the bytes of each revision.
+    #[must_use]
+    pub fn blobs(&self) -> &BlobStore {
+        &self.blobs
+    }
+
+    /// The largest file that is indexed, in bytes.
+    #[must_use]
+    pub const fn max_file_bytes(&self) -> u64 {
+        self.max_file_bytes
+    }
+
     /// Record one change of a file of `connection_id`. A connection that is not `connecting` or
     /// `active`, an excluded path, a path that the contract refuses, equal bytes and a collision
     /// record [`Recorded::Nothing`].
@@ -141,58 +155,101 @@ impl FileRecorder {
             tracing::warn!(%connection_id, "a file whose path the contract refuses is not indexed");
             return Ok(Recorded::Nothing);
         }
-        match change {
+        let note_index = match change {
             TreeChange::Revision { digest, length, .. } => {
-                self.record_revision(connection_id, &path, digest, *length)
-                    .await
+                if !self.holds(digest).await {
+                    return Err(RecordError(
+                        "the blob of the revision is not in the blob root",
+                    ));
+                }
+                self.note_index(&path, digest, *length).await
             }
-            TreeChange::Removed { .. } => self.record_removal(connection_id, &path).await,
-        }
-    }
-
-    async fn record_revision(
-        &self,
-        connection_id: Uuid,
-        path: &str,
-        digest: &str,
-        length: u64,
-    ) -> Result<Recorded, RecordError> {
-        let blob = self
-            .blobs
-            .path_of(digest)
-            .ok_or(RecordError("the digest"))?;
-        if !tokio::fs::try_exists(&blob).await.unwrap_or(false) {
-            return Err(RecordError(
-                "the blob of the revision is not in the blob root",
-            ));
-        }
-        let media_type = media_type(path);
-        let note_index = if media_type == "text/markdown" && length <= self.max_file_bytes {
-            index_of(&blob).await
-        } else {
-            None
+            TreeChange::Removed { .. } => None,
         };
-
         let Some((mut transaction, connection)) =
             self.database.begin_file_change(connection_id).await?
         else {
             return Ok(Recorded::Nothing);
         };
-        let rules = PathRules {
-            excluded_folders: connection.excluded_folders,
-            max_file_bytes: self.max_file_bytes,
+        let recorded = match change {
+            TreeChange::Revision { digest, length, .. } => {
+                let revision = Revision {
+                    path: &path,
+                    digest,
+                    length: *length,
+                    note_index: note_index.as_ref(),
+                };
+                self.apply_revision(&mut transaction, &connection, connection_id, &revision)
+                    .await?
+            }
+            TreeChange::Removed { .. } => {
+                self.apply_removal(&mut transaction, &connection, connection_id, &path)
+                    .await?
+            }
         };
-        if rules.exclusion(path, length).is_some() {
+        transaction.commit().await?;
+        Ok(recorded)
+    }
+
+    /// Whether the blob store holds the bytes with the SHA-256 `digest`.
+    pub(crate) async fn holds(&self, digest: &str) -> bool {
+        self.blob_length(digest).await.is_some()
+    }
+
+    /// The number of bytes of the blob with the SHA-256 `digest`, or `None` when the store does
+    /// not hold it.
+    pub(crate) async fn blob_length(&self, digest: &str) -> Option<u64> {
+        let blob = self.blobs.path_of(digest)?;
+        let metadata = tokio::fs::metadata(&blob).await.ok()?;
+        metadata.is_file().then_some(metadata.len())
+    }
+
+    /// The index of the revision `digest` of `path` when it is a Markdown note that is not too
+    /// large, read from the blob store. `None` for any other file.
+    pub(crate) async fn note_index(
+        &self,
+        path: &str,
+        digest: &str,
+        length: u64,
+    ) -> Option<serde_json::Value> {
+        if media_type(path) != "text/markdown" || length > self.max_file_bytes {
+            return None;
+        }
+        index_of(&self.blobs.path_of(digest)?).await
+    }
+
+    /// The rules that decide whether a path of `connection` is indexed.
+    pub(crate) fn rules(&self, connection: &LockedConnection) -> PathRules {
+        PathRules {
+            excluded_folders: connection.excluded_folders.clone(),
+            max_file_bytes: self.max_file_bytes,
+        }
+    }
+
+    /// Record a revision of `revision.path` in `transaction`, without a commit. The blob of the
+    /// revision is in the store.
+    pub(crate) async fn apply_revision(
+        &self,
+        transaction: &mut FileTransaction,
+        connection: &LockedConnection,
+        connection_id: Uuid,
+        revision: &Revision<'_>,
+    ) -> Result<Recorded, RecordError> {
+        let path = revision.path;
+        if self
+            .rules(connection)
+            .exclusion(path, revision.length)
+            .is_some()
+        {
             return Ok(Recorded::Nothing);
         }
         let key = path_key(path);
         let current = transaction.file_by_key(&key).await?;
-        let admission = admit(current.as_ref().map(current_of), path, digest);
+        let admission = admit(current.as_ref().map(current_of), path, revision.digest);
         let (file_id, kind) = match (admission, &current) {
             (Admission::Unchanged, _) => return Ok(Recorded::Nothing),
             (Admission::Collision { .. }, _) => {
                 transaction.record_collision(path, &key).await?;
-                transaction.commit().await?;
                 tracing::warn!(%connection_id, code = ratatoskr_notes_index::paths::PATH_COLLISION, "two paths of a connection differ only in case or normalisation");
                 return Ok(Recorded::Nothing);
             }
@@ -200,15 +257,44 @@ impl FileRecorder {
             (Admission::Recreated, Some(file)) => (file.file_id, FileChangeKind::Created),
             _ => (Uuid::now_v7(), FileChangeKind::Created),
         };
+        self.put(
+            transaction,
+            connection,
+            connection_id,
+            file_id,
+            kind,
+            None,
+            revision,
+        )
+        .await
+    }
+
+    /// Make `revision` the current revision of the file `file_id` under its path, and publish the
+    /// change `kind`, which names `previous_path` for a rename.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the parts of one change; a struct would only rename them"
+    )]
+    async fn put(
+        &self,
+        transaction: &mut FileTransaction,
+        connection: &LockedConnection,
+        connection_id: Uuid,
+        file_id: Uuid,
+        kind: FileChangeKind,
+        previous_path: Option<&str>,
+        revision: &Revision<'_>,
+    ) -> Result<Recorded, RecordError> {
+        let media_type = media_type(revision.path);
         transaction
             .put_revision(&NewRevision {
                 file_id,
-                path,
-                path_key: &key,
-                revision: digest,
+                path: revision.path,
+                path_key: &path_key(revision.path),
+                revision: revision.digest,
                 media_type,
-                length_bytes: length,
-                note_index: note_index.as_ref(),
+                length_bytes: revision.length,
+                note_index: revision.note_index,
             })
             .await?;
         let change = FileChange {
@@ -217,26 +303,24 @@ impl FileRecorder {
             file_id,
             connection_sequence: 0,
             kind,
-            path,
-            revision: digest,
+            path: revision.path,
+            previous_path,
+            revision: revision.digest,
             media_type,
-            blob_length: Some(length),
+            blob_length: Some(revision.length),
         };
         publish(transaction, change).await
     }
 
-    async fn record_removal(
+    /// Record that `path` left the vault, in `transaction`, without a commit.
+    pub(crate) async fn apply_removal(
         &self,
+        transaction: &mut FileTransaction,
+        connection: &LockedConnection,
         connection_id: Uuid,
         path: &str,
     ) -> Result<Recorded, RecordError> {
-        let Some((mut transaction, connection)) =
-            self.database.begin_file_change(connection_id).await?
-        else {
-            return Ok(Recorded::Nothing);
-        };
         if transaction.forget_collision(path).await? {
-            transaction.commit().await?;
             return Ok(Recorded::Nothing);
         }
         let Some(file) = transaction.file_by_key(&path_key(path)).await? else {
@@ -247,6 +331,72 @@ impl FileRecorder {
         }
         delete(transaction, connection.owner_id, connection_id, &file).await
     }
+
+    /// Record that the file at `from` moved to `revision.path`, in `transaction`, without a
+    /// commit. A present file at `from` keeps its id and publishes one `renamed` change. When
+    /// `from` names no present file, the change records the new path as a revision. When the new
+    /// path is excluded, the file is deleted. When another file holds the new path key, or a
+    /// deleted file does, the file at `from` is deleted and the new path is recorded as a
+    /// revision, so that one path key keeps one file.
+    pub(crate) async fn apply_rename(
+        &self,
+        transaction: &mut FileTransaction,
+        connection: &LockedConnection,
+        connection_id: Uuid,
+        from: &str,
+        revision: &Revision<'_>,
+    ) -> Result<Recorded, RecordError> {
+        let old = transaction
+            .file_by_key(&path_key(from))
+            .await?
+            .filter(|file| file.present && file.path == from);
+        let Some(old) = old else {
+            transaction.forget_collision(from).await?;
+            return self
+                .apply_revision(transaction, connection, connection_id, revision)
+                .await;
+        };
+        if self
+            .rules(connection)
+            .exclusion(revision.path, revision.length)
+            .is_some()
+        {
+            return delete(transaction, connection.owner_id, connection_id, &old).await;
+        }
+        let key = path_key(revision.path);
+        let target_is_free =
+            key == path_key(from) || transaction.file_by_key(&key).await?.is_none();
+        if !target_is_free {
+            delete(transaction, connection.owner_id, connection_id, &old).await?;
+            return self
+                .apply_revision(transaction, connection, connection_id, revision)
+                .await;
+        }
+        let kind = FileChangeKind::Renamed;
+        self.put(
+            transaction,
+            connection,
+            connection_id,
+            old.file_id,
+            kind,
+            Some(from),
+            revision,
+        )
+        .await
+    }
+}
+
+/// One revision to record: a path and the facts of its bytes.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Revision<'a> {
+    /// The NFC path.
+    pub(crate) path: &'a str,
+    /// The lowercase hex SHA-256 of the bytes.
+    pub(crate) digest: &'a str,
+    /// The number of bytes.
+    pub(crate) length: u64,
+    /// The index of a Markdown note.
+    pub(crate) note_index: Option<&'a serde_json::Value>,
 }
 
 /// The admission view of a stored file.
@@ -270,7 +420,7 @@ async fn index_of(blob: &Path) -> Option<serde_json::Value> {
 
 /// Mark `file` deleted, and publish its `deleted` event, which names its last revision and no blob.
 async fn delete(
-    mut transaction: FileTransaction,
+    transaction: &mut FileTransaction,
     owner_id: Uuid,
     connection_id: Uuid,
     file: &FileRow,
@@ -283,6 +433,7 @@ async fn delete(
         connection_sequence: 0,
         kind: FileChangeKind::Deleted,
         path: &file.path,
+        previous_path: None,
         revision: &file.revision,
         media_type: &file.media_type,
         blob_length: None,
@@ -290,9 +441,10 @@ async fn delete(
     publish(transaction, change).await
 }
 
-/// Take the next connection sequence, write the event of `change` to the outbox and commit.
+/// Take the next connection sequence and write the event of `change` to the outbox, in
+/// `transaction`.
 async fn publish(
-    mut transaction: FileTransaction,
+    transaction: &mut FileTransaction,
     mut change: FileChange<'_>,
 ) -> Result<Recorded, RecordError> {
     change.connection_sequence = transaction.next_sequence().await?;
@@ -309,7 +461,6 @@ async fn publish(
             envelope: &envelope,
         })
         .await?;
-    transaction.commit().await?;
     Ok(Recorded::Published {
         event_id,
         file_id: change.file_id,
@@ -378,6 +529,7 @@ pub async fn set_excluded_folders(
             connection_sequence,
             kind: FileChangeKind::Deleted,
             path: &file.path,
+            previous_path: None,
             revision: &file.revision,
             media_type: &file.media_type,
             blob_length: None,

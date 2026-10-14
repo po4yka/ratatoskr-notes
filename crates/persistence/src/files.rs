@@ -20,6 +20,8 @@ pub struct LockedConnection {
     pub channel: String,
     /// The folders that the owner excluded.
     pub excluded_folders: Vec<String>,
+    /// The highest device change sequence that is committed; 0 for a `sync` connection.
+    pub device_sequence: u64,
 }
 
 /// One file of a connection.
@@ -80,8 +82,8 @@ impl Database {
         connection_id: Uuid,
     ) -> Result<Option<(FileTransaction, LockedConnection)>, PersistenceError> {
         let mut transaction = self.pool.begin().await.map_err(query_error)?;
-        let row: Option<(Uuid, String, Vec<String>)> = sqlx::query_as(
-            "select owner_id, channel, excluded_folders from notes.connections
+        let row: Option<(Uuid, String, Vec<String>, i64)> = sqlx::query_as(
+            "select owner_id, channel, excluded_folders, device_sequence from notes.connections
              where connection_id = $1 and state in ('connecting', 'active')
              for update",
         )
@@ -89,19 +91,23 @@ impl Database {
         .fetch_optional(&mut *transaction)
         .await
         .map_err(query_error)?;
-        Ok(row.map(|(owner_id, channel, excluded_folders)| {
-            (
-                FileTransaction {
-                    transaction,
-                    connection_id,
-                },
-                LockedConnection {
-                    owner_id,
-                    channel,
-                    excluded_folders,
-                },
-            )
-        }))
+        Ok(
+            row.map(|(owner_id, channel, excluded_folders, device_sequence)| {
+                (
+                    FileTransaction {
+                        transaction,
+                        connection_id,
+                    },
+                    LockedConnection {
+                        owner_id,
+                        channel,
+                        excluded_folders,
+                        // A CHECK keeps the sequence at 0 or more.
+                        device_sequence: u64::try_from(device_sequence).unwrap_or_default(),
+                    },
+                )
+            }),
+        )
     }
 }
 
@@ -264,6 +270,24 @@ impl FileTransaction {
         )
         .bind(self.connection_id)
         .bind(folders)
+        .execute(&mut *self.transaction)
+        .await
+        .map_err(query_error)?;
+        Ok(())
+    }
+
+    /// Record `sequence` as the highest device change sequence that is committed.
+    ///
+    /// # Errors
+    ///
+    /// [`PersistenceError::Query`] when the statement fails.
+    pub async fn set_device_sequence(&mut self, sequence: u64) -> Result<(), PersistenceError> {
+        sqlx::query(
+            "update notes.connections set device_sequence = $2, updated_at = now()
+             where connection_id = $1",
+        )
+        .bind(self.connection_id)
+        .bind(i64::try_from(sequence).unwrap_or(i64::MAX))
         .execute(&mut *self.transaction)
         .await
         .map_err(query_error)?;
