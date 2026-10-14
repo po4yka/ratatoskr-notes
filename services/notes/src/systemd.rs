@@ -24,6 +24,13 @@ impl UnitName {
         Self(format!("ratatoskr-notes-sync@{connection_id}.service"))
     }
 
+    /// `ratatoskr-notes-login@<id>.service`: the oneshot unit that runs `ob login` and
+    /// `ob sync-setup` for a new connection (workspace design D4).
+    #[must_use]
+    pub fn login(connection_id: Uuid) -> Self {
+        Self(format!("ratatoskr-notes-login@{connection_id}.service"))
+    }
+
     /// `ratatoskr-notes-cleanup@<id>.service`: the oneshot unit that removes the working tree and
     /// the client state of a removed connection.
     #[must_use]
@@ -65,7 +72,7 @@ pub enum BusError {
     Refused(#[source] Box<dyn std::error::Error + Send + Sync>),
 }
 
-/// The two systemd calls that Notes makes. Each one waits until the job is finished.
+/// The systemd calls that Notes makes. A start or a stop waits until the job is finished.
 pub trait SystemdBus: Send + Sync + 'static {
     /// Start a unit and wait for the job. For a oneshot unit the job ends when the unit's
     /// `ExecStart=` lines have run.
@@ -79,6 +86,14 @@ pub trait SystemdBus: Send + Sync + 'static {
         &self,
         unit: &UnitName,
     ) -> impl Future<Output = Result<JobResult, BusError>> + Send;
+
+    /// The exit status of the last main process of a unit, as `ExecMainStatus` reports it.
+    /// `None` when the process did not exit by itself, for example when a signal killed it.
+    /// For a oneshot unit whose start failed, it is the status of the command that failed.
+    fn exit_status(
+        &self,
+        unit: &UnitName,
+    ) -> impl Future<Output = Result<Option<i32>, BusError>> + Send;
 }
 
 /// The well-known name, object and interface of the systemd manager.
@@ -88,6 +103,12 @@ const MANAGER_INTERFACE: &str = "org.freedesktop.systemd1.Manager";
 
 /// The error name systemd answers for a unit it does not know.
 const NO_SUCH_UNIT: &str = "org.freedesktop.systemd1.NoSuchUnit";
+
+/// The interface that carries `ExecMainCode` and `ExecMainStatus`.
+const SERVICE_INTERFACE: &str = "org.freedesktop.systemd1.Service";
+
+/// `CLD_EXITED` from `<signal.h>`: the process exited, and the status is its exit code.
+const CLD_EXITED: i32 = 1;
 
 /// The production bus: the systemd manager on the system bus.
 ///
@@ -172,5 +193,31 @@ impl SystemdBus for DbusSystemd {
 
     async fn stop_unit(&self, unit: &UnitName) -> Result<JobResult, BusError> {
         self.run_job("StopUnit", unit).await
+    }
+
+    async fn exit_status(&self, unit: &UnitName) -> Result<Option<i32>, BusError> {
+        let manager = self.manager().await?;
+        let path: zbus::zvariant::OwnedObjectPath = manager
+            .call("GetUnit", &(unit.as_str(),))
+            .await
+            .map_err(|error| BusError::Refused(error.into()))?;
+        let service: zbus::Proxy<'_> = zbus::proxy::Builder::new(manager.connection())
+            .destination(SYSTEMD)
+            .and_then(|builder| builder.path(path))
+            .and_then(|builder| builder.interface(SERVICE_INTERFACE))
+            .map_err(|error| BusError::Refused(error.into()))?
+            .cache_properties(zbus::proxy::CacheProperties::No)
+            .build()
+            .await
+            .map_err(|error| BusError::Refused(error.into()))?;
+        let code: i32 = service
+            .get_property("ExecMainCode")
+            .await
+            .map_err(|error| BusError::Refused(error.into()))?;
+        let status: i32 = service
+            .get_property("ExecMainStatus")
+            .await
+            .map_err(|error| BusError::Refused(error.into()))?;
+        Ok((code == CLD_EXITED).then_some(status))
     }
 }

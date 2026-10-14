@@ -7,6 +7,10 @@
 //!
 //! The temporary directory of the fake also stands for the host files that the service reads: the
 //! secrets key file. The output of each unit command goes to a journal that a test can search.
+//!
+//! The login unit does not ship yet (workspace task 5.9). Until it does, the fake answers a start
+//! of `ratatoskr-notes-login@<id>.service` itself: `done`, or `failed` with the exit status that
+//! the unit gives for a refused end-to-end password.
 
 #![allow(
     clippy::expect_used,
@@ -19,6 +23,9 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use ratatoskr_notes::systemd::{BusError, JobResult, SystemdBus, UnitName};
+
+/// The exit status of the login unit when `ob sync-setup` refuses the end-to-end password.
+const EXIT_E2E_PASSWORD_WRONG: i32 = 12;
 use uuid::Uuid;
 
 /// Where the shipped units keep the per-connection directories on the host.
@@ -41,6 +48,7 @@ pub(crate) enum Call {
 #[derive(Debug, Clone)]
 pub(crate) struct FakeSystemd {
     calls: Arc<Mutex<Vec<Call>>>,
+    exit_statuses: Arc<Mutex<Vec<(String, i32)>>>,
     journal: Arc<Mutex<String>>,
     directory: Arc<tempfile::TempDir>,
     refuse_e2e_password: bool,
@@ -69,6 +77,7 @@ impl FakeSystemd {
             .expect("the key file is mode 0400");
         Self {
             calls: Arc::new(Mutex::new(Vec::new())),
+            exit_statuses: Arc::new(Mutex::new(Vec::new())),
             journal: Arc::new(Mutex::new(String::new())),
             directory: Arc::new(directory),
             refuse_e2e_password: false,
@@ -115,6 +124,13 @@ impl FakeSystemd {
 
     fn record(&self, call: Call) {
         self.calls.lock().expect("the call record").push(call);
+    }
+
+    fn record_exit_status(&self, unit: &UnitName, status: i32) {
+        self.exit_statuses
+            .lock()
+            .expect("the exit statuses")
+            .push((unit.as_str().to_owned(), status));
     }
 
     /// Runs the `ExecStart=` lines of a shipped template for one instance, as systemd would.
@@ -173,6 +189,13 @@ impl FakeSystemd {
 impl SystemdBus for FakeSystemd {
     async fn start_unit(&self, unit: &UnitName) -> Result<JobResult, BusError> {
         self.record(Call::Start(unit.as_str().to_owned()));
+        if unit.as_str().starts_with("ratatoskr-notes-login@") {
+            if self.refuse_e2e_password {
+                self.record_exit_status(unit, EXIT_E2E_PASSWORD_WRONG);
+                return Ok(JobResult::NotDone("failed".to_owned()));
+            }
+            return Ok(JobResult::Done);
+        }
         match unit
             .as_str()
             .strip_prefix("ratatoskr-notes-cleanup@")
@@ -189,5 +212,16 @@ impl SystemdBus for FakeSystemd {
     async fn stop_unit(&self, unit: &UnitName) -> Result<JobResult, BusError> {
         self.record(Call::Stop(unit.as_str().to_owned()));
         Ok(JobResult::Done)
+    }
+
+    async fn exit_status(&self, unit: &UnitName) -> Result<Option<i32>, BusError> {
+        Ok(self
+            .exit_statuses
+            .lock()
+            .expect("the exit statuses")
+            .iter()
+            .rev()
+            .find(|(name, _)| name == unit.as_str())
+            .map(|(_, status)| *status))
     }
 }

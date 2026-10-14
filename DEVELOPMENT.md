@@ -68,6 +68,7 @@ validates the environment and binds nothing (exit 0 valid, exit 78 invalid).
 | `RATATOSKR__DATABASE__ACQUIRE_TIMEOUT_SECONDS` | `5` | 1 to 60. |
 | `RATATOSKR__ADMIN__BIND` | `127.0.0.1:9471` | The operator listener. |
 | `RATATOSKR__API__LISTEN_ADDRESS` | `127.0.0.1:8099` | The domain API listener. It must differ from the operator listener. |
+| `RATATOSKR__SECRETS__KEY_FILE` | `/etc/ratatoskr/notes-secrets.key` | The 32-byte key of the stored Obsidian passwords, mode 0400 or 0600. Read at each `sync` connect. |
 | `RATATOSKR__SHUTDOWN__GRACE_SECONDS` | `10` | How long in-flight requests may run after SIGTERM, 1 to 60. |
 | `RATATOSKR__TELEMETRY__LOG_FORMAT` | `text` | `text` or `json`. |
 | `RATATOSKR__TELEMETRY__LOG_FILTER` | `info` | A tracing `EnvFilter` directive string. |

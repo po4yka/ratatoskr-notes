@@ -13,3 +13,8 @@ RATATOSKR__API__LISTEN_ADDRESS=127.0.0.1:8099
 RATATOSKR__DATABASE__URL=postgres://ratatoskr_notes:CHANGE-ME@127.0.0.1:5432/ratatoskr
 
 RATATOSKR__TELEMETRY__LOG_FORMAT=json
+
+# The key of the stored Obsidian passwords of each sync connection: 32 random bytes, mode 0400, owner
+# ratatoskr-notes. Create it once with `head -c 32 /dev/urandom`. A lost key makes the stored
+# passwords unreadable; the owner then connects the vault again. This line repeats the default.
+RATATOSKR__SECRETS__KEY_FILE=/etc/ratatoskr/notes-secrets.key

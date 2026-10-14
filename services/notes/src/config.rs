@@ -7,6 +7,7 @@
 
 use std::fmt::Write as _;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::path::PathBuf;
 use std::time::Duration;
 
 use figment::Figment;
@@ -40,6 +41,10 @@ pub struct NotesConfig {
     /// The `PostgreSQL` connection that holds the `notes` schema. Required.
     pub database: DatabaseConfig,
 
+    /// The custody of the Obsidian secrets of a `sync` connection.
+    #[serde(default)]
+    pub secrets: SecretsConfig,
+
     /// The graceful stop.
     #[serde(default)]
     pub shutdown: ShutdownConfig,
@@ -47,6 +52,29 @@ pub struct NotesConfig {
     /// Logging.
     #[serde(default)]
     pub telemetry: TelemetryConfig,
+}
+
+/// `RATATOSKR__SECRETS__*`.
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SecretsConfig {
+    /// The file that holds the 32-byte key of the stored Obsidian passwords (workspace design
+    /// D4). The service reads it at each `sync` connect, so a host without `sync` connections
+    /// needs no key file.
+    #[serde(default = "default_key_file")]
+    pub key_file: PathBuf,
+}
+
+impl Default for SecretsConfig {
+    fn default() -> Self {
+        Self {
+            key_file: default_key_file(),
+        }
+    }
+}
+
+fn default_key_file() -> PathBuf {
+    PathBuf::from(crate::api::DEFAULT_KEY_FILE)
 }
 
 /// `RATATOSKR__ADMIN__*`.

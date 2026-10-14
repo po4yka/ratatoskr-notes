@@ -50,10 +50,11 @@ create table notes.connections (
     constraint connections_display_name_is_bounded
         check (length(vault_display_name) between 1 and 255 and vault_display_name !~ '[[:cntrl:]]'),
     -- `connecting` until the first full scan is indexed, then `active`; `login_expired` when the
-    -- Sync login stopped working; `removed` after a disconnect. A removed row stays, because a
-    -- connection id is never reused.
+    -- Sync login stopped working; `failed` when the first login of a `sync` connection failed, so
+    -- the connection never became active; `removed` after a disconnect. A failed or removed row
+    -- stays, because a connection id is never reused.
     constraint connections_state_is_known
-        check (state in ('connecting', 'active', 'login_expired', 'removed')),
+        check (state in ('connecting', 'active', 'login_expired', 'failed', 'removed')),
     constraint connections_updated_at_is_not_before_created_at
         check (updated_at >= created_at)
 );
@@ -61,20 +62,22 @@ create table notes.connections (
 comment on table notes.connections is
     'One vault connection: an Obsidian vault of one owner and the one channel that reaches it.';
 
--- One channel per vault: an owner has at most one connection per vault key that is not removed,
--- whatever the channel (workspace spec notes-vault-connections). A connection whose login still
--- runs counts too, so that two channels never deliver the same change.
+-- One channel per vault: an owner has at most one connection per vault key that is not removed
+-- and did not fail, whatever the channel (workspace spec notes-vault-connections). A connection
+-- whose login still runs counts too, so that two channels never deliver the same change.
 create unique index connections_one_per_owner_and_vault_key
     on notes.connections (owner_id, vault_key)
-    where state <> 'removed';
+    where state not in ('failed', 'removed');
 
 -- ---------------------------------------------------------------------------------------------
 -- connection_secrets: the encrypted Obsidian passwords of a `sync` connection
 -- ---------------------------------------------------------------------------------------------
 
--- XChaCha20-Poly1305 under the key in /etc/ratatoskr/notes-secrets.key (workspace design D4). The
+-- XChaCha20-Poly1305 under the key in /etc/ratatoskr/notes-secrets.key (workspace design D4): 32
+-- random bytes, mode 0400, owner ratatoskr-notes. The associated data is the UTF-8 text
+-- `ratatoskr-notes:<connection id>:<secret kind>`, so a ciphertext opens only in its own row. The
 -- account password and the end-to-end password only: the MFA code is never stored, and the CHECK
--- refuses any other kind. A disconnect deletes the rows.
+-- refuses any other kind. A disconnect and a failed login delete the rows.
 create table notes.connection_secrets (
     connection_id uuid        not null references notes.connections (connection_id),
     secret_kind   text        not null,

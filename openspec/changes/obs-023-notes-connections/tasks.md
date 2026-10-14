@@ -10,8 +10,8 @@
 
 ## 3. Secret custody and the login unit (workspace tasks 5.6 to 5.9)
 
-- [ ] 3.1 RED: `services/notes/tests/secret_custody.rs::marker_secrets_appear_nowhere_in_notes`, `wrong_e2e_password_fails_with_its_code` and `stored_secret_is_ciphertext_without_mfa`, as workspace task 5.6 words them. Confirm that all three fail because the connect flow does not exist.
-- [ ] 3.2 GREEN: the encryption with the key file and the connect flow with redacted errors and the four stable login codes (workspace task 5.7). Verify the three tests of 3.1.
+- [x] 3.1 RED: `services/notes/tests/secret_custody.rs::marker_secrets_appear_nowhere_in_notes`, `wrong_e2e_password_fails_with_its_code` and `stored_secret_is_ciphertext_without_mfa`, as workspace task 5.6 words them. Confirm that all three fail because the connect flow does not exist.
+- [x] 3.2 GREEN: the encryption with the key file and the connect flow with redacted errors and the four stable login codes (workspace task 5.7). Verify the three tests of 3.1.
 - [ ] 3.3 RED: `services/notes/tests/secret_custody.rs::login_unit_gets_secrets_only_as_credentials` and `no_secret_in_any_cmdline`, as workspace task 5.8 words them. Confirm that both fail because the login unit does not exist.
 - [ ] 3.4 GREEN: ship `deploy/systemd/ratatoskr-notes-login@.service` and the credential files (workspace task 5.9). Verify both tests of 3.3.
 

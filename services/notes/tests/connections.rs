@@ -26,7 +26,9 @@ const OWNER_B: Uuid = Uuid::from_u128(0x0192_0000_0000_7000_8000_0000_0000_000b)
 const REMOTE_VAULT_ID: &str = "remote-vault-0001";
 
 fn router(fixture: &TestDatabase, systemd: &FakeSystemd) -> Router {
-    domain_router(ApiState::new(fixture.database.clone(), systemd.clone()))
+    domain_router(
+        ApiState::new(fixture.database.clone(), systemd.clone()).with_key_file(systemd.key_file()),
+    )
 }
 
 async fn connections_of(fixture: &TestDatabase, owner: Uuid) -> i64 {
@@ -101,22 +103,13 @@ fn leave_sync_state(
     (tree, ob_home)
 }
 
-/// Stores fake ciphertext for both passwords, as the connect flow will (workspace design D4).
-async fn store_fake_ciphertext(fixture: &TestDatabase, connection_id: Uuid) {
-    for kind in ["account_password", "e2e_password"] {
-        sqlx::query(
-            "insert into notes.connection_secrets
-                 (connection_id, secret_kind, nonce, ciphertext, created_at)
-             values ($1, $2, $3, $4, now())",
-        )
+/// The number of stored secrets of a connection.
+async fn secrets_of(fixture: &TestDatabase, connection_id: Uuid) -> i64 {
+    sqlx::query_scalar("select count(*) from notes.connection_secrets where connection_id = $1")
         .bind(connection_id)
-        .bind(kind)
-        .bind(vec![7_u8; 24])
-        .bind(vec![9_u8; 48])
-        .execute(fixture.pool())
+        .fetch_one(fixture.pool())
         .await
-        .expect("the fake ciphertext is stored");
-    }
+        .expect("the secrets can be counted")
 }
 
 #[tokio::test]
@@ -125,8 +118,13 @@ async fn disconnect_removes_unit_tree_state_and_secrets() {
     let systemd = FakeSystemd::new();
     let router = router(&fixture, &systemd);
     let id = connection_id(&connect(&router, OWNER_A, "sync", REMOTE_VAULT_ID).await);
+    let calls_of_connect = systemd.calls().len();
     let (tree, ob_home) = leave_sync_state(&systemd, id);
-    store_fake_ciphertext(&fixture, id).await;
+    assert_eq!(
+        secrets_of(&fixture, id).await,
+        2,
+        "the connect stored both passwords"
+    );
 
     let answer = send(
         &router,
@@ -140,8 +138,8 @@ async fn disconnect_removes_unit_tree_state_and_secrets() {
 
     // The sync unit is stopped, then the cleanup unit runs, through the bus and nothing else.
     assert_eq!(
-        systemd.calls(),
-        vec![
+        systemd.calls()[calls_of_connect..],
+        [
             Call::Stop(format!("ratatoskr-notes-sync@{id}.service")),
             Call::Start(format!("ratatoskr-notes-cleanup@{id}.service")),
         ]
@@ -153,14 +151,7 @@ async fn disconnect_removes_unit_tree_state_and_secrets() {
     assert!(!tree.exists(), "the working tree is gone");
     assert!(!ob_home.exists(), "the client state is gone");
 
-    let secrets: i64 = sqlx::query_scalar(
-        "select count(*) from notes.connection_secrets where connection_id = $1",
-    )
-    .bind(id)
-    .fetch_one(fixture.pool())
-    .await
-    .expect("the secrets can be counted");
-    assert_eq!(secrets, 0, "the ciphertext is gone");
+    assert_eq!(secrets_of(&fixture, id).await, 0, "the ciphertext is gone");
 
     let events: Vec<(String, serde_json::Value)> =
         sqlx::query_as("select event_type, payload from notes.outbox where aggregate_id = $1")

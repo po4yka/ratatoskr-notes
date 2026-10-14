@@ -1,4 +1,5 @@
-//! Vault connections: create one, and refuse a second one for the same owner and vault key.
+//! Vault connections: create one with its encrypted secrets, refuse a second one for the same
+//! owner and vault key, mark a failed login, and remove one.
 
 use uuid::Uuid;
 
@@ -17,7 +18,24 @@ pub struct NewConnection<'a> {
     pub vault_key: &'a str,
     /// The display name of the vault.
     pub vault_display_name: &'a str,
+    /// The encrypted secrets of a `sync` connection; empty for the other channels.
+    pub secrets: &'a [NewSecret<'a>],
 }
+
+/// One encrypted secret of a connection. The service encrypts; this crate never sees plaintext.
+#[derive(Debug, Clone, Copy)]
+pub struct NewSecret<'a> {
+    /// `account_password` or `e2e_password`.
+    pub kind: &'a str,
+    /// The 24-byte `XChaCha20` nonce.
+    pub nonce: &'a [u8],
+    /// The ciphertext with its Poly1305 tag.
+    pub ciphertext: &'a [u8],
+}
+
+/// The states in which a connection holds its vault key. A `failed` or `removed` connection does
+/// not, so the owner can connect the vault again. The text matches the partial unique index.
+const HOLDS_VAULT_KEY: &str = "state not in ('failed', 'removed')";
 
 /// What [`Database::create_connection`] did.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -34,8 +52,9 @@ pub enum CreateOutcome {
 }
 
 impl Database {
-    /// Create a connection in the state `connecting`, unless the owner already has one for the
-    /// same vault key that is not removed.
+    /// Create a connection in the state `connecting` with its encrypted secrets, in one
+    /// transaction, unless the owner already has one for the same vault key that is not removed
+    /// and did not fail.
     ///
     /// The partial unique index decides, so two concurrent requests cannot both create one.
     ///
@@ -50,34 +69,57 @@ impl Database {
         // Two passes at most: the existing connection can be removed between the refused insert
         // and the read, and the second insert then succeeds.
         for _ in 0..2 {
-            let inserted = sqlx::query(
+            let mut transaction = self.pool.begin().await.map_err(PersistenceError::Query)?;
+            let inserted = sqlx::query(&format!(
                 "insert into notes.connections
                      (connection_id, owner_id, channel, vault_key, vault_display_name, state,
                       created_at, updated_at)
                  values ($1, $2, $3, $4, $5, 'connecting', now(), now())
-                 on conflict (owner_id, vault_key) where state <> 'removed' do nothing",
-            )
+                 on conflict (owner_id, vault_key) where {HOLDS_VAULT_KEY} do nothing"
+            ))
             .bind(new.connection_id)
             .bind(new.owner_id)
             .bind(new.channel)
             .bind(new.vault_key)
             .bind(new.vault_display_name)
-            .execute(&self.pool)
+            .execute(&mut *transaction)
             .await
             .map_err(PersistenceError::Query)?;
             if inserted.rows_affected() == 1 {
+                for secret in new.secrets {
+                    sqlx::query(
+                        "insert into notes.connection_secrets
+                             (connection_id, secret_kind, nonce, ciphertext, created_at)
+                         values ($1, $2, $3, $4, now())",
+                    )
+                    .bind(new.connection_id)
+                    .bind(secret.kind)
+                    .bind(secret.nonce)
+                    .bind(secret.ciphertext)
+                    .execute(&mut *transaction)
+                    .await
+                    .map_err(PersistenceError::Query)?;
+                }
+                transaction
+                    .commit()
+                    .await
+                    .map_err(PersistenceError::Query)?;
                 return Ok(CreateOutcome::Created);
             }
 
-            let existing: Option<(Uuid, String)> = sqlx::query_as(
+            let existing: Option<(Uuid, String)> = sqlx::query_as(&format!(
                 "select connection_id, channel from notes.connections
-                 where owner_id = $1 and vault_key = $2 and state <> 'removed'",
-            )
+                 where owner_id = $1 and vault_key = $2 and {HOLDS_VAULT_KEY}"
+            ))
             .bind(new.owner_id)
             .bind(new.vault_key)
-            .fetch_optional(&self.pool)
+            .fetch_optional(&mut *transaction)
             .await
             .map_err(PersistenceError::Query)?;
+            transaction
+                .rollback()
+                .await
+                .map_err(PersistenceError::Query)?;
             if let Some((connection_id, channel)) = existing {
                 return Ok(CreateOutcome::VaultAlreadyConnected {
                     connection_id,
@@ -116,7 +158,7 @@ pub struct OutboxEvent<'a> {
 }
 
 impl Database {
-    /// The connection with this id if this owner holds it and it is not removed.
+    /// The connection with this id if this owner holds it, and it is not removed and did not fail.
     ///
     /// A connection of another owner reads as absent, so a caller cannot tell it from one that
     /// does not exist.
@@ -129,10 +171,10 @@ impl Database {
         owner_id: Uuid,
         connection_id: Uuid,
     ) -> Result<Option<ConnectionRecord>, PersistenceError> {
-        let row: Option<(Uuid, String, String)> = sqlx::query_as(
+        let row: Option<(Uuid, String, String)> = sqlx::query_as(&format!(
             "select connection_id, channel, vault_display_name from notes.connections
-             where connection_id = $1 and owner_id = $2 and state <> 'removed'",
-        )
+             where connection_id = $1 and owner_id = $2 and {HOLDS_VAULT_KEY}"
+        ))
         .bind(connection_id)
         .bind(owner_id)
         .fetch_optional(&self.pool)
@@ -163,10 +205,10 @@ impl Database {
         event: &OutboxEvent<'_>,
     ) -> Result<bool, PersistenceError> {
         let mut transaction = self.pool.begin().await.map_err(PersistenceError::Query)?;
-        let removed = sqlx::query(
+        let removed = sqlx::query(&format!(
             "update notes.connections set state = 'removed', updated_at = now()
-             where connection_id = $1 and owner_id = $2 and state <> 'removed'",
-        )
+             where connection_id = $1 and owner_id = $2 and {HOLDS_VAULT_KEY}"
+        ))
         .bind(connection_id)
         .bind(owner_id)
         .execute(&mut *transaction)
@@ -193,6 +235,41 @@ impl Database {
         .execute(&mut *transaction)
         .await
         .map_err(PersistenceError::Query)?;
+        transaction
+            .commit()
+            .await
+            .map_err(PersistenceError::Query)?;
+        Ok(true)
+    }
+}
+
+impl Database {
+    /// Mark a `connecting` connection `failed` after its first login failed, and delete its
+    /// stored ciphertext, in one transaction. The vault key is then free again.
+    ///
+    /// Returns `false` and changes nothing when the connection is not `connecting`.
+    ///
+    /// # Errors
+    ///
+    /// [`PersistenceError::Query`] when a statement fails; nothing is committed then.
+    pub async fn fail_connection(&self, connection_id: Uuid) -> Result<bool, PersistenceError> {
+        let mut transaction = self.pool.begin().await.map_err(PersistenceError::Query)?;
+        let failed = sqlx::query(
+            "update notes.connections set state = 'failed', updated_at = now()
+             where connection_id = $1 and state = 'connecting'",
+        )
+        .bind(connection_id)
+        .execute(&mut *transaction)
+        .await
+        .map_err(PersistenceError::Query)?;
+        if failed.rows_affected() == 0 {
+            return Ok(false);
+        }
+        sqlx::query("delete from notes.connection_secrets where connection_id = $1")
+            .bind(connection_id)
+            .execute(&mut *transaction)
+            .await
+            .map_err(PersistenceError::Query)?;
         transaction
             .commit()
             .await

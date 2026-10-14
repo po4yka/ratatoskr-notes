@@ -67,13 +67,27 @@ pub(crate) async fn send(
     Answer { status, body }
 }
 
-/// `POST /v1/notes/connections` for one owner.
+/// `POST /v1/notes/connections` for one owner. A `sync` connection carries a login with marker
+/// secrets.
 pub(crate) async fn connect(
     router: &Router,
     owner: Uuid,
     channel: &str,
     vault_key: &str,
 ) -> Answer {
+    if channel == "sync" {
+        return connect_sync(
+            router,
+            owner,
+            vault_key,
+            SyncSecrets {
+                password: "MARKER-ACCOUNT-PW-connections",
+                mfa_code: "MARKER-MFA-connections",
+                e2e_password: "MARKER-E2E-PW-connections",
+            },
+        )
+        .await;
+    }
     let body = serde_json::json!({
         "channel": channel,
         "vault_key": vault_key,
