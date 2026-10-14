@@ -38,6 +38,10 @@ pub struct NotesConfig {
     #[serde(default)]
     pub api: ApiConfig,
 
+    /// The notes blob root.
+    #[serde(default)]
+    pub blobs: BlobsConfig,
+
     /// The connects of vault connections.
     #[serde(default)]
     pub connections: ConnectionsConfig,
@@ -79,6 +83,27 @@ impl Default for ConnectionsConfig {
 
 const fn default_max_logins() -> usize {
     crate::api::DEFAULT_MAX_LOGINS
+}
+
+/// `RATATOSKR__BLOBS__*`.
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BlobsConfig {
+    /// The notes blob root, which the deploy role creates (workspace design D12).
+    #[serde(default = "default_blob_root")]
+    pub root: PathBuf,
+}
+
+impl Default for BlobsConfig {
+    fn default() -> Self {
+        Self {
+            root: default_blob_root(),
+        }
+    }
+}
+
+fn default_blob_root() -> PathBuf {
+    PathBuf::from(crate::blobs::DEFAULT_ROOT)
 }
 
 /// `RATATOSKR__SECRETS__*`.

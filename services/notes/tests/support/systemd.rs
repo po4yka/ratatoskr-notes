@@ -231,6 +231,11 @@ impl FakeSystemd {
         self.directory.path().join("notes-secrets.key")
     }
 
+    /// The test's stand-in for `/mnt/nvme/ratatoskr/blobs/ratatoskr-notes`. It does not exist.
+    pub(crate) fn blob_root(&self) -> PathBuf {
+        self.directory.path().join("blobs")
+    }
+
     /// The test's stand-in for `/run/ratatoskr-notes/credentials`.
     pub(crate) fn credentials_root(&self) -> PathBuf {
         self.directory.path().join("credentials")

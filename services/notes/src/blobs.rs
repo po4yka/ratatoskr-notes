@@ -26,6 +26,9 @@ use rustix::fs::{Mode, OFlags};
 use sha2::{Digest as _, Sha256};
 use uuid::Uuid;
 
+/// The notes blob root on the host.
+pub const DEFAULT_ROOT: &str = "/mnt/nvme/ratatoskr/blobs/ratatoskr-notes";
+
 /// The size of one read while a file is copied, so that memory stays bounded for any file size.
 const CHUNK_BYTES: usize = 64 * 1024;
 
