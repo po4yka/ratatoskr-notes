@@ -193,8 +193,9 @@ impl<B: SystemdBus> ApiState<B> {
         self
     }
 
-    /// Fail the connects that still run, and wait until each one ended. The service calls it when
-    /// the stop signal arrives, and gives it the grace window.
+    /// Fail the connects that still run, stop reading the journals of the sync units, and wait
+    /// until each one ended. The service calls it when the stop signal arrives, and gives it the
+    /// grace window. The sync units continue to run.
     ///
     /// A connect whose login runs stops the login unit, runs the cleanup unit, and marks its
     /// connection `failed` without its ciphertext, as after a failed login. Its request answers
@@ -202,7 +203,7 @@ impl<B: SystemdBus> ApiState<B> {
     pub async fn shut_down(&self) {
         self.stopping.cancel();
         self.connects.close();
-        self.connects.wait().await;
+        tokio::join!(self.connects.wait(), self.supervisor.shut_down());
     }
 
     /// Fail each `sync` connection whose first login a stop of the service interrupted: stop the
@@ -538,6 +539,7 @@ async fn log_in<B: SystemdBus>(
             ApiFault::Unavailable
         }
     };
+    state.supervisor.forget(connection_id);
     clean_up_sync_client(state.systemd.as_ref(), connection_id).await?;
     let failed = state
         .database
@@ -633,6 +635,7 @@ async fn remove_connection<B: SystemdBus>(
     // A connect whose login this disconnect stops waits for the end of the disconnect.
     let _removal = state.removals.begin(connection_id);
     if connection.channel == "sync" {
+        state.supervisor.forget(connection_id);
         clean_up_sync_client(state.systemd.as_ref(), connection_id).await?;
     }
 

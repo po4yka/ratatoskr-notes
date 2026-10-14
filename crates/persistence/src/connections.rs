@@ -355,3 +355,26 @@ impl Database {
         .map_err(PersistenceError::Query)
     }
 }
+
+impl Database {
+    /// Mark a `sync` connection `login_expired` when it is `connecting` or `active`: its Sync login
+    /// no longer works, and the owner must connect again.
+    ///
+    /// Returns `false` and changes nothing when the connection is in another state, for example
+    /// because the owner removed it.
+    ///
+    /// # Errors
+    ///
+    /// [`PersistenceError::Query`] when the statement fails.
+    pub async fn expire_login(&self, connection_id: Uuid) -> Result<bool, PersistenceError> {
+        let expired = sqlx::query(
+            "update notes.connections set state = 'login_expired', updated_at = now()
+             where connection_id = $1 and channel = 'sync' and state in ('connecting', 'active')",
+        )
+        .bind(connection_id)
+        .execute(&self.pool)
+        .await
+        .map_err(PersistenceError::Query)?;
+        Ok(expired.rows_affected() == 1)
+    }
+}

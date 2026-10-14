@@ -59,7 +59,9 @@ paths moved into a temporary directory, and `/usr/bin/ob` replaced by a stub. It
 `Environment=`, `EnvironmentFile=` and `LoadCredential=`, and gives the unit a
 `$CREDENTIALS_DIRECTORY` that it removes after the run. A test therefore checks the shipped unit
 file. Keep each command of a unit on one line, write `$$` for each shell `$`, and use no backslash.
-The stub `ob` records `ob sync --continuous` and returns at once, so the start job of the sync unit
+`support/journal.rs` is the journal of the fake sync units: a stub `ob` logs lines with the
+monotonic time of the fake host, in a paused tokio runtime on a thread of its own, so that minutes
+of `ob` retries take no real time. The stub `ob` records `ob sync --continuous` and returns at once, so the start job of the sync unit
 is done when its command started, as for `Type=exec`. A test can hold each login unit before its
 first command until it releases it. A stop of a login
 unit that runs ends its start job with `canceled` and kills its command, as systemd does.
@@ -131,7 +133,9 @@ again from `schema.sql` (AGENTS.md, Development status: no migrations).
 The host needs, before the first `sync` connect: the user `ratatoskr-notes-sync`; the directory
 `/mnt/nvme/ratatoskr/notes/connections` with that owner and mode 0700; `/run/ratatoskr-notes`
 owned by `ratatoskr-notes` (`RuntimeDirectory=` of the service unit); the key file; and `ob` at
-`/usr/bin/ob`. The deploy role of `ratatoskr-workspace` installs the units and the polkit rule that
+`/usr/bin/ob`. The service unit also needs `UMask=0027` for the blob root, and
+`SupplementaryGroups=systemd-journal`, because the service reads the journal of the sync units with
+`/usr/bin/journalctl`. The deploy role of `ratatoskr-workspace` installs the units and the polkit rule that
 lets `ratatoskr-notes` start and stop them.
 
 ## Workflow

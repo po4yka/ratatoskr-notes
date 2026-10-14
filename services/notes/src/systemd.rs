@@ -3,11 +3,16 @@
 //! Notes starts and stops `ratatoskr-notes-sync@<id>.service`,
 //! `ratatoskr-notes-login@<id>.service` and `ratatoskr-notes-cleanup@<id>.service` through the
 //! systemd D-Bus API (workspace design D3). Every call goes through [`SystemdBus`], so a test uses
-//! a fake bus and production uses [`DbusSystemd`].
+//! a fake bus and production uses [`DbusSystemd`]. The journal of a unit, which has no D-Bus API, is
+//! read through the same trait.
 
 use std::fmt;
 use std::future::Future;
+use std::process::Stdio;
+use std::time::Duration;
 
+use futures_util::Stream;
+use tokio::io::AsyncBufReadExt as _;
 use uuid::Uuid;
 
 /// The name of one template unit instance for one connection.
@@ -72,6 +77,15 @@ pub enum BusError {
     Refused(#[source] Box<dyn std::error::Error + Send + Sync>),
 }
 
+/// One line of the journal of a unit.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JournalLine {
+    /// When journald received the line, on the monotonic clock of the host (`__MONOTONIC_TIMESTAMP`).
+    pub monotonic: Duration,
+    /// The message of the line.
+    pub message: String,
+}
+
 /// The systemd calls that Notes makes. A start or a stop waits until the job is finished.
 pub trait SystemdBus: Send + Sync + 'static {
     /// Start a unit and wait for the job. For a oneshot unit the job ends when the unit's
@@ -94,6 +108,10 @@ pub trait SystemdBus: Send + Sync + 'static {
         &self,
         unit: &UnitName,
     ) -> impl Future<Output = Result<Option<i32>, BusError>> + Send;
+
+    /// The lines that the journal of a unit receives from now on, in order. The stream ends when
+    /// the journal cannot be read any more. A failure is logged.
+    fn follow_journal(&self, unit: &UnitName) -> impl Stream<Item = JournalLine> + Send + 'static;
 }
 
 /// The well-known name, object and interface of the systemd manager.
@@ -109,6 +127,10 @@ const SERVICE_INTERFACE: &str = "org.freedesktop.systemd1.Service";
 
 /// `CLD_EXITED` from `<signal.h>`: the process exited, and the status is its exit code.
 const CLD_EXITED: i32 = 1;
+
+/// Where Debian 12 installs `journalctl`. The service user must be able to read the journal of the
+/// sync units: a member of the group `systemd-journal`.
+const JOURNALCTL: &str = "/usr/bin/journalctl";
 
 /// The production bus: the systemd manager on the system bus.
 ///
@@ -219,5 +241,104 @@ impl SystemdBus for DbusSystemd {
             .await
             .map_err(|error| BusError::Refused(error.into()))?;
         Ok((code == CLD_EXITED).then_some(status))
+    }
+
+    /// Runs `journalctl --follow --lines=0 --output=json --output-fields=MESSAGE --unit=<unit>`
+    /// and reads its lines. `journalctl` stops when the stream is dropped.
+    fn follow_journal(&self, unit: &UnitName) -> impl Stream<Item = JournalLine> + Send + 'static {
+        let reader = tokio::process::Command::new(JOURNALCTL)
+            .args([
+                "--follow",
+                "--lines=0",
+                "--output=json",
+                "--output-fields=MESSAGE",
+                "--no-pager",
+                "--quiet",
+            ])
+            .arg(format!("--unit={unit}"))
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .kill_on_drop(true)
+            .spawn()
+            .inspect_err(|error| {
+                tracing::error!(%error, %unit, "the journal of a unit cannot be read");
+            })
+            .ok()
+            .and_then(|mut child| {
+                let output = child.stdout.take()?;
+                Some((child, tokio::io::BufReader::new(output).lines()))
+            });
+        futures_util::stream::unfold(reader, |reader| async move {
+            let (child, mut lines) = reader?;
+            let line = next_journal_line(&mut lines).await?;
+            Some((line, Some((child, lines))))
+        })
+    }
+}
+
+/// The output of `journalctl`, line by line.
+type JournalctlLines = tokio::io::Lines<tokio::io::BufReader<tokio::process::ChildStdout>>;
+
+/// The next journal line that `journalctl` writes, or `None` when it ended.
+async fn next_journal_line(lines: &mut JournalctlLines) -> Option<JournalLine> {
+    loop {
+        let text = match lines.next_line().await {
+            Ok(Some(text)) => text,
+            Ok(None) => return None,
+            Err(error) => {
+                tracing::error!(%error, "the journal of a unit could not be read");
+                return None;
+            }
+        };
+        if let Some(line) = journal_line(&text) {
+            return Some(line);
+        }
+    }
+}
+
+/// One entry of `journalctl --output=json`, with the fields that the supervisor reads.
+#[derive(Debug, serde::Deserialize)]
+struct JournalEntry {
+    #[serde(rename = "__MONOTONIC_TIMESTAMP")]
+    monotonic_micros: String,
+    /// A string, or an array of bytes when the message is not UTF-8.
+    #[serde(rename = "MESSAGE", default)]
+    message: Option<serde_json::Value>,
+}
+
+/// The line of one JSON entry, or `None` when it has no time or no UTF-8 message.
+fn journal_line(text: &str) -> Option<JournalLine> {
+    let entry: JournalEntry = serde_json::from_str(text).ok()?;
+    let micros: u64 = entry.monotonic_micros.parse().ok()?;
+    let serde_json::Value::String(message) = entry.message? else {
+        return None;
+    };
+    Some(JournalLine {
+        monotonic: Duration::from_micros(micros),
+        message,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use super::{JournalLine, journal_line};
+
+    #[test]
+    fn journalctl_json_entry_is_a_line() {
+        // Written by `journalctl --output=json --output-fields=MESSAGE` of systemd 252 in
+        // debian:12-slim.
+        let entry = r#"{"__CURSOR":"s=94dc;i=3","__REALTIME_TIMESTAMP":"1791977342156364","MESSAGE":"Error: Failed to authenticate: stub","_BOOT_ID":"022ee5327c954d1ea0c8f4a2e531e6ef","__MONOTONIC_TIMESTAMP":"18685091972"}"#;
+        assert_eq!(
+            journal_line(entry),
+            Some(JournalLine {
+                monotonic: Duration::from_micros(18_685_091_972),
+                message: "Error: Failed to authenticate: stub".to_owned(),
+            })
+        );
+        let binary = r#"{"MESSAGE":[69,255],"__MONOTONIC_TIMESTAMP":"1"}"#;
+        assert_eq!(journal_line(binary), None, "a message that is not UTF-8");
     }
 }

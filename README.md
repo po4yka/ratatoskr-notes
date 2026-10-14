@@ -99,6 +99,14 @@ The service starts and stops the units through the systemd D-Bus API as the user
 The three units are in `deploy/systemd/`. None of them is enabled: only the service starts them.
 The sync unit runs in pull-only mode, so Notes never writes into a vault.
 
+An expired or revoked Obsidian login does not stop `ob sync --continuous`: it logs
+`Error: Failed to authenticate: ...` and tries again. The service reads that one line from the
+journal of each sync unit, and no other. When the line repeats for 5 minutes, the connection
+becomes `login_expired` with the code `notes.sync.login_expired`, and the service stops the unit.
+It starts no login: the owner removes the connection and connects again. The line comes from
+`obsidian-headless` 0.0.14 and is provisional until spike 3.1 sees a real expired token. The
+service user must be a member of the group `systemd-journal` to read the journal.
+
 ## Blob root and its read group
 
 The bytes of each revision are in the blob root `/mnt/nvme/ratatoskr/blobs/ratatoskr-notes`, at

@@ -182,6 +182,33 @@ is not in `ratatoskr-notes-blobs`. This repository ships no unit for the service
 belongs to the service unit that the deploy role of `ratatoskr-workspace` installs. The explicit
 modes make the blob store independent of that umask.
 
+### 12. An expired Sync login
+
+The supervisor reads the journal of each sync unit that it started, through `SystemdBus::follow_journal`.
+The production bus runs `journalctl --follow --lines=0 --output=json --output-fields=MESSAGE
+--unit=<unit>` and reads the monotonic time and the message of each entry. It subscribes before it
+starts the unit, so no line of that start is lost. Only one line counts: a message that starts with
+`Failed to authenticate:`, also after `Error: `. `ob` 0.0.14 throws
+`new Error("Failed to authenticate: " + msg)` when the Sync server refuses its token, and
+`getServer()` logs the error with `console.error`, so the journal line is
+`Error: Failed to authenticate: <server message>`. Every other line is dropped unread.
+
+A run of failure lines starts at the first line, and a pause of more than 10 minutes between two
+lines starts a new run: `ob` tries every 30 seconds, but after each failed connection it waits up to
+5 minutes. When a run has lasted 5 minutes by the times of its lines, the supervisor marks the
+connection `login_expired` if it is `connecting` or `active`, logs `notes.sync.login_expired`, stops
+the unit once, and stops reading. It starts no login. A connection that the owner removed meanwhile
+is left to the disconnect. The rule uses the times of the lines, not the clock of the service, so
+the test drives it with lines that a stub `ob` logs under paused time.
+
+The line and the 5-minute rule are PROVISIONAL: they come from the code of `obsidian-headless`
+0.0.14, not from an expired token. Spike 3.1 confirms them, and the deploy role pins the version,
+because a release can change the line.
+
+The service user needs read access to the system journal: the service unit of the deploy role
+must give it `SupplementaryGroups=systemd-journal`. When `journalctl` cannot run or ends, the
+service logs it, and an expired login is found at its next start.
+
 ## Risks / Trade-offs
 
 - The D-Bus implementation has no automated test in this change: neither macOS nor the CI runner
@@ -204,5 +231,7 @@ modes make the blob store independent of that umask.
 - `no_secret_in_any_cmdline` runs on Linux only. A run on macOS ignores it, so the Linux CI job is
   the check.
 - A reconnect of a `login_expired` connection is a new `POST`, and the connection still holds its
-  vault key, so the answer is `409`. The owner removes the connection first. The supervisor change
-  (group 6) decides whether a reconnect reuses the connection.
+  vault key, so the answer is `409`. The owner removes the connection first. Group 6 keeps that
+  rule: the supervisor starts no login, and no route reuses a connection.
+- The group `systemd-journal` lets the service read the whole system journal, not only the journal
+  of the sync units. No narrower grant exists in systemd 252 without a journal namespace per unit.

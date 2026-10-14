@@ -43,7 +43,8 @@ use std::sync::{Arc, Mutex};
 
 use tokio::sync::{Notify, watch};
 
-use ratatoskr_notes::systemd::{BusError, JobResult, SystemdBus, UnitName};
+use futures_util::Stream;
+use ratatoskr_notes::systemd::{BusError, JobResult, JournalLine, SystemdBus, UnitName};
 use uuid::Uuid;
 
 use crate::support::journal::Journals;
@@ -625,6 +626,10 @@ impl SystemdBus for FakeSystemd {
             while ended.changed().await.is_ok() {}
         }
         Ok(JobResult::Done)
+    }
+
+    fn follow_journal(&self, unit: &UnitName) -> impl Stream<Item = JournalLine> + Send + 'static {
+        self.journals.follow(unit.as_str())
     }
 
     async fn exit_status(&self, unit: &UnitName) -> Result<Option<i32>, BusError> {
