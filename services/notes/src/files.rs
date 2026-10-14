@@ -19,7 +19,7 @@ use ratatoskr_notes_index::paths::{
     Admission, Current, DEFAULT_MAX_FILE_BYTES, PathRules, admit, nfc_path, path_key,
 };
 use ratatoskr_notes_persistence::{
-    Database, FileRow, FileTransaction, LockedConnection, NewRevision, OutboxEvent,
+    Database, FileRow, FileTransaction, LockedConnection, NewCollision, NewRevision, OutboxEvent,
 };
 use uuid::Uuid;
 
@@ -249,7 +249,15 @@ impl FileRecorder {
         let (file_id, kind) = match (admission, &current) {
             (Admission::Unchanged, _) => return Ok(Recorded::Nothing),
             (Admission::Collision { .. }, _) => {
-                transaction.record_collision(path, &key).await?;
+                transaction
+                    .record_collision(&NewCollision {
+                        path,
+                        path_key: &key,
+                        revision: revision.digest,
+                        media_type: media_type(path),
+                        length_bytes: revision.length,
+                    })
+                    .await?;
                 tracing::warn!(%connection_id, code = ratatoskr_notes_index::paths::PATH_COLLISION, "two paths of a connection differ only in case or normalisation");
                 return Ok(Recorded::Nothing);
             }
@@ -329,7 +337,53 @@ impl FileRecorder {
         if !file.present || file.path != path {
             return Ok(Recorded::Nothing);
         }
-        delete(transaction, connection.owner_id, connection_id, &file).await
+        self.remove(transaction, connection, connection_id, &file)
+            .await
+    }
+
+    /// Delete `file`, and give its path key to the collision that waits longest for it, as after a
+    /// rename that changes only the case of a name.
+    async fn remove(
+        &self,
+        transaction: &mut FileTransaction,
+        connection: &LockedConnection,
+        connection_id: Uuid,
+        file: &FileRow,
+    ) -> Result<Recorded, RecordError> {
+        let deleted = delete(transaction, connection.owner_id, connection_id, file).await?;
+        self.free_key(
+            transaction,
+            connection,
+            connection_id,
+            &path_key(&file.path),
+        )
+        .await?;
+        Ok(deleted)
+    }
+
+    /// Record the collision that waits longest for `key` as a revision of its path, now that no
+    /// present file holds the key.
+    async fn free_key(
+        &self,
+        transaction: &mut FileTransaction,
+        connection: &LockedConnection,
+        connection_id: Uuid,
+        key: &str,
+    ) -> Result<(), RecordError> {
+        let Some((path, digest, length)) = transaction.oldest_collision(key).await? else {
+            return Ok(());
+        };
+        transaction.forget_collision(&path).await?;
+        let note_index = self.note_index(&path, &digest, length).await;
+        let revision = Revision {
+            path: &path,
+            digest: &digest,
+            length,
+            note_index: note_index.as_ref(),
+        };
+        self.apply_revision(transaction, connection, connection_id, &revision)
+            .await?;
+        Ok(())
     }
 
     /// Record that the file at `from` moved to `revision.path`, in `transaction`, without a
@@ -361,28 +415,37 @@ impl FileRecorder {
             .exclusion(revision.path, revision.length)
             .is_some()
         {
-            return delete(transaction, connection.owner_id, connection_id, &old).await;
+            return self
+                .remove(transaction, connection, connection_id, &old)
+                .await;
         }
         let key = path_key(revision.path);
         let target_is_free =
             key == path_key(from) || transaction.file_by_key(&key).await?.is_none();
         if !target_is_free {
-            delete(transaction, connection.owner_id, connection_id, &old).await?;
+            self.remove(transaction, connection, connection_id, &old)
+                .await?;
             return self
                 .apply_revision(transaction, connection, connection_id, revision)
                 .await;
         }
         let kind = FileChangeKind::Renamed;
-        self.put(
-            transaction,
-            connection,
-            connection_id,
-            old.file_id,
-            kind,
-            Some(from),
-            revision,
-        )
-        .await
+        let renamed = self
+            .put(
+                transaction,
+                connection,
+                connection_id,
+                old.file_id,
+                kind,
+                Some(from),
+                revision,
+            )
+            .await?;
+        if key != path_key(from) {
+            self.free_key(transaction, connection, connection_id, &path_key(from))
+                .await?;
+        }
+        Ok(renamed)
     }
 }
 

@@ -25,7 +25,7 @@ use sqlx::postgres::{PgPool, PgPoolOptions};
 pub use crate::connections::{
     ConnectOperation, ConnectionRecord, CreateOutcome, NewConnection, NewSecret, OutboxEvent,
 };
-pub use crate::files::{FileRow, FileTransaction, LockedConnection, NewRevision};
+pub use crate::files::{FileRow, FileTransaction, LockedConnection, NewCollision, NewRevision};
 pub use crate::outbox::PendingEvent;
 pub use crate::reads::{ConnectionStatus, FileSummary};
 

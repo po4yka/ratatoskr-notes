@@ -60,6 +60,22 @@ pub struct NewRevision<'a> {
     pub note_index: Option<&'a serde_json::Value>,
 }
 
+/// A path that collides with the present file that holds its path key, with the facts of its
+/// bytes.
+#[derive(Debug, Clone, Copy)]
+pub struct NewCollision<'a> {
+    /// The NFC path that gets no revision.
+    pub path: &'a str,
+    /// The path key of `path`.
+    pub path_key: &'a str,
+    /// The lowercase hex SHA-256 of its bytes.
+    pub revision: &'a str,
+    /// The media type of its bytes.
+    pub media_type: &'a str,
+    /// The number of its bytes.
+    pub length_bytes: u64,
+}
+
 /// The changes of the files of one connection, under the lock of its row.
 #[derive(Debug)]
 pub struct FileTransaction {
@@ -222,28 +238,60 @@ impl FileTransaction {
         Ok(())
     }
 
-    /// Record that `path` collides with the present file that holds `path_key`.
+    /// Record that `collision.path` collides with the present file that holds its path key. A
+    /// second record of the path keeps the first one with the facts of the newer bytes.
     ///
     /// # Errors
     ///
     /// [`PersistenceError::Query`] when the statement fails.
     pub async fn record_collision(
         &mut self,
-        path: &str,
-        path_key: &str,
+        collision: &NewCollision<'_>,
     ) -> Result<(), PersistenceError> {
         sqlx::query(
-            "insert into notes.path_collisions (connection_id, path, path_key, observed_at)
-             values ($1, $2, $3, now())
-             on conflict (connection_id, path) do nothing",
+            "insert into notes.path_collisions
+                 (connection_id, path, path_key, revision, media_type, length_bytes, observed_at)
+             values ($1, $2, $3, $4, $5, $6, now())
+             on conflict (connection_id, path) do update
+                 set revision = excluded.revision, media_type = excluded.media_type,
+                     length_bytes = excluded.length_bytes",
         )
         .bind(self.connection_id)
-        .bind(path)
-        .bind(path_key)
+        .bind(collision.path)
+        .bind(collision.path_key)
+        .bind(collision.revision)
+        .bind(collision.media_type)
+        .bind(i64::try_from(collision.length_bytes).unwrap_or(i64::MAX))
         .execute(&mut *self.transaction)
         .await
         .map_err(query_error)?;
         Ok(())
+    }
+
+    /// The collision that waits longest for the path key `path_key`: its path, its revision and
+    /// its length.
+    ///
+    /// # Errors
+    ///
+    /// [`PersistenceError::Query`] when the statement fails.
+    pub async fn oldest_collision(
+        &mut self,
+        path_key: &str,
+    ) -> Result<Option<(String, String, u64)>, PersistenceError> {
+        let row: Option<(String, String, i64)> = sqlx::query_as(
+            "select path, revision, length_bytes from notes.path_collisions
+             where connection_id = $1 and path_key = $2
+             order by observed_at, path limit 1",
+        )
+        .bind(self.connection_id)
+        .bind(path_key)
+        .fetch_optional(&mut *self.transaction)
+        .await
+        .map_err(query_error)?;
+        // A CHECK keeps the length at 0 or more.
+        Ok(row.map(|(path, revision, length)| {
+            (path, revision, u64::try_from(length).unwrap_or_default())
+        }))
     }
 
     /// The paths of the collisions of this connection.

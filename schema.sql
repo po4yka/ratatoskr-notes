@@ -193,9 +193,17 @@ create table notes.path_collisions (
     -- The NFC path that got no revision.
     path          text        not null,
     path_key      text        not null,
+    -- The facts of the bytes of that path, so that the path gets its revision when the file that
+    -- holds its key leaves, as after a rename that changes only the case.
+    revision      text        not null,
+    media_type    text        not null,
+    length_bytes  bigint      not null,
     observed_at   timestamptz not null,
 
-    primary key (connection_id, path)
+    primary key (connection_id, path),
+
+    constraint path_collisions_revision_is_sha256 check (revision ~ '^[0-9a-f]{64}$'),
+    constraint path_collisions_length_is_not_negative check (length_bytes >= 0)
 );
 
 comment on table notes.path_collisions is
