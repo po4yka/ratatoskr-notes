@@ -180,7 +180,16 @@ struct Known {
 #[derive(Debug, Clone, Default)]
 pub struct PathTable {
     files: HashMap<String, Known>,
-    collisions: BTreeMap<String, PathCollision>,
+    collisions: BTreeMap<String, Waiting>,
+    observed: u64,
+}
+
+/// A collision with the revision of its path, in the order of observation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Waiting {
+    collision: PathCollision,
+    revision: String,
+    order: u64,
 }
 
 impl PathTable {
@@ -214,7 +223,13 @@ impl PathTable {
                     path: path.clone(),
                     existing_path,
                 };
-                self.collisions.insert(path, collision.clone());
+                self.observed += 1;
+                let waiting = Waiting {
+                    collision: collision.clone(),
+                    revision: revision.to_owned(),
+                    order: self.observed,
+                };
+                self.collisions.insert(path, waiting);
                 Observation::Collision(collision)
             }
             admission => {
@@ -235,18 +250,32 @@ impl PathTable {
     }
 
     /// Observe that `raw_path` left the vault. Returns the id of the file when a published file
-    /// was deleted. A path that was a collision is no longer one.
+    /// was deleted. A path that was a collision is no longer one. The collision that waits longest
+    /// for the freed path key is published under that file id, as after a rename that changes
+    /// only the case of a name.
     pub fn remove(&mut self, raw_path: &str) -> Option<Uuid> {
         let path = nfc_path(raw_path);
         if self.collisions.remove(&path).is_some() {
             return None;
         }
-        let known = self.files.get_mut(&path_key(&path))?;
+        let key = path_key(&path);
+        let known = self.files.get_mut(&key)?;
         if known.path != path || known.revision.is_none() {
             return None;
         }
         known.revision = None;
-        Some(known.file_id)
+        let file_id = known.file_id;
+        let next = self
+            .collisions
+            .iter()
+            .filter(|(waiting, _)| path_key(waiting) == key)
+            .min_by_key(|(_, waiting)| waiting.order)
+            .map(|(waiting, _)| waiting.clone());
+        if let Some(waiting) = next.and_then(|waiting| self.collisions.remove(&waiting)) {
+            known.path = waiting.collision.path;
+            known.revision = Some(waiting.revision);
+        }
+        Some(file_id)
     }
 
     /// The conditions of the connection: one [`PATH_COLLISION`] with both paths per collision.
@@ -254,7 +283,7 @@ impl PathTable {
     pub fn conditions(&self) -> Vec<(&'static str, Vec<String>)> {
         self.collisions
             .values()
-            .map(|collision| {
+            .map(|Waiting { collision, .. }| {
                 (
                     PATH_COLLISION,
                     vec![collision.existing_path.clone(), collision.path.clone()],
