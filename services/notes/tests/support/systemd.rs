@@ -241,6 +241,11 @@ impl FakeSystemd {
         self.directory.path().join("credentials")
     }
 
+    /// The test's stand-in for `/mnt/nvme/ratatoskr/notes/trees`, the root of the working trees.
+    pub(crate) fn trees_root(&self) -> PathBuf {
+        self.directory.path().join("trees")
+    }
+
     /// The test's stand-in for `/mnt/nvme/ratatoskr/notes/trees/<id>`, the working tree.
     pub(crate) fn tree_dir(&self, connection_id: Uuid) -> PathBuf {
         self.directory

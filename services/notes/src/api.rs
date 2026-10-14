@@ -83,6 +83,7 @@ pub struct ApiState<B> {
     removals: Removals,
     before_login: Option<BeforeLogin>,
     blobs: BlobStore,
+    trees_root: PathBuf,
 }
 
 impl<B> Clone for ApiState<B> {
@@ -99,6 +100,7 @@ impl<B> Clone for ApiState<B> {
             removals: self.removals.clone(),
             before_login: self.before_login.clone(),
             blobs: self.blobs.clone(),
+            trees_root: self.trees_root.clone(),
         }
     }
 }
@@ -120,7 +122,16 @@ impl<B: SystemdBus> ApiState<B> {
             removals: Removals::default(),
             before_login: None,
             blobs: BlobStore::new(crate::blobs::DEFAULT_ROOT),
+            trees_root: PathBuf::from(crate::systemd::TREES_ROOT),
         }
+    }
+
+    /// Watch the working trees under `root` instead of [`crate::systemd::TREES_ROOT`]. For tests:
+    /// the sync units on the host write under [`crate::systemd::TREES_ROOT`].
+    #[must_use]
+    pub fn with_trees_root(mut self, root: impl Into<PathBuf>) -> Self {
+        self.trees_root = root.into();
+        self
     }
 
     /// Read the bytes of the files from `blobs` instead of the store at

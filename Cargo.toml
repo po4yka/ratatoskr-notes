@@ -26,6 +26,8 @@ ratatoskr-error-contracts = { git = "https://github.com/po4yka/ratatoskr-contrac
 ratatoskr-event-envelope  = { git = "https://github.com/po4yka/ratatoskr-contracts.git", rev = "a9289e27bcf53f496b5917889580965d97ff2358" }
 ratatoskr-identifiers     = { git = "https://github.com/po4yka/ratatoskr-contracts.git", rev = "a9289e27bcf53f496b5917889580965d97ff2358" }
 ratatoskr-notes-contracts = { git = "https://github.com/po4yka/ratatoskr-contracts.git", rev = "a9289e27bcf53f496b5917889580965d97ff2358" }
+# The report of the connect operation, `platform.operation.reported.v1` (workspace design D10).
+ratatoskr-operation-contracts = { git = "https://github.com/po4yka/ratatoskr-contracts.git", rev = "a9289e27bcf53f496b5917889580965d97ff2358" }
 
 # ---- persistence ----
 # No `migrate` feature: the schema is one file, `include_str!`d into the binary by

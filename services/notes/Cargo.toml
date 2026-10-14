@@ -19,6 +19,7 @@ ratatoskr-event-envelope.workspace    = true
 ratatoskr-identifiers.workspace       = true
 ratatoskr-notes-contracts.workspace   = true
 ratatoskr-notes-persistence.workspace = true
+ratatoskr-operation-contracts.workspace = true
 axum.workspace                        = true
 chacha20poly1305.workspace            = true
 figment.workspace                     = true
