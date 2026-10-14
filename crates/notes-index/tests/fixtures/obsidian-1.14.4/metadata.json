@@ -1,0 +1,5759 @@
+{
+  "generatedAt": "2026-10-13T10:52:27.859Z",
+  "apiVersion": "1.14.4",
+  "fileCount": 48,
+  "markdownCount": 45,
+  "folders": [
+    "/",
+    "Archive",
+    "Archive/2024",
+    "Daily",
+    "Docs",
+    "Events",
+    "Events/ExtFolder",
+    "Events/Folder3",
+    "Events/Sub",
+    "Ideas",
+    "Notes",
+    "Projects",
+    "RenameSources",
+    "RenameTargets",
+    "Work",
+    "Work/Sub",
+    "attachments",
+    "images"
+  ],
+  "resolvedLinks": {
+    "Alpha.md": {
+      "Projects/Alpha.md": 1,
+      "Archive/2024/Alpha.md": 1
+    },
+    "Beta.md": {
+      "Alpha.md": 1
+    },
+    "Callouts.md": {
+      "Alpha.md": 1,
+      "Beta.md": 1,
+      "Gamma.md": 1,
+      "photo.png": 1
+    },
+    "Code.md": {
+      "Beta.md": 1
+    },
+    "Epsilon.md": {},
+    "FmTags String.md": {},
+    "Café.md": {
+      "Home.md": 1
+    },
+    "Gamma.md": {
+      "Beta.md": 1
+    },
+    "Home.md": {
+      "Alpha.md": 1,
+      "Projects/Alpha.md": 1,
+      "Archive/2024/Alpha.md": 2,
+      "Beta.md": 8,
+      "Gamma.md": 1,
+      "Café.md": 2,
+      "Notes/Résumé.md": 1,
+      "Note with spaces.md": 1,
+      "photo.png": 2,
+      "Work/Sub/Delta.md": 1,
+      "images/diagram.png": 1,
+      "attachments/spec.pdf": 1
+    },
+    "Note with spaces.md": {},
+    "Frontmatter.md": {
+      "Gamma.md": 1,
+      "Beta.md": 1,
+      "Projects/Alpha.md": 1,
+      "Alpha.md": 1
+    },
+    "Root Ref.md": {
+      "Ideas/Delta.md": 2,
+      "Alpha.md": 1,
+      "Archive/2024/Alpha.md": 1,
+      "Projects/Alpha.md": 1,
+      "Work/Sub/Delta.md": 1
+    },
+    "Self Links.md": {
+      "Self Links.md": 3
+    },
+    "Tags.md": {},
+    "Daily/2024-01-01.md": {
+      "Home.md": 1
+    },
+    "Ideas/Delta.md": {},
+    "Ideas/Ref Ideas.md": {
+      "Ideas/Delta.md": 1,
+      "Alpha.md": 1
+    },
+    "Projects/Alpha.md": {
+      "Alpha.md": 1,
+      "Beta.md": 1
+    },
+    "Docs/Markdown Links.md": {
+      "Beta.md": 4,
+      "Note with spaces.md": 2,
+      "Docs/Sibling.md": 1,
+      "Projects/Alpha.md": 1,
+      "images/diagram.png": 1
+    },
+    "Docs/Sibling.md": {
+      "Docs/Markdown Links.md": 1
+    },
+    "RenameSources/Uses Aliased.md": {
+      "RenameTargets/Aliased.md": 3
+    },
+    "RenameSources/Uses Collide.md": {
+      "RenameTargets/Collide.md": 2
+    },
+    "RenameSources/Uses Embedded.md": {
+      "RenameTargets/Embedded.md": 4
+    },
+    "RenameSources/Uses Headed.md": {
+      "RenameTargets/Headed.md": 4
+    },
+    "RenameSources/Uses Shortest.md": {
+      "RenameTargets/Shortest.md": 2
+    },
+    "Events/Linker.md": {
+      "Events/Folder3/One.md": 1,
+      "Events/Folder3/Two.md": 1,
+      "Events/Folder3/Three.md": 1
+    },
+    "Events/external.md": {},
+    "Events/to-delete.md": {},
+    "Events/to-trash.md": {},
+    "Notes/Naïve.md": {},
+    "Notes/Résumé.md": {
+      "Notes/Naïve.md": 2
+    },
+    "RenameTargets/Aliased.md": {},
+    "RenameTargets/Collide.md": {},
+    "RenameTargets/Embedded.md": {},
+    "RenameTargets/Headed.md": {},
+    "RenameTargets/Shortest.md": {},
+    "Archive/2024/Alpha.md": {
+      "Alpha.md": 1
+    },
+    "Events/ExtFolder/x.md": {},
+    "Events/ExtFolder/y.md": {
+      "Events/ExtFolder/x.md": 1
+    },
+    "Events/Folder3/One.md": {
+      "Events/Folder3/Two.md": 1
+    },
+    "Events/Folder3/Three.md": {},
+    "Events/Folder3/Two.md": {
+      "Events/Folder3/Three.md": 1
+    },
+    "Events/Sub/keep.md": {},
+    "Work/Sub/Delta.md": {},
+    "Work/Sub/Ref Work.md": {
+      "Work/Sub/Delta.md": 1,
+      "Alpha.md": 1
+    }
+  },
+  "unresolvedLinks": {
+    "Alpha.md": {},
+    "Beta.md": {},
+    "Callouts.md": {},
+    "Code.md": {},
+    "Epsilon.md": {},
+    "FmTags String.md": {},
+    "Café.md": {},
+    "Gamma.md": {},
+    "Home.md": {
+      "G": 1,
+      "Gamma Ray": 1,
+      "Missing Note": 2,
+      "Commented Link": 1,
+      "Commented Multi": 1,
+      "Missing Image.png": 1
+    },
+    "Note with spaces.md": {},
+    "Frontmatter.md": {
+      "Missing FM": 1
+    },
+    "Root Ref.md": {},
+    "Self Links.md": {},
+    "Tags.md": {},
+    "Daily/2024-01-01.md": {},
+    "Ideas/Delta.md": {},
+    "Ideas/Ref Ideas.md": {},
+    "Projects/Alpha.md": {},
+    "Docs/Markdown Links.md": {},
+    "Docs/Sibling.md": {},
+    "RenameSources/Uses Aliased.md": {},
+    "RenameSources/Uses Collide.md": {},
+    "RenameSources/Uses Embedded.md": {},
+    "RenameSources/Uses Headed.md": {},
+    "RenameSources/Uses Shortest.md": {},
+    "Events/Linker.md": {},
+    "Events/external.md": {},
+    "Events/to-delete.md": {},
+    "Events/to-trash.md": {},
+    "Notes/Naïve.md": {},
+    "Notes/Résumé.md": {},
+    "RenameTargets/Aliased.md": {},
+    "RenameTargets/Collide.md": {},
+    "RenameTargets/Embedded.md": {},
+    "RenameTargets/Headed.md": {},
+    "RenameTargets/Shortest.md": {},
+    "Archive/2024/Alpha.md": {},
+    "Events/ExtFolder/x.md": {},
+    "Events/ExtFolder/y.md": {},
+    "Events/Folder3/One.md": {},
+    "Events/Folder3/Three.md": {},
+    "Events/Folder3/Two.md": {},
+    "Events/Sub/keep.md": {},
+    "Work/Sub/Delta.md": {},
+    "Work/Sub/Ref Work.md": {}
+  },
+  "backlinks": {
+    "Projects/Alpha.md": {
+      "Alpha.md": 1,
+      "Home.md": 1,
+      "Frontmatter.md": 1,
+      "Root Ref.md": 1,
+      "Docs/Markdown Links.md": 1
+    },
+    "Archive/2024/Alpha.md": {
+      "Alpha.md": 1,
+      "Home.md": 2,
+      "Root Ref.md": 1
+    },
+    "Alpha.md": {
+      "Beta.md": 1,
+      "Callouts.md": 1,
+      "Home.md": 1,
+      "Frontmatter.md": 1,
+      "Root Ref.md": 1,
+      "Ideas/Ref Ideas.md": 1,
+      "Projects/Alpha.md": 1,
+      "Archive/2024/Alpha.md": 1,
+      "Work/Sub/Ref Work.md": 1
+    },
+    "Beta.md": {
+      "Callouts.md": 1,
+      "Code.md": 1,
+      "Gamma.md": 1,
+      "Home.md": 8,
+      "Frontmatter.md": 1,
+      "Projects/Alpha.md": 1,
+      "Docs/Markdown Links.md": 4
+    },
+    "Gamma.md": {
+      "Callouts.md": 1,
+      "Home.md": 1,
+      "Frontmatter.md": 1
+    },
+    "photo.png": {
+      "Callouts.md": 1,
+      "Home.md": 2
+    },
+    "Home.md": {
+      "Café.md": 1,
+      "Daily/2024-01-01.md": 1
+    },
+    "Café.md": {
+      "Home.md": 2
+    },
+    "Notes/Résumé.md": {
+      "Home.md": 1
+    },
+    "Note with spaces.md": {
+      "Home.md": 1,
+      "Docs/Markdown Links.md": 2
+    },
+    "Work/Sub/Delta.md": {
+      "Home.md": 1,
+      "Root Ref.md": 1,
+      "Work/Sub/Ref Work.md": 1
+    },
+    "images/diagram.png": {
+      "Home.md": 1,
+      "Docs/Markdown Links.md": 1
+    },
+    "attachments/spec.pdf": {
+      "Home.md": 1
+    },
+    "Ideas/Delta.md": {
+      "Root Ref.md": 2,
+      "Ideas/Ref Ideas.md": 1
+    },
+    "Self Links.md": {
+      "Self Links.md": 3
+    },
+    "Docs/Sibling.md": {
+      "Docs/Markdown Links.md": 1
+    },
+    "Docs/Markdown Links.md": {
+      "Docs/Sibling.md": 1
+    },
+    "RenameTargets/Aliased.md": {
+      "RenameSources/Uses Aliased.md": 3
+    },
+    "RenameTargets/Collide.md": {
+      "RenameSources/Uses Collide.md": 2
+    },
+    "RenameTargets/Embedded.md": {
+      "RenameSources/Uses Embedded.md": 4
+    },
+    "RenameTargets/Headed.md": {
+      "RenameSources/Uses Headed.md": 4
+    },
+    "RenameTargets/Shortest.md": {
+      "RenameSources/Uses Shortest.md": 2
+    },
+    "Events/Folder3/One.md": {
+      "Events/Linker.md": 1
+    },
+    "Events/Folder3/Two.md": {
+      "Events/Linker.md": 1,
+      "Events/Folder3/One.md": 1
+    },
+    "Events/Folder3/Three.md": {
+      "Events/Linker.md": 1,
+      "Events/Folder3/Two.md": 1
+    },
+    "Notes/Naïve.md": {
+      "Notes/Résumé.md": 2
+    },
+    "Events/ExtFolder/x.md": {
+      "Events/ExtFolder/y.md": 1
+    }
+  },
+  "files": {
+    "Alpha.md": {
+      "path": "Alpha.md",
+      "pathEscaped": "Alpha.md",
+      "pathIsNFC": true,
+      "name": "Alpha.md",
+      "basename": "Alpha",
+      "extension": "md",
+      "size": 89,
+      "cache": {
+        "links": [
+          {
+            "position": {
+              "start": {
+                "line": 2,
+                "col": 9,
+                "offset": 25
+              },
+              "end": {
+                "line": 2,
+                "col": 27,
+                "offset": 43
+              }
+            },
+            "link": "Projects/Alpha",
+            "original": "[[Projects/Alpha]]",
+            "displayText": "Projects/Alpha"
+          },
+          {
+            "position": {
+              "start": {
+                "line": 2,
+                "col": 32,
+                "offset": 48
+              },
+              "end": {
+                "line": 2,
+                "col": 71,
+                "offset": 87
+              }
+            },
+            "link": "Archive/2024/Alpha",
+            "original": "[[Archive/2024/Alpha|the archived one]]",
+            "displayText": "the archived one"
+          }
+        ],
+        "headings": [
+          {
+            "position": {
+              "start": {
+                "line": 0,
+                "col": 0,
+                "offset": 0
+              },
+              "end": {
+                "line": 0,
+                "col": 14,
+                "offset": 14
+              }
+            },
+            "heading": "Alpha (root)",
+            "level": 1
+          }
+        ],
+        "sections": [
+          "heading",
+          "paragraph"
+        ]
+      },
+      "getAllTags": [],
+      "firstLinkpathDest": [
+        {
+          "kind": "link",
+          "original": "[[Projects/Alpha]]",
+          "link": "Projects/Alpha",
+          "linkEscaped": "Projects/Alpha",
+          "displayText": "Projects/Alpha",
+          "linkpath": "Projects/Alpha",
+          "subpath": "",
+          "dest": "Projects/Alpha.md",
+          "destEscaped": "Projects/Alpha.md"
+        },
+        {
+          "kind": "link",
+          "original": "[[Archive/2024/Alpha|the archived one]]",
+          "link": "Archive/2024/Alpha",
+          "linkEscaped": "Archive/2024/Alpha",
+          "displayText": "the archived one",
+          "linkpath": "Archive/2024/Alpha",
+          "subpath": "",
+          "dest": "Archive/2024/Alpha.md",
+          "destEscaped": "Archive/2024/Alpha.md"
+        }
+      ],
+      "resolvedLinks": {
+        "Projects/Alpha.md": 1,
+        "Archive/2024/Alpha.md": 1
+      },
+      "unresolvedLinks": {},
+      "backlinks": {
+        "Beta.md": 1,
+        "Callouts.md": 1,
+        "Home.md": 1,
+        "Frontmatter.md": 1,
+        "Root Ref.md": 1,
+        "Ideas/Ref Ideas.md": 1,
+        "Projects/Alpha.md": 1,
+        "Archive/2024/Alpha.md": 1,
+        "Work/Sub/Ref Work.md": 1
+      },
+      "getBacklinksForFile": {
+        "Beta.md": 1,
+        "Callouts.md": 1,
+        "Home.md": 1,
+        "Frontmatter.md": 1,
+        "Root Ref.md": 1,
+        "Ideas/Ref Ideas.md": 1,
+        "Projects/Alpha.md": 1,
+        "Archive/2024/Alpha.md": 1,
+        "Work/Sub/Ref Work.md": 1
+      }
+    },
+    "Archive/2024/Alpha.md": {
+      "path": "Archive/2024/Alpha.md",
+      "pathEscaped": "Archive/2024/Alpha.md",
+      "pathIsNFC": true,
+      "name": "Alpha.md",
+      "basename": "Alpha",
+      "extension": "md",
+      "size": 65,
+      "cache": {
+        "links": [
+          {
+            "position": {
+              "start": {
+                "line": 2,
+                "col": 5,
+                "offset": 29
+              },
+              "end": {
+                "line": 2,
+                "col": 14,
+                "offset": 38
+              }
+            },
+            "link": "Alpha",
+            "original": "[[Alpha]]",
+            "displayText": "Alpha"
+          }
+        ],
+        "headings": [
+          {
+            "position": {
+              "start": {
+                "line": 0,
+                "col": 0,
+                "offset": 0
+              },
+              "end": {
+                "line": 0,
+                "col": 22,
+                "offset": 22
+              }
+            },
+            "heading": "Alpha (Archive 2024)",
+            "level": 1
+          }
+        ],
+        "sections": [
+          "heading",
+          "paragraph"
+        ]
+      },
+      "getAllTags": [],
+      "firstLinkpathDest": [
+        {
+          "kind": "link",
+          "original": "[[Alpha]]",
+          "link": "Alpha",
+          "linkEscaped": "Alpha",
+          "displayText": "Alpha",
+          "linkpath": "Alpha",
+          "subpath": "",
+          "dest": "Alpha.md",
+          "destEscaped": "Alpha.md"
+        }
+      ],
+      "resolvedLinks": {
+        "Alpha.md": 1
+      },
+      "unresolvedLinks": {},
+      "backlinks": {
+        "Alpha.md": 1,
+        "Home.md": 2,
+        "Root Ref.md": 1
+      },
+      "getBacklinksForFile": {
+        "Alpha.md": 1,
+        "Home.md": 2,
+        "Root Ref.md": 1
+      }
+    },
+    "Beta.md": {
+      "path": "Beta.md",
+      "pathEscaped": "Beta.md",
+      "pathIsNFC": true,
+      "name": "Beta.md",
+      "basename": "Beta",
+      "extension": "md",
+      "size": 323,
+      "cache": {
+        "links": [
+          {
+            "position": {
+              "start": {
+                "line": 28,
+                "col": 16,
+                "offset": 269
+              },
+              "end": {
+                "line": 28,
+                "col": 25,
+                "offset": 278
+              }
+            },
+            "link": "Alpha",
+            "original": "[[Alpha]]",
+            "displayText": "Alpha"
+          }
+        ],
+        "headings": [
+          {
+            "position": {
+              "start": {
+                "line": 3,
+                "col": 0,
+                "offset": 23
+              },
+              "end": {
+                "line": 3,
+                "col": 6,
+                "offset": 29
+              }
+            },
+            "heading": "Beta",
+            "level": 1
+          },
+          {
+            "position": {
+              "start": {
+                "line": 7,
+                "col": 0,
+                "offset": 56
+              },
+              "end": {
+                "line": 7,
+                "col": 14,
+                "offset": 70
+              }
+            },
+            "heading": "Section One",
+            "level": 2
+          },
+          {
+            "position": {
+              "start": {
+                "line": 9,
+                "col": 0,
+                "offset": 72
+              },
+              "end": {
+                "line": 9,
+                "col": 14,
+                "offset": 86
+              }
+            },
+            "heading": "Subsection",
+            "level": 3
+          },
+          {
+            "position": {
+              "start": {
+                "line": 13,
+                "col": 0,
+                "offset": 124
+              },
+              "end": {
+                "line": 13,
+                "col": 14,
+                "offset": 138
+              }
+            },
+            "heading": "Section Two",
+            "level": 2
+          },
+          {
+            "position": {
+              "start": {
+                "line": 28,
+                "col": 0,
+                "offset": 253
+              },
+              "end": {
+                "line": 28,
+                "col": 41,
+                "offset": 294
+              }
+            },
+            "heading": "Section with [[Alpha]] link in heading",
+            "level": 2
+          },
+          {
+            "position": {
+              "start": {
+                "line": 30,
+                "col": 0,
+                "offset": 296
+              },
+              "end": {
+                "line": 30,
+                "col": 12,
+                "offset": 308
+              }
+            },
+            "heading": "Duplicate",
+            "level": 2
+          },
+          {
+            "position": {
+              "start": {
+                "line": 32,
+                "col": 0,
+                "offset": 310
+              },
+              "end": {
+                "line": 32,
+                "col": 12,
+                "offset": 322
+              }
+            },
+            "heading": "Duplicate",
+            "level": 2
+          }
+        ],
+        "blocks": {
+          "intro": {
+            "position": {
+              "start": {
+                "line": 5,
+                "col": 0,
+                "offset": 31
+              },
+              "end": {
+                "line": 5,
+                "col": 23,
+                "offset": 54
+              }
+            },
+            "id": "intro"
+          },
+          "block1": {
+            "position": {
+              "start": {
+                "line": 11,
+                "col": 0,
+                "offset": 88
+              },
+              "end": {
+                "line": 11,
+                "col": 34,
+                "offset": 122
+              }
+            },
+            "id": "block1"
+          },
+          "quoteblock": {
+            "position": {
+              "start": {
+                "line": 18,
+                "col": 0,
+                "offset": 181
+              },
+              "end": {
+                "line": 18,
+                "col": 13,
+                "offset": 194
+              }
+            },
+            "id": "quoteblock"
+          },
+          "tableblock": {
+            "position": {
+              "start": {
+                "line": 22,
+                "col": 0,
+                "offset": 209
+              },
+              "end": {
+                "line": 24,
+                "col": 9,
+                "offset": 238
+              }
+            },
+            "id": "tableblock"
+          },
+          "block2": {
+            "position": {
+              "start": {
+                "line": 15,
+                "col": 0,
+                "offset": 140
+              },
+              "end": {
+                "line": 15,
+                "col": 23,
+                "offset": 163
+              }
+            },
+            "id": "block2"
+          }
+        },
+        "frontmatter": {
+          "tags": "beta-tag"
+        },
+        "frontmatterLinks": [],
+        "frontmatterPosition": {
+          "start": {
+            "line": 0,
+            "col": 0,
+            "offset": 0
+          },
+          "end": {
+            "line": 2,
+            "col": 3,
+            "offset": 22
+          }
+        },
+        "sections": [
+          "yaml",
+          "heading",
+          "paragraph",
+          "heading",
+          "heading",
+          "paragraph",
+          "heading",
+          "list",
+          "blockquote",
+          "table",
+          "heading",
+          "heading",
+          "heading"
+        ],
+        "listItems": 2
+      },
+      "getAllTags": [
+        "#beta-tag"
+      ],
+      "firstLinkpathDest": [
+        {
+          "kind": "link",
+          "original": "[[Alpha]]",
+          "link": "Alpha",
+          "linkEscaped": "Alpha",
+          "displayText": "Alpha",
+          "linkpath": "Alpha",
+          "subpath": "",
+          "dest": "Alpha.md",
+          "destEscaped": "Alpha.md"
+        }
+      ],
+      "resolvedLinks": {
+        "Alpha.md": 1
+      },
+      "unresolvedLinks": {},
+      "backlinks": {
+        "Callouts.md": 1,
+        "Code.md": 1,
+        "Gamma.md": 1,
+        "Home.md": 8,
+        "Frontmatter.md": 1,
+        "Projects/Alpha.md": 1,
+        "Docs/Markdown Links.md": 4
+      },
+      "getBacklinksForFile": {
+        "Callouts.md": 1,
+        "Code.md": 1,
+        "Gamma.md": 1,
+        "Home.md": 8,
+        "Frontmatter.md": 1,
+        "Projects/Alpha.md": 1,
+        "Docs/Markdown Links.md": 4
+      }
+    },
+    "Café.md": {
+      "path": "Café.md",
+      "pathEscaped": "Caf\\u00e9.md",
+      "pathIsNFC": true,
+      "name": "Café.md",
+      "basename": "Café",
+      "extension": "md",
+      "size": 91,
+      "cache": {
+        "links": [
+          {
+            "position": {
+              "start": {
+                "line": 2,
+                "col": 30,
+                "offset": 38
+              },
+              "end": {
+                "line": 2,
+                "col": 38,
+                "offset": 46
+              }
+            },
+            "link": "Home",
+            "original": "[[Home]]",
+            "displayText": "Home"
+          }
+        ],
+        "headings": [
+          {
+            "position": {
+              "start": {
+                "line": 0,
+                "col": 0,
+                "offset": 0
+              },
+              "end": {
+                "line": 0,
+                "col": 6,
+                "offset": 6
+              }
+            },
+            "heading": "Café",
+            "level": 1
+          }
+        ],
+        "tags": [
+          {
+            "position": {
+              "start": {
+                "line": 2,
+                "col": 57,
+                "offset": 65
+              },
+              "end": {
+                "line": 2,
+                "col": 63,
+                "offset": 71
+              }
+            },
+            "tag": "#café"
+          },
+          {
+            "position": {
+              "start": {
+                "line": 2,
+                "col": 73,
+                "offset": 81
+              },
+              "end": {
+                "line": 2,
+                "col": 78,
+                "offset": 86
+              }
+            },
+            "tag": "#café"
+          }
+        ],
+        "sections": [
+          "heading",
+          "paragraph"
+        ]
+      },
+      "getAllTags": [
+        "#café",
+        "#café"
+      ],
+      "firstLinkpathDest": [
+        {
+          "kind": "link",
+          "original": "[[Home]]",
+          "link": "Home",
+          "linkEscaped": "Home",
+          "displayText": "Home",
+          "linkpath": "Home",
+          "subpath": "",
+          "dest": "Home.md",
+          "destEscaped": "Home.md"
+        }
+      ],
+      "resolvedLinks": {
+        "Home.md": 1
+      },
+      "unresolvedLinks": {},
+      "backlinks": {
+        "Home.md": 2
+      },
+      "getBacklinksForFile": {
+        "Home.md": 2
+      }
+    },
+    "Callouts.md": {
+      "path": "Callouts.md",
+      "pathEscaped": "Callouts.md",
+      "pathIsNFC": true,
+      "name": "Callouts.md",
+      "basename": "Callouts",
+      "extension": "md",
+      "size": 140,
+      "cache": {
+        "links": [
+          {
+            "position": {
+              "start": {
+                "line": 2,
+                "col": 21,
+                "offset": 33
+              },
+              "end": {
+                "line": 2,
+                "col": 30,
+                "offset": 42
+              }
+            },
+            "link": "Alpha",
+            "original": "[[Alpha]]",
+            "displayText": "Alpha"
+          },
+          {
+            "position": {
+              "start": {
+                "line": 3,
+                "col": 12,
+                "offset": 55
+              },
+              "end": {
+                "line": 3,
+                "col": 32,
+                "offset": 75
+              }
+            },
+            "link": "Beta#Section One",
+            "original": "[[Beta#Section One]]",
+            "displayText": "Beta > Section One"
+          },
+          {
+            "position": {
+              "start": {
+                "line": 7,
+                "col": 2,
+                "offset": 130
+              },
+              "end": {
+                "line": 7,
+                "col": 11,
+                "offset": 139
+              }
+            },
+            "link": "Gamma",
+            "original": "[[Gamma]]",
+            "displayText": "Gamma"
+          }
+        ],
+        "embeds": [
+          {
+            "position": {
+              "start": {
+                "line": 4,
+                "col": 2,
+                "offset": 95
+              },
+              "end": {
+                "line": 4,
+                "col": 16,
+                "offset": 109
+              }
+            },
+            "link": "photo.png",
+            "original": "![[photo.png]]",
+            "displayText": "photo.png"
+          }
+        ],
+        "headings": [
+          {
+            "position": {
+              "start": {
+                "line": 0,
+                "col": 0,
+                "offset": 0
+              },
+              "end": {
+                "line": 0,
+                "col": 10,
+                "offset": 10
+              }
+            },
+            "heading": "Callouts",
+            "level": 1
+          }
+        ],
+        "tags": [
+          {
+            "position": {
+              "start": {
+                "line": 3,
+                "col": 37,
+                "offset": 80
+              },
+              "end": {
+                "line": 3,
+                "col": 49,
+                "offset": 92
+              }
+            },
+            "tag": "#callout-tag"
+          }
+        ],
+        "sections": [
+          "heading",
+          "callout",
+          "callout"
+        ]
+      },
+      "getAllTags": [
+        "#callout-tag"
+      ],
+      "firstLinkpathDest": [
+        {
+          "kind": "link",
+          "original": "[[Alpha]]",
+          "link": "Alpha",
+          "linkEscaped": "Alpha",
+          "displayText": "Alpha",
+          "linkpath": "Alpha",
+          "subpath": "",
+          "dest": "Alpha.md",
+          "destEscaped": "Alpha.md"
+        },
+        {
+          "kind": "link",
+          "original": "[[Beta#Section One]]",
+          "link": "Beta#Section One",
+          "linkEscaped": "Beta#Section One",
+          "displayText": "Beta > Section One",
+          "linkpath": "Beta",
+          "subpath": "#Section One",
+          "dest": "Beta.md",
+          "destEscaped": "Beta.md"
+        },
+        {
+          "kind": "link",
+          "original": "[[Gamma]]",
+          "link": "Gamma",
+          "linkEscaped": "Gamma",
+          "displayText": "Gamma",
+          "linkpath": "Gamma",
+          "subpath": "",
+          "dest": "Gamma.md",
+          "destEscaped": "Gamma.md"
+        },
+        {
+          "kind": "embed",
+          "original": "![[photo.png]]",
+          "link": "photo.png",
+          "linkEscaped": "photo.png",
+          "displayText": "photo.png",
+          "linkpath": "photo.png",
+          "subpath": "",
+          "dest": "photo.png",
+          "destEscaped": "photo.png"
+        }
+      ],
+      "resolvedLinks": {
+        "Alpha.md": 1,
+        "Beta.md": 1,
+        "Gamma.md": 1,
+        "photo.png": 1
+      },
+      "unresolvedLinks": {},
+      "backlinks": {},
+      "getBacklinksForFile": {}
+    },
+    "Code.md": {
+      "path": "Code.md",
+      "pathEscaped": "Code.md",
+      "pathIsNFC": true,
+      "name": "Code.md",
+      "basename": "Code",
+      "extension": "md",
+      "size": 230,
+      "cache": {
+        "links": [
+          {
+            "position": {
+              "start": {
+                "line": 16,
+                "col": 22,
+                "offset": 220
+              },
+              "end": {
+                "line": 16,
+                "col": 30,
+                "offset": 228
+              }
+            },
+            "link": "Beta",
+            "original": "[[Beta]]",
+            "displayText": "Beta"
+          }
+        ],
+        "headings": [
+          {
+            "position": {
+              "start": {
+                "line": 0,
+                "col": 0,
+                "offset": 0
+              },
+              "end": {
+                "line": 0,
+                "col": 6,
+                "offset": 6
+              }
+            },
+            "heading": "Code",
+            "level": 1
+          }
+        ],
+        "sections": [
+          "heading",
+          "code",
+          "paragraph",
+          "code",
+          "html",
+          "math",
+          "paragraph"
+        ]
+      },
+      "getAllTags": [],
+      "firstLinkpathDest": [
+        {
+          "kind": "link",
+          "original": "[[Beta]]",
+          "link": "Beta",
+          "linkEscaped": "Beta",
+          "displayText": "Beta",
+          "linkpath": "Beta",
+          "subpath": "",
+          "dest": "Beta.md",
+          "destEscaped": "Beta.md"
+        }
+      ],
+      "resolvedLinks": {
+        "Beta.md": 1
+      },
+      "unresolvedLinks": {},
+      "backlinks": {},
+      "getBacklinksForFile": {}
+    },
+    "Daily/2024-01-01.md": {
+      "path": "Daily/2024-01-01.md",
+      "pathEscaped": "Daily/2024-01-01.md",
+      "pathIsNFC": true,
+      "name": "2024-01-01.md",
+      "basename": "2024-01-01",
+      "extension": "md",
+      "size": 30,
+      "cache": {
+        "links": [
+          {
+            "position": {
+              "start": {
+                "line": 2,
+                "col": 0,
+                "offset": 14
+              },
+              "end": {
+                "line": 2,
+                "col": 8,
+                "offset": 22
+              }
+            },
+            "link": "Home",
+            "original": "[[Home]]",
+            "displayText": "Home"
+          }
+        ],
+        "headings": [
+          {
+            "position": {
+              "start": {
+                "line": 0,
+                "col": 0,
+                "offset": 0
+              },
+              "end": {
+                "line": 0,
+                "col": 12,
+                "offset": 12
+              }
+            },
+            "heading": "2024-01-01",
+            "level": 1
+          }
+        ],
+        "tags": [
+          {
+            "position": {
+              "start": {
+                "line": 2,
+                "col": 9,
+                "offset": 23
+              },
+              "end": {
+                "line": 2,
+                "col": 15,
+                "offset": 29
+              }
+            },
+            "tag": "#daily"
+          }
+        ],
+        "sections": [
+          "heading",
+          "paragraph"
+        ]
+      },
+      "getAllTags": [
+        "#daily"
+      ],
+      "firstLinkpathDest": [
+        {
+          "kind": "link",
+          "original": "[[Home]]",
+          "link": "Home",
+          "linkEscaped": "Home",
+          "displayText": "Home",
+          "linkpath": "Home",
+          "subpath": "",
+          "dest": "Home.md",
+          "destEscaped": "Home.md"
+        }
+      ],
+      "resolvedLinks": {
+        "Home.md": 1
+      },
+      "unresolvedLinks": {},
+      "backlinks": {},
+      "getBacklinksForFile": {}
+    },
+    "Docs/Markdown Links.md": {
+      "path": "Docs/Markdown Links.md",
+      "pathEscaped": "Docs/Markdown Links.md",
+      "pathIsNFC": true,
+      "name": "Markdown Links.md",
+      "basename": "Markdown Links",
+      "extension": "md",
+      "size": 316,
+      "cache": {
+        "links": [
+          {
+            "position": {
+              "start": {
+                "line": 2,
+                "col": 0,
+                "offset": 18
+              },
+              "end": {
+                "line": 2,
+                "col": 21,
+                "offset": 39
+              }
+            },
+            "link": "../Beta.md",
+            "original": "[md link](../Beta.md)",
+            "displayText": "md link"
+          },
+          {
+            "position": {
+              "start": {
+                "line": 3,
+                "col": 0,
+                "offset": 40
+              },
+              "end": {
+                "line": 3,
+                "col": 25,
+                "offset": 65
+              }
+            },
+            "link": "../Beta",
+            "original": "[md link no ext](../Beta)",
+            "displayText": "md link no ext"
+          },
+          {
+            "position": {
+              "start": {
+                "line": 4,
+                "col": 0,
+                "offset": 66
+              },
+              "end": {
+                "line": 4,
+                "col": 37,
+                "offset": 103
+              }
+            },
+            "link": "../Note with spaces.md",
+            "original": "[encoded](../Note%20with%20spaces.md)",
+            "displayText": "encoded"
+          },
+          {
+            "position": {
+              "start": {
+                "line": 5,
+                "col": 0,
+                "offset": 104
+              },
+              "end": {
+                "line": 5,
+                "col": 33,
+                "offset": 137
+              }
+            },
+            "link": "../Note with spaces.md",
+            "original": "[angle](<../Note with spaces.md>)",
+            "displayText": "angle"
+          },
+          {
+            "position": {
+              "start": {
+                "line": 6,
+                "col": 0,
+                "offset": 138
+              },
+              "end": {
+                "line": 6,
+                "col": 35,
+                "offset": 173
+              }
+            },
+            "link": "../Beta.md#Section One",
+            "original": "[heading](../Beta.md#Section%20One)",
+            "displayText": "heading"
+          },
+          {
+            "position": {
+              "start": {
+                "line": 7,
+                "col": 0,
+                "offset": 174
+              },
+              "end": {
+                "line": 7,
+                "col": 25,
+                "offset": 199
+              }
+            },
+            "link": "Sibling.md",
+            "original": "[same folder](Sibling.md)",
+            "displayText": "same folder"
+          },
+          {
+            "position": {
+              "start": {
+                "line": 8,
+                "col": 0,
+                "offset": 200
+              },
+              "end": {
+                "line": 8,
+                "col": 26,
+                "offset": 226
+              }
+            },
+            "link": "/Beta.md",
+            "original": "[vault absolute](/Beta.md)",
+            "displayText": "vault absolute"
+          },
+          {
+            "position": {
+              "start": {
+                "line": 11,
+                "col": 0,
+                "offset": 294
+              },
+              "end": {
+                "line": 11,
+                "col": 21,
+                "offset": 315
+              }
+            },
+            "link": "Projects/Alpha.md",
+            "original": "[[Projects/Alpha.md]]",
+            "displayText": "Projects/Alpha.md"
+          }
+        ],
+        "embeds": [
+          {
+            "position": {
+              "start": {
+                "line": 10,
+                "col": 0,
+                "offset": 259
+              },
+              "end": {
+                "line": 10,
+                "col": 34,
+                "offset": 293
+              }
+            },
+            "link": "../images/diagram.png",
+            "original": "![md image](../images/diagram.png)",
+            "displayText": "md image"
+          }
+        ],
+        "headings": [
+          {
+            "position": {
+              "start": {
+                "line": 0,
+                "col": 0,
+                "offset": 0
+              },
+              "end": {
+                "line": 0,
+                "col": 16,
+                "offset": 16
+              }
+            },
+            "heading": "Markdown links",
+            "level": 1
+          }
+        ],
+        "sections": [
+          "heading",
+          "paragraph"
+        ]
+      },
+      "getAllTags": [],
+      "firstLinkpathDest": [
+        {
+          "kind": "link",
+          "original": "[md link](../Beta.md)",
+          "link": "../Beta.md",
+          "linkEscaped": "../Beta.md",
+          "displayText": "md link",
+          "linkpath": "../Beta.md",
+          "subpath": "",
+          "dest": "Beta.md",
+          "destEscaped": "Beta.md"
+        },
+        {
+          "kind": "link",
+          "original": "[md link no ext](../Beta)",
+          "link": "../Beta",
+          "linkEscaped": "../Beta",
+          "displayText": "md link no ext",
+          "linkpath": "../Beta",
+          "subpath": "",
+          "dest": "Beta.md",
+          "destEscaped": "Beta.md"
+        },
+        {
+          "kind": "link",
+          "original": "[encoded](../Note%20with%20spaces.md)",
+          "link": "../Note with spaces.md",
+          "linkEscaped": "../Note with spaces.md",
+          "displayText": "encoded",
+          "linkpath": "../Note with spaces.md",
+          "subpath": "",
+          "dest": "Note with spaces.md",
+          "destEscaped": "Note with spaces.md"
+        },
+        {
+          "kind": "link",
+          "original": "[angle](<../Note with spaces.md>)",
+          "link": "../Note with spaces.md",
+          "linkEscaped": "../Note with spaces.md",
+          "displayText": "angle",
+          "linkpath": "../Note with spaces.md",
+          "subpath": "",
+          "dest": "Note with spaces.md",
+          "destEscaped": "Note with spaces.md"
+        },
+        {
+          "kind": "link",
+          "original": "[heading](../Beta.md#Section%20One)",
+          "link": "../Beta.md#Section One",
+          "linkEscaped": "../Beta.md#Section One",
+          "displayText": "heading",
+          "linkpath": "../Beta.md",
+          "subpath": "#Section One",
+          "dest": "Beta.md",
+          "destEscaped": "Beta.md"
+        },
+        {
+          "kind": "link",
+          "original": "[same folder](Sibling.md)",
+          "link": "Sibling.md",
+          "linkEscaped": "Sibling.md",
+          "displayText": "same folder",
+          "linkpath": "Sibling.md",
+          "subpath": "",
+          "dest": "Docs/Sibling.md",
+          "destEscaped": "Docs/Sibling.md"
+        },
+        {
+          "kind": "link",
+          "original": "[vault absolute](/Beta.md)",
+          "link": "/Beta.md",
+          "linkEscaped": "/Beta.md",
+          "displayText": "vault absolute",
+          "linkpath": "/Beta.md",
+          "subpath": "",
+          "dest": "Beta.md",
+          "destEscaped": "Beta.md"
+        },
+        {
+          "kind": "link",
+          "original": "[[Projects/Alpha.md]]",
+          "link": "Projects/Alpha.md",
+          "linkEscaped": "Projects/Alpha.md",
+          "displayText": "Projects/Alpha.md",
+          "linkpath": "Projects/Alpha.md",
+          "subpath": "",
+          "dest": "Projects/Alpha.md",
+          "destEscaped": "Projects/Alpha.md"
+        },
+        {
+          "kind": "embed",
+          "original": "![md image](../images/diagram.png)",
+          "link": "../images/diagram.png",
+          "linkEscaped": "../images/diagram.png",
+          "displayText": "md image",
+          "linkpath": "../images/diagram.png",
+          "subpath": "",
+          "dest": "images/diagram.png",
+          "destEscaped": "images/diagram.png"
+        }
+      ],
+      "resolvedLinks": {
+        "Beta.md": 4,
+        "Note with spaces.md": 2,
+        "Docs/Sibling.md": 1,
+        "Projects/Alpha.md": 1,
+        "images/diagram.png": 1
+      },
+      "unresolvedLinks": {},
+      "backlinks": {
+        "Docs/Sibling.md": 1
+      },
+      "getBacklinksForFile": {
+        "Docs/Sibling.md": 1
+      }
+    },
+    "Docs/Sibling.md": {
+      "path": "Docs/Sibling.md",
+      "pathEscaped": "Docs/Sibling.md",
+      "pathIsNFC": true,
+      "name": "Sibling.md",
+      "basename": "Sibling",
+      "extension": "md",
+      "size": 30,
+      "cache": {
+        "links": [
+          {
+            "position": {
+              "start": {
+                "line": 2,
+                "col": 0,
+                "offset": 11
+              },
+              "end": {
+                "line": 2,
+                "col": 18,
+                "offset": 29
+              }
+            },
+            "link": "Markdown Links",
+            "original": "[[Markdown Links]]",
+            "displayText": "Markdown Links"
+          }
+        ],
+        "headings": [
+          {
+            "position": {
+              "start": {
+                "line": 0,
+                "col": 0,
+                "offset": 0
+              },
+              "end": {
+                "line": 0,
+                "col": 9,
+                "offset": 9
+              }
+            },
+            "heading": "Sibling",
+            "level": 1
+          }
+        ],
+        "sections": [
+          "heading",
+          "paragraph"
+        ]
+      },
+      "getAllTags": [],
+      "firstLinkpathDest": [
+        {
+          "kind": "link",
+          "original": "[[Markdown Links]]",
+          "link": "Markdown Links",
+          "linkEscaped": "Markdown Links",
+          "displayText": "Markdown Links",
+          "linkpath": "Markdown Links",
+          "subpath": "",
+          "dest": "Docs/Markdown Links.md",
+          "destEscaped": "Docs/Markdown Links.md"
+        }
+      ],
+      "resolvedLinks": {
+        "Docs/Markdown Links.md": 1
+      },
+      "unresolvedLinks": {},
+      "backlinks": {
+        "Docs/Markdown Links.md": 1
+      },
+      "getBacklinksForFile": {
+        "Docs/Markdown Links.md": 1
+      }
+    },
+    "Epsilon.md": {
+      "path": "Epsilon.md",
+      "pathEscaped": "Epsilon.md",
+      "pathIsNFC": true,
+      "name": "Epsilon.md",
+      "basename": "Epsilon",
+      "extension": "md",
+      "size": 17,
+      "cache": {
+        "headings": [
+          {
+            "position": {
+              "start": {
+                "line": 0,
+                "col": 0,
+                "offset": 0
+              },
+              "end": {
+                "line": 0,
+                "col": 16,
+                "offset": 16
+              }
+            },
+            "heading": "Epsilon (root)",
+            "level": 1
+          }
+        ],
+        "sections": [
+          "heading"
+        ]
+      },
+      "getAllTags": [],
+      "firstLinkpathDest": [],
+      "resolvedLinks": {},
+      "unresolvedLinks": {},
+      "backlinks": {},
+      "getBacklinksForFile": {}
+    },
+    "Events/ExtFolder/x.md": {
+      "path": "Events/ExtFolder/x.md",
+      "pathEscaped": "Events/ExtFolder/x.md",
+      "pathIsNFC": true,
+      "name": "x.md",
+      "basename": "x",
+      "extension": "md",
+      "size": 2,
+      "cache": {
+        "sections": [
+          "paragraph"
+        ]
+      },
+      "getAllTags": [],
+      "firstLinkpathDest": [],
+      "resolvedLinks": {},
+      "unresolvedLinks": {},
+      "backlinks": {
+        "Events/ExtFolder/y.md": 1
+      },
+      "getBacklinksForFile": {
+        "Events/ExtFolder/y.md": 1
+      }
+    },
+    "Events/ExtFolder/y.md": {
+      "path": "Events/ExtFolder/y.md",
+      "pathEscaped": "Events/ExtFolder/y.md",
+      "pathIsNFC": true,
+      "name": "y.md",
+      "basename": "y",
+      "extension": "md",
+      "size": 6,
+      "cache": {
+        "links": [
+          {
+            "position": {
+              "start": {
+                "line": 0,
+                "col": 0,
+                "offset": 0
+              },
+              "end": {
+                "line": 0,
+                "col": 5,
+                "offset": 5
+              }
+            },
+            "link": "x",
+            "original": "[[x]]",
+            "displayText": "x"
+          }
+        ],
+        "sections": [
+          "paragraph"
+        ]
+      },
+      "getAllTags": [],
+      "firstLinkpathDest": [
+        {
+          "kind": "link",
+          "original": "[[x]]",
+          "link": "x",
+          "linkEscaped": "x",
+          "displayText": "x",
+          "linkpath": "x",
+          "subpath": "",
+          "dest": "Events/ExtFolder/x.md",
+          "destEscaped": "Events/ExtFolder/x.md"
+        }
+      ],
+      "resolvedLinks": {
+        "Events/ExtFolder/x.md": 1
+      },
+      "unresolvedLinks": {},
+      "backlinks": {},
+      "getBacklinksForFile": {}
+    },
+    "Events/Folder3/One.md": {
+      "path": "Events/Folder3/One.md",
+      "pathEscaped": "Events/Folder3/One.md",
+      "pathIsNFC": true,
+      "name": "One.md",
+      "basename": "One",
+      "extension": "md",
+      "size": 15,
+      "cache": {
+        "links": [
+          {
+            "position": {
+              "start": {
+                "line": 2,
+                "col": 0,
+                "offset": 7
+              },
+              "end": {
+                "line": 2,
+                "col": 7,
+                "offset": 14
+              }
+            },
+            "link": "Two",
+            "original": "[[Two]]",
+            "displayText": "Two"
+          }
+        ],
+        "headings": [
+          {
+            "position": {
+              "start": {
+                "line": 0,
+                "col": 0,
+                "offset": 0
+              },
+              "end": {
+                "line": 0,
+                "col": 5,
+                "offset": 5
+              }
+            },
+            "heading": "One",
+            "level": 1
+          }
+        ],
+        "sections": [
+          "heading",
+          "paragraph"
+        ]
+      },
+      "getAllTags": [],
+      "firstLinkpathDest": [
+        {
+          "kind": "link",
+          "original": "[[Two]]",
+          "link": "Two",
+          "linkEscaped": "Two",
+          "displayText": "Two",
+          "linkpath": "Two",
+          "subpath": "",
+          "dest": "Events/Folder3/Two.md",
+          "destEscaped": "Events/Folder3/Two.md"
+        }
+      ],
+      "resolvedLinks": {
+        "Events/Folder3/Two.md": 1
+      },
+      "unresolvedLinks": {},
+      "backlinks": {
+        "Events/Linker.md": 1
+      },
+      "getBacklinksForFile": {
+        "Events/Linker.md": 1
+      }
+    },
+    "Events/Folder3/Three.md": {
+      "path": "Events/Folder3/Three.md",
+      "pathEscaped": "Events/Folder3/Three.md",
+      "pathIsNFC": true,
+      "name": "Three.md",
+      "basename": "Three",
+      "extension": "md",
+      "size": 8,
+      "cache": {
+        "headings": [
+          {
+            "position": {
+              "start": {
+                "line": 0,
+                "col": 0,
+                "offset": 0
+              },
+              "end": {
+                "line": 0,
+                "col": 7,
+                "offset": 7
+              }
+            },
+            "heading": "Three",
+            "level": 1
+          }
+        ],
+        "sections": [
+          "heading"
+        ]
+      },
+      "getAllTags": [],
+      "firstLinkpathDest": [],
+      "resolvedLinks": {},
+      "unresolvedLinks": {},
+      "backlinks": {
+        "Events/Linker.md": 1,
+        "Events/Folder3/Two.md": 1
+      },
+      "getBacklinksForFile": {
+        "Events/Linker.md": 1,
+        "Events/Folder3/Two.md": 1
+      }
+    },
+    "Events/Folder3/Two.md": {
+      "path": "Events/Folder3/Two.md",
+      "pathEscaped": "Events/Folder3/Two.md",
+      "pathIsNFC": true,
+      "name": "Two.md",
+      "basename": "Two",
+      "extension": "md",
+      "size": 17,
+      "cache": {
+        "links": [
+          {
+            "position": {
+              "start": {
+                "line": 2,
+                "col": 0,
+                "offset": 7
+              },
+              "end": {
+                "line": 2,
+                "col": 9,
+                "offset": 16
+              }
+            },
+            "link": "Three",
+            "original": "[[Three]]",
+            "displayText": "Three"
+          }
+        ],
+        "headings": [
+          {
+            "position": {
+              "start": {
+                "line": 0,
+                "col": 0,
+                "offset": 0
+              },
+              "end": {
+                "line": 0,
+                "col": 5,
+                "offset": 5
+              }
+            },
+            "heading": "Two",
+            "level": 1
+          }
+        ],
+        "sections": [
+          "heading",
+          "paragraph"
+        ]
+      },
+      "getAllTags": [],
+      "firstLinkpathDest": [
+        {
+          "kind": "link",
+          "original": "[[Three]]",
+          "link": "Three",
+          "linkEscaped": "Three",
+          "displayText": "Three",
+          "linkpath": "Three",
+          "subpath": "",
+          "dest": "Events/Folder3/Three.md",
+          "destEscaped": "Events/Folder3/Three.md"
+        }
+      ],
+      "resolvedLinks": {
+        "Events/Folder3/Three.md": 1
+      },
+      "unresolvedLinks": {},
+      "backlinks": {
+        "Events/Linker.md": 1,
+        "Events/Folder3/One.md": 1
+      },
+      "getBacklinksForFile": {
+        "Events/Linker.md": 1,
+        "Events/Folder3/One.md": 1
+      }
+    },
+    "Events/Linker.md": {
+      "path": "Events/Linker.md",
+      "pathEscaped": "Events/Linker.md",
+      "pathIsNFC": true,
+      "name": "Linker.md",
+      "basename": "Linker",
+      "extension": "md",
+      "size": 43,
+      "cache": {
+        "links": [
+          {
+            "position": {
+              "start": {
+                "line": 0,
+                "col": 0,
+                "offset": 0
+              },
+              "end": {
+                "line": 0,
+                "col": 22,
+                "offset": 22
+              }
+            },
+            "link": "Events/Folder3/One",
+            "original": "[[Events/Folder3/One]]",
+            "displayText": "Events/Folder3/One"
+          },
+          {
+            "position": {
+              "start": {
+                "line": 0,
+                "col": 23,
+                "offset": 23
+              },
+              "end": {
+                "line": 0,
+                "col": 30,
+                "offset": 30
+              }
+            },
+            "link": "Two",
+            "original": "[[Two]]",
+            "displayText": "Two"
+          },
+          {
+            "position": {
+              "start": {
+                "line": 0,
+                "col": 31,
+                "offset": 31
+              },
+              "end": {
+                "line": 0,
+                "col": 42,
+                "offset": 42
+              }
+            },
+            "link": "Three",
+            "original": "[[Three|t]]",
+            "displayText": "t"
+          }
+        ],
+        "sections": [
+          "paragraph"
+        ]
+      },
+      "getAllTags": [],
+      "firstLinkpathDest": [
+        {
+          "kind": "link",
+          "original": "[[Events/Folder3/One]]",
+          "link": "Events/Folder3/One",
+          "linkEscaped": "Events/Folder3/One",
+          "displayText": "Events/Folder3/One",
+          "linkpath": "Events/Folder3/One",
+          "subpath": "",
+          "dest": "Events/Folder3/One.md",
+          "destEscaped": "Events/Folder3/One.md"
+        },
+        {
+          "kind": "link",
+          "original": "[[Two]]",
+          "link": "Two",
+          "linkEscaped": "Two",
+          "displayText": "Two",
+          "linkpath": "Two",
+          "subpath": "",
+          "dest": "Events/Folder3/Two.md",
+          "destEscaped": "Events/Folder3/Two.md"
+        },
+        {
+          "kind": "link",
+          "original": "[[Three|t]]",
+          "link": "Three",
+          "linkEscaped": "Three",
+          "displayText": "t",
+          "linkpath": "Three",
+          "subpath": "",
+          "dest": "Events/Folder3/Three.md",
+          "destEscaped": "Events/Folder3/Three.md"
+        }
+      ],
+      "resolvedLinks": {
+        "Events/Folder3/One.md": 1,
+        "Events/Folder3/Two.md": 1,
+        "Events/Folder3/Three.md": 1
+      },
+      "unresolvedLinks": {},
+      "backlinks": {},
+      "getBacklinksForFile": {}
+    },
+    "Events/Sub/keep.md": {
+      "path": "Events/Sub/keep.md",
+      "pathEscaped": "Events/Sub/keep.md",
+      "pathIsNFC": true,
+      "name": "keep.md",
+      "basename": "keep",
+      "extension": "md",
+      "size": 5,
+      "cache": {
+        "sections": [
+          "paragraph"
+        ]
+      },
+      "getAllTags": [],
+      "firstLinkpathDest": [],
+      "resolvedLinks": {},
+      "unresolvedLinks": {},
+      "backlinks": {},
+      "getBacklinksForFile": {}
+    },
+    "Events/external.md": {
+      "path": "Events/external.md",
+      "pathEscaped": "Events/external.md",
+      "pathIsNFC": true,
+      "name": "external.md",
+      "basename": "external",
+      "extension": "md",
+      "size": 16,
+      "cache": {
+        "sections": [
+          "paragraph"
+        ]
+      },
+      "getAllTags": [],
+      "firstLinkpathDest": [],
+      "resolvedLinks": {},
+      "unresolvedLinks": {},
+      "backlinks": {},
+      "getBacklinksForFile": {}
+    },
+    "Events/to-delete.md": {
+      "path": "Events/to-delete.md",
+      "pathEscaped": "Events/to-delete.md",
+      "pathIsNFC": true,
+      "name": "to-delete.md",
+      "basename": "to-delete",
+      "extension": "md",
+      "size": 10,
+      "cache": {
+        "sections": [
+          "paragraph"
+        ]
+      },
+      "getAllTags": [],
+      "firstLinkpathDest": [],
+      "resolvedLinks": {},
+      "unresolvedLinks": {},
+      "backlinks": {},
+      "getBacklinksForFile": {}
+    },
+    "Events/to-trash.md": {
+      "path": "Events/to-trash.md",
+      "pathEscaped": "Events/to-trash.md",
+      "pathIsNFC": true,
+      "name": "to-trash.md",
+      "basename": "to-trash",
+      "extension": "md",
+      "size": 9,
+      "cache": {
+        "sections": [
+          "paragraph"
+        ]
+      },
+      "getAllTags": [],
+      "firstLinkpathDest": [],
+      "resolvedLinks": {},
+      "unresolvedLinks": {},
+      "backlinks": {},
+      "getBacklinksForFile": {}
+    },
+    "FmTags String.md": {
+      "path": "FmTags String.md",
+      "pathEscaped": "FmTags String.md",
+      "pathIsNFC": true,
+      "name": "FmTags String.md",
+      "basename": "FmTags String",
+      "extension": "md",
+      "size": 58,
+      "cache": {
+        "frontmatter": {
+          "tags": "alpha-str, beta-str"
+        },
+        "frontmatterLinks": [],
+        "frontmatterPosition": {
+          "start": {
+            "line": 0,
+            "col": 0,
+            "offset": 0
+          },
+          "end": {
+            "line": 2,
+            "col": 3,
+            "offset": 35
+          }
+        },
+        "sections": [
+          "yaml",
+          "paragraph"
+        ]
+      },
+      "getAllTags": [],
+      "firstLinkpathDest": [],
+      "resolvedLinks": {},
+      "unresolvedLinks": {},
+      "backlinks": {},
+      "getBacklinksForFile": {}
+    },
+    "Frontmatter.md": {
+      "path": "Frontmatter.md",
+      "pathEscaped": "Frontmatter.md",
+      "pathIsNFC": true,
+      "name": "Frontmatter.md",
+      "basename": "Frontmatter",
+      "extension": "md",
+      "size": 197,
+      "cache": {
+        "links": [
+          {
+            "position": {
+              "start": {
+                "line": 12,
+                "col": 5,
+                "offset": 186
+              },
+              "end": {
+                "line": 12,
+                "col": 14,
+                "offset": 195
+              }
+            },
+            "link": "Alpha",
+            "original": "[[Alpha]]",
+            "displayText": "Alpha"
+          }
+        ],
+        "frontmatter": {
+          "title": "Frontmatter test",
+          "related": "[[Gamma]]",
+          "links": [
+            "[[Beta]]",
+            "[[Missing FM]]",
+            "[[Projects/Alpha|PA]]"
+          ],
+          "count": 42,
+          "done": true,
+          "date": "2024-01-01",
+          "cssclasses": [
+            "wide"
+          ]
+        },
+        "frontmatterLinks": [
+          {
+            "key": "related",
+            "link": "Gamma",
+            "original": "[[Gamma]]",
+            "displayText": "Gamma"
+          },
+          {
+            "key": "links.0",
+            "link": "Beta",
+            "original": "[[Beta]]",
+            "displayText": "Beta"
+          },
+          {
+            "key": "links.1",
+            "link": "Missing FM",
+            "original": "[[Missing FM]]",
+            "displayText": "Missing FM"
+          },
+          {
+            "key": "links.2",
+            "link": "Projects/Alpha",
+            "original": "[[Projects/Alpha|PA]]",
+            "displayText": "PA"
+          }
+        ],
+        "frontmatterPosition": {
+          "start": {
+            "line": 0,
+            "col": 0,
+            "offset": 0
+          },
+          "end": {
+            "line": 11,
+            "col": 3,
+            "offset": 180
+          }
+        },
+        "sections": [
+          "yaml",
+          "paragraph"
+        ]
+      },
+      "getAllTags": [],
+      "firstLinkpathDest": [
+        {
+          "kind": "link",
+          "original": "[[Alpha]]",
+          "link": "Alpha",
+          "linkEscaped": "Alpha",
+          "displayText": "Alpha",
+          "linkpath": "Alpha",
+          "subpath": "",
+          "dest": "Alpha.md",
+          "destEscaped": "Alpha.md"
+        },
+        {
+          "kind": "frontmatterLink",
+          "original": "[[Gamma]]",
+          "link": "Gamma",
+          "linkEscaped": "Gamma",
+          "displayText": "Gamma",
+          "linkpath": "Gamma",
+          "subpath": "",
+          "dest": "Gamma.md",
+          "destEscaped": "Gamma.md"
+        },
+        {
+          "kind": "frontmatterLink",
+          "original": "[[Beta]]",
+          "link": "Beta",
+          "linkEscaped": "Beta",
+          "displayText": "Beta",
+          "linkpath": "Beta",
+          "subpath": "",
+          "dest": "Beta.md",
+          "destEscaped": "Beta.md"
+        },
+        {
+          "kind": "frontmatterLink",
+          "original": "[[Missing FM]]",
+          "link": "Missing FM",
+          "linkEscaped": "Missing FM",
+          "displayText": "Missing FM",
+          "linkpath": "Missing FM",
+          "subpath": "",
+          "dest": null,
+          "destEscaped": null
+        },
+        {
+          "kind": "frontmatterLink",
+          "original": "[[Projects/Alpha|PA]]",
+          "link": "Projects/Alpha",
+          "linkEscaped": "Projects/Alpha",
+          "displayText": "PA",
+          "linkpath": "Projects/Alpha",
+          "subpath": "",
+          "dest": "Projects/Alpha.md",
+          "destEscaped": "Projects/Alpha.md"
+        }
+      ],
+      "resolvedLinks": {
+        "Gamma.md": 1,
+        "Beta.md": 1,
+        "Projects/Alpha.md": 1,
+        "Alpha.md": 1
+      },
+      "unresolvedLinks": {
+        "Missing FM": 1
+      },
+      "backlinks": {},
+      "getBacklinksForFile": {}
+    },
+    "Gamma.md": {
+      "path": "Gamma.md",
+      "pathEscaped": "Gamma.md",
+      "pathIsNFC": true,
+      "name": "Gamma.md",
+      "basename": "Gamma",
+      "extension": "md",
+      "size": 94,
+      "cache": {
+        "links": [
+          {
+            "position": {
+              "start": {
+                "line": 10,
+                "col": 4,
+                "offset": 84
+              },
+              "end": {
+                "line": 10,
+                "col": 12,
+                "offset": 92
+              }
+            },
+            "link": "Beta",
+            "original": "[[Beta]]",
+            "displayText": "Beta"
+          }
+        ],
+        "headings": [
+          {
+            "position": {
+              "start": {
+                "line": 8,
+                "col": 0,
+                "offset": 71
+              },
+              "end": {
+                "line": 8,
+                "col": 7,
+                "offset": 78
+              }
+            },
+            "heading": "Gamma",
+            "level": 1
+          }
+        ],
+        "frontmatter": {
+          "aliases": [
+            "G",
+            "Gamma Ray"
+          ],
+          "tags": [
+            "greek",
+            "#hash-in-fm"
+          ]
+        },
+        "frontmatterLinks": [],
+        "frontmatterPosition": {
+          "start": {
+            "line": 0,
+            "col": 0,
+            "offset": 0
+          },
+          "end": {
+            "line": 7,
+            "col": 3,
+            "offset": 70
+          }
+        },
+        "sections": [
+          "yaml",
+          "heading",
+          "paragraph"
+        ]
+      },
+      "getAllTags": [
+        "#greek",
+        "#hash-in-fm"
+      ],
+      "firstLinkpathDest": [
+        {
+          "kind": "link",
+          "original": "[[Beta]]",
+          "link": "Beta",
+          "linkEscaped": "Beta",
+          "displayText": "Beta",
+          "linkpath": "Beta",
+          "subpath": "",
+          "dest": "Beta.md",
+          "destEscaped": "Beta.md"
+        }
+      ],
+      "resolvedLinks": {
+        "Beta.md": 1
+      },
+      "unresolvedLinks": {},
+      "backlinks": {
+        "Callouts.md": 1,
+        "Home.md": 1,
+        "Frontmatter.md": 1
+      },
+      "getBacklinksForFile": {
+        "Callouts.md": 1,
+        "Home.md": 1,
+        "Frontmatter.md": 1
+      }
+    },
+    "Home.md": {
+      "path": "Home.md",
+      "pathEscaped": "Home.md",
+      "pathIsNFC": true,
+      "name": "Home.md",
+      "basename": "Home",
+      "extension": "md",
+      "size": 1312,
+      "cache": {
+        "links": [
+          {
+            "position": {
+              "start": {
+                "line": 6,
+                "col": 9,
+                "offset": 85
+              },
+              "end": {
+                "line": 6,
+                "col": 18,
+                "offset": 94
+              }
+            },
+            "link": "Alpha",
+            "original": "[[Alpha]]",
+            "displayText": "Alpha"
+          },
+          {
+            "position": {
+              "start": {
+                "line": 6,
+                "col": 20,
+                "offset": 96
+              },
+              "end": {
+                "line": 6,
+                "col": 52,
+                "offset": 128
+              }
+            },
+            "link": "Projects/Alpha",
+            "original": "[[Projects/Alpha|Project Alpha]]",
+            "displayText": "Project Alpha"
+          },
+          {
+            "position": {
+              "start": {
+                "line": 6,
+                "col": 54,
+                "offset": 130
+              },
+              "end": {
+                "line": 6,
+                "col": 76,
+                "offset": 152
+              }
+            },
+            "link": "Archive/2024/Alpha",
+            "original": "[[Archive/2024/Alpha]]",
+            "displayText": "Archive/2024/Alpha"
+          },
+          {
+            "position": {
+              "start": {
+                "line": 6,
+                "col": 81,
+                "offset": 157
+              },
+              "end": {
+                "line": 6,
+                "col": 95,
+                "offset": 171
+              }
+            },
+            "link": "2024/Alpha",
+            "original": "[[2024/Alpha]]",
+            "displayText": "2024/Alpha"
+          },
+          {
+            "position": {
+              "start": {
+                "line": 7,
+                "col": 13,
+                "offset": 186
+              },
+              "end": {
+                "line": 7,
+                "col": 33,
+                "offset": 206
+              }
+            },
+            "link": "Beta#Section One",
+            "original": "[[Beta#Section One]]",
+            "displayText": "Beta > Section One"
+          },
+          {
+            "position": {
+              "start": {
+                "line": 7,
+                "col": 53,
+                "offset": 226
+              },
+              "end": {
+                "line": 7,
+                "col": 84,
+                "offset": 257
+              }
+            },
+            "link": "Beta#Section One#Subsection",
+            "original": "[[Beta#Section One#Subsection]]",
+            "displayText": "Beta > Section One > Subsection"
+          },
+          {
+            "position": {
+              "start": {
+                "line": 8,
+                "col": 11,
+                "offset": 270
+              },
+              "end": {
+                "line": 8,
+                "col": 27,
+                "offset": 286
+              }
+            },
+            "link": "Beta#^block1",
+            "original": "[[Beta#^block1]]",
+            "displayText": "Beta > ^block1"
+          },
+          {
+            "position": {
+              "start": {
+                "line": 9,
+                "col": 8,
+                "offset": 296
+              },
+              "end": {
+                "line": 9,
+                "col": 34,
+                "offset": 322
+              }
+            },
+            "link": "Gamma",
+            "original": "[[Gamma|the third letter]]",
+            "displayText": "the third letter"
+          },
+          {
+            "position": {
+              "start": {
+                "line": 10,
+                "col": 16,
+                "offset": 340
+              },
+              "end": {
+                "line": 10,
+                "col": 21,
+                "offset": 345
+              }
+            },
+            "link": "G",
+            "original": "[[G]]",
+            "displayText": "G"
+          },
+          {
+            "position": {
+              "start": {
+                "line": 10,
+                "col": 26,
+                "offset": 350
+              },
+              "end": {
+                "line": 10,
+                "col": 39,
+                "offset": 363
+              }
+            },
+            "link": "Gamma Ray",
+            "original": "[[Gamma Ray]]",
+            "displayText": "Gamma Ray"
+          },
+          {
+            "position": {
+              "start": {
+                "line": 11,
+                "col": 8,
+                "offset": 415
+              },
+              "end": {
+                "line": 11,
+                "col": 24,
+                "offset": 431
+              }
+            },
+            "link": "Missing Note",
+            "original": "[[Missing Note]]",
+            "displayText": "Missing Note"
+          },
+          {
+            "position": {
+              "start": {
+                "line": 11,
+                "col": 50,
+                "offset": 457
+              },
+              "end": {
+                "line": 11,
+                "col": 71,
+                "offset": 478
+              }
+            },
+            "link": "Missing Note#Part",
+            "original": "[[Missing Note#Part]]",
+            "displayText": "Missing Note > Part"
+          },
+          {
+            "position": {
+              "start": {
+                "line": 12,
+                "col": 14,
+                "offset": 494
+              },
+              "end": {
+                "line": 12,
+                "col": 22,
+                "offset": 502
+              }
+            },
+            "link": "beta",
+            "original": "[[beta]]",
+            "displayText": "beta"
+          },
+          {
+            "position": {
+              "start": {
+                "line": 12,
+                "col": 42,
+                "offset": 522
+              },
+              "end": {
+                "line": 12,
+                "col": 53,
+                "offset": 533
+              }
+            },
+            "link": "Beta.md",
+            "original": "[[Beta.md]]",
+            "displayText": "Beta.md"
+          },
+          {
+            "position": {
+              "start": {
+                "line": 13,
+                "col": 33,
+                "offset": 568
+              },
+              "end": {
+                "line": 13,
+                "col": 41,
+                "offset": 576
+              }
+            },
+            "link": "Café",
+            "original": "[[Café]]",
+            "displayText": "Café"
+          },
+          {
+            "position": {
+              "start": {
+                "line": 13,
+                "col": 63,
+                "offset": 598
+              },
+              "end": {
+                "line": 13,
+                "col": 72,
+                "offset": 607
+              }
+            },
+            "link": "Café",
+            "original": "[[Café]]",
+            "displayText": "Café"
+          },
+          {
+            "position": {
+              "start": {
+                "line": 14,
+                "col": 17,
+                "offset": 626
+              },
+              "end": {
+                "line": 14,
+                "col": 27,
+                "offset": 636
+              }
+            },
+            "link": "Résumé",
+            "original": "[[Résumé]]",
+            "displayText": "Résumé"
+          },
+          {
+            "position": {
+              "start": {
+                "line": 15,
+                "col": 7,
+                "offset": 670
+              },
+              "end": {
+                "line": 15,
+                "col": 27,
+                "offset": 690
+              }
+            },
+            "link": "Note with spaces",
+            "original": "[[Note with spaces]]",
+            "displayText": "Note with spaces"
+          },
+          {
+            "position": {
+              "start": {
+                "line": 16,
+                "col": 31,
+                "offset": 723
+              },
+              "end": {
+                "line": 16,
+                "col": 44,
+                "offset": 736
+              }
+            },
+            "link": "photo.png",
+            "original": "[[photo.png]]",
+            "displayText": "photo.png"
+          },
+          {
+            "position": {
+              "start": {
+                "line": 17,
+                "col": 13,
+                "offset": 751
+              },
+              "end": {
+                "line": 17,
+                "col": 26,
+                "offset": 764
+              }
+            },
+            "link": "Sub/Delta",
+            "original": "[[Sub/Delta]]",
+            "displayText": "Sub/Delta"
+          },
+          {
+            "position": {
+              "start": {
+                "line": 28,
+                "col": 18,
+                "offset": 924
+              },
+              "end": {
+                "line": 28,
+                "col": 36,
+                "offset": 942
+              }
+            },
+            "link": "Commented Link",
+            "original": "[[Commented Link]]",
+            "displayText": "Commented Link"
+          },
+          {
+            "position": {
+              "start": {
+                "line": 32,
+                "col": 0,
+                "offset": 986
+              },
+              "end": {
+                "line": 32,
+                "col": 19,
+                "offset": 1005
+              }
+            },
+            "link": "Commented Multi",
+            "original": "[[Commented Multi]]",
+            "displayText": "Commented Multi"
+          }
+        ],
+        "embeds": [
+          {
+            "position": {
+              "start": {
+                "line": 20,
+                "col": 0,
+                "offset": 775
+              },
+              "end": {
+                "line": 20,
+                "col": 9,
+                "offset": 784
+              }
+            },
+            "link": "Beta",
+            "original": "![[Beta]]",
+            "displayText": "Beta"
+          },
+          {
+            "position": {
+              "start": {
+                "line": 21,
+                "col": 0,
+                "offset": 785
+              },
+              "end": {
+                "line": 21,
+                "col": 21,
+                "offset": 806
+              }
+            },
+            "link": "Beta#Section Two",
+            "original": "![[Beta#Section Two]]",
+            "displayText": "Beta > Section Two"
+          },
+          {
+            "position": {
+              "start": {
+                "line": 22,
+                "col": 0,
+                "offset": 807
+              },
+              "end": {
+                "line": 22,
+                "col": 17,
+                "offset": 824
+              }
+            },
+            "link": "Beta#^block2",
+            "original": "![[Beta#^block2]]",
+            "displayText": "Beta > ^block2"
+          },
+          {
+            "position": {
+              "start": {
+                "line": 23,
+                "col": 0,
+                "offset": 825
+              },
+              "end": {
+                "line": 23,
+                "col": 23,
+                "offset": 848
+              }
+            },
+            "link": "images/diagram.png",
+            "original": "![[images/diagram.png]]",
+            "displayText": "images/diagram.png"
+          },
+          {
+            "position": {
+              "start": {
+                "line": 24,
+                "col": 0,
+                "offset": 849
+              },
+              "end": {
+                "line": 24,
+                "col": 18,
+                "offset": 867
+              }
+            },
+            "link": "photo.png",
+            "original": "![[photo.png|200]]",
+            "displayText": "200"
+          },
+          {
+            "position": {
+              "start": {
+                "line": 25,
+                "col": 0,
+                "offset": 868
+              },
+              "end": {
+                "line": 25,
+                "col": 13,
+                "offset": 881
+              }
+            },
+            "link": "spec.pdf",
+            "original": "![[spec.pdf]]",
+            "displayText": "spec.pdf"
+          },
+          {
+            "position": {
+              "start": {
+                "line": 26,
+                "col": 0,
+                "offset": 882
+              },
+              "end": {
+                "line": 26,
+                "col": 22,
+                "offset": 904
+              }
+            },
+            "link": "Missing Image.png",
+            "original": "![[Missing Image.png]]",
+            "displayText": "Missing Image.png"
+          }
+        ],
+        "headings": [
+          {
+            "position": {
+              "start": {
+                "line": 4,
+                "col": 0,
+                "offset": 68
+              },
+              "end": {
+                "line": 4,
+                "col": 6,
+                "offset": 74
+              }
+            },
+            "heading": "Home",
+            "level": 1
+          }
+        ],
+        "tags": [
+          {
+            "position": {
+              "start": {
+                "line": 28,
+                "col": 41,
+                "offset": 947
+              },
+              "end": {
+                "line": 28,
+                "col": 53,
+                "offset": 959
+              }
+            },
+            "tag": "#comment-tag"
+          },
+          {
+            "position": {
+              "start": {
+                "line": 32,
+                "col": 20,
+                "offset": 1006
+              },
+              "end": {
+                "line": 32,
+                "col": 38,
+                "offset": 1024
+              }
+            },
+            "tag": "#comment-multi-tag"
+          },
+          {
+            "position": {
+              "start": {
+                "line": 45,
+                "col": 13,
+                "offset": 1157
+              },
+              "end": {
+                "line": 45,
+                "col": 18,
+                "offset": 1162
+              }
+            },
+            "tag": "#home"
+          },
+          {
+            "position": {
+              "start": {
+                "line": 45,
+                "col": 19,
+                "offset": 1163
+              },
+              "end": {
+                "line": 45,
+                "col": 32,
+                "offset": 1176
+              }
+            },
+            "tag": "#nested/child"
+          },
+          {
+            "position": {
+              "start": {
+                "line": 45,
+                "col": 33,
+                "offset": 1177
+              },
+              "end": {
+                "line": 45,
+                "col": 42,
+                "offset": 1186
+              }
+            },
+            "tag": "#CamelTag"
+          },
+          {
+            "position": {
+              "start": {
+                "line": 45,
+                "col": 43,
+                "offset": 1187
+              },
+              "end": {
+                "line": 45,
+                "col": 53,
+                "offset": 1197
+              }
+            },
+            "tag": "#with-dash"
+          },
+          {
+            "position": {
+              "start": {
+                "line": 45,
+                "col": 54,
+                "offset": 1198
+              },
+              "end": {
+                "line": 45,
+                "col": 70,
+                "offset": 1214
+              }
+            },
+            "tag": "#with_underscore"
+          },
+          {
+            "position": {
+              "start": {
+                "line": 45,
+                "col": 76,
+                "offset": 1220
+              },
+              "end": {
+                "line": 45,
+                "col": 79,
+                "offset": 1223
+              }
+            },
+            "tag": "#1a"
+          },
+          {
+            "position": {
+              "start": {
+                "line": 46,
+                "col": 27,
+                "offset": 1251
+              },
+              "end": {
+                "line": 46,
+                "col": 35,
+                "offset": 1259
+              }
+            },
+            "tag": "#notatag"
+          }
+        ],
+        "frontmatter": {
+          "aliases": [
+            "Start",
+            "Main Page"
+          ],
+          "tags": [
+            "fm-tag",
+            "nested/fm-child"
+          ]
+        },
+        "frontmatterLinks": [],
+        "frontmatterPosition": {
+          "start": {
+            "line": 0,
+            "col": 0,
+            "offset": 0
+          },
+          "end": {
+            "line": 3,
+            "col": 3,
+            "offset": 67
+          }
+        },
+        "sections": [
+          "yaml",
+          "heading",
+          "paragraph",
+          "paragraph",
+          "paragraph",
+          "comment",
+          "paragraph",
+          "code",
+          "code",
+          "paragraph"
+        ]
+      },
+      "getAllTags": [
+        "#fm-tag",
+        "#nested/fm-child",
+        "#comment-tag",
+        "#comment-multi-tag",
+        "#home",
+        "#nested/child",
+        "#CamelTag",
+        "#with-dash",
+        "#with_underscore",
+        "#1a",
+        "#notatag"
+      ],
+      "firstLinkpathDest": [
+        {
+          "kind": "link",
+          "original": "[[Alpha]]",
+          "link": "Alpha",
+          "linkEscaped": "Alpha",
+          "displayText": "Alpha",
+          "linkpath": "Alpha",
+          "subpath": "",
+          "dest": "Alpha.md",
+          "destEscaped": "Alpha.md"
+        },
+        {
+          "kind": "link",
+          "original": "[[Projects/Alpha|Project Alpha]]",
+          "link": "Projects/Alpha",
+          "linkEscaped": "Projects/Alpha",
+          "displayText": "Project Alpha",
+          "linkpath": "Projects/Alpha",
+          "subpath": "",
+          "dest": "Projects/Alpha.md",
+          "destEscaped": "Projects/Alpha.md"
+        },
+        {
+          "kind": "link",
+          "original": "[[Archive/2024/Alpha]]",
+          "link": "Archive/2024/Alpha",
+          "linkEscaped": "Archive/2024/Alpha",
+          "displayText": "Archive/2024/Alpha",
+          "linkpath": "Archive/2024/Alpha",
+          "subpath": "",
+          "dest": "Archive/2024/Alpha.md",
+          "destEscaped": "Archive/2024/Alpha.md"
+        },
+        {
+          "kind": "link",
+          "original": "[[2024/Alpha]]",
+          "link": "2024/Alpha",
+          "linkEscaped": "2024/Alpha",
+          "displayText": "2024/Alpha",
+          "linkpath": "2024/Alpha",
+          "subpath": "",
+          "dest": "Archive/2024/Alpha.md",
+          "destEscaped": "Archive/2024/Alpha.md"
+        },
+        {
+          "kind": "link",
+          "original": "[[Beta#Section One]]",
+          "link": "Beta#Section One",
+          "linkEscaped": "Beta#Section One",
+          "displayText": "Beta > Section One",
+          "linkpath": "Beta",
+          "subpath": "#Section One",
+          "dest": "Beta.md",
+          "destEscaped": "Beta.md"
+        },
+        {
+          "kind": "link",
+          "original": "[[Beta#Section One#Subsection]]",
+          "link": "Beta#Section One#Subsection",
+          "linkEscaped": "Beta#Section One#Subsection",
+          "displayText": "Beta > Section One > Subsection",
+          "linkpath": "Beta",
+          "subpath": "#Section One#Subsection",
+          "dest": "Beta.md",
+          "destEscaped": "Beta.md"
+        },
+        {
+          "kind": "link",
+          "original": "[[Beta#^block1]]",
+          "link": "Beta#^block1",
+          "linkEscaped": "Beta#^block1",
+          "displayText": "Beta > ^block1",
+          "linkpath": "Beta",
+          "subpath": "#^block1",
+          "dest": "Beta.md",
+          "destEscaped": "Beta.md"
+        },
+        {
+          "kind": "link",
+          "original": "[[Gamma|the third letter]]",
+          "link": "Gamma",
+          "linkEscaped": "Gamma",
+          "displayText": "the third letter",
+          "linkpath": "Gamma",
+          "subpath": "",
+          "dest": "Gamma.md",
+          "destEscaped": "Gamma.md"
+        },
+        {
+          "kind": "link",
+          "original": "[[G]]",
+          "link": "G",
+          "linkEscaped": "G",
+          "displayText": "G",
+          "linkpath": "G",
+          "subpath": "",
+          "dest": null,
+          "destEscaped": null
+        },
+        {
+          "kind": "link",
+          "original": "[[Gamma Ray]]",
+          "link": "Gamma Ray",
+          "linkEscaped": "Gamma Ray",
+          "displayText": "Gamma Ray",
+          "linkpath": "Gamma Ray",
+          "subpath": "",
+          "dest": null,
+          "destEscaped": null
+        },
+        {
+          "kind": "link",
+          "original": "[[Missing Note]]",
+          "link": "Missing Note",
+          "linkEscaped": "Missing Note",
+          "displayText": "Missing Note",
+          "linkpath": "Missing Note",
+          "subpath": "",
+          "dest": null,
+          "destEscaped": null
+        },
+        {
+          "kind": "link",
+          "original": "[[Missing Note#Part]]",
+          "link": "Missing Note#Part",
+          "linkEscaped": "Missing Note#Part",
+          "displayText": "Missing Note > Part",
+          "linkpath": "Missing Note",
+          "subpath": "#Part",
+          "dest": null,
+          "destEscaped": null
+        },
+        {
+          "kind": "link",
+          "original": "[[beta]]",
+          "link": "beta",
+          "linkEscaped": "beta",
+          "displayText": "beta",
+          "linkpath": "beta",
+          "subpath": "",
+          "dest": "Beta.md",
+          "destEscaped": "Beta.md"
+        },
+        {
+          "kind": "link",
+          "original": "[[Beta.md]]",
+          "link": "Beta.md",
+          "linkEscaped": "Beta.md",
+          "displayText": "Beta.md",
+          "linkpath": "Beta.md",
+          "subpath": "",
+          "dest": "Beta.md",
+          "destEscaped": "Beta.md"
+        },
+        {
+          "kind": "link",
+          "original": "[[Café]]",
+          "link": "Café",
+          "linkEscaped": "Caf\\u00e9",
+          "displayText": "Café",
+          "linkpath": "Café",
+          "subpath": "",
+          "dest": "Café.md",
+          "destEscaped": "Caf\\u00e9.md"
+        },
+        {
+          "kind": "link",
+          "original": "[[Café]]",
+          "link": "Café",
+          "linkEscaped": "Caf\\u00e9",
+          "displayText": "Café",
+          "linkpath": "Café",
+          "subpath": "",
+          "dest": "Café.md",
+          "destEscaped": "Caf\\u00e9.md"
+        },
+        {
+          "kind": "link",
+          "original": "[[Résumé]]",
+          "link": "Résumé",
+          "linkEscaped": "R\\u00e9sum\\u00e9",
+          "displayText": "Résumé",
+          "linkpath": "Résumé",
+          "subpath": "",
+          "dest": "Notes/Résumé.md",
+          "destEscaped": "Notes/R\\u00e9sum\\u00e9.md"
+        },
+        {
+          "kind": "link",
+          "original": "[[Note with spaces]]",
+          "link": "Note with spaces",
+          "linkEscaped": "Note with spaces",
+          "displayText": "Note with spaces",
+          "linkpath": "Note with spaces",
+          "subpath": "",
+          "dest": "Note with spaces.md",
+          "destEscaped": "Note with spaces.md"
+        },
+        {
+          "kind": "link",
+          "original": "[[photo.png]]",
+          "link": "photo.png",
+          "linkEscaped": "photo.png",
+          "displayText": "photo.png",
+          "linkpath": "photo.png",
+          "subpath": "",
+          "dest": "photo.png",
+          "destEscaped": "photo.png"
+        },
+        {
+          "kind": "link",
+          "original": "[[Sub/Delta]]",
+          "link": "Sub/Delta",
+          "linkEscaped": "Sub/Delta",
+          "displayText": "Sub/Delta",
+          "linkpath": "Sub/Delta",
+          "subpath": "",
+          "dest": "Work/Sub/Delta.md",
+          "destEscaped": "Work/Sub/Delta.md"
+        },
+        {
+          "kind": "link",
+          "original": "[[Commented Link]]",
+          "link": "Commented Link",
+          "linkEscaped": "Commented Link",
+          "displayText": "Commented Link",
+          "linkpath": "Commented Link",
+          "subpath": "",
+          "dest": null,
+          "destEscaped": null
+        },
+        {
+          "kind": "link",
+          "original": "[[Commented Multi]]",
+          "link": "Commented Multi",
+          "linkEscaped": "Commented Multi",
+          "displayText": "Commented Multi",
+          "linkpath": "Commented Multi",
+          "subpath": "",
+          "dest": null,
+          "destEscaped": null
+        },
+        {
+          "kind": "embed",
+          "original": "![[Beta]]",
+          "link": "Beta",
+          "linkEscaped": "Beta",
+          "displayText": "Beta",
+          "linkpath": "Beta",
+          "subpath": "",
+          "dest": "Beta.md",
+          "destEscaped": "Beta.md"
+        },
+        {
+          "kind": "embed",
+          "original": "![[Beta#Section Two]]",
+          "link": "Beta#Section Two",
+          "linkEscaped": "Beta#Section Two",
+          "displayText": "Beta > Section Two",
+          "linkpath": "Beta",
+          "subpath": "#Section Two",
+          "dest": "Beta.md",
+          "destEscaped": "Beta.md"
+        },
+        {
+          "kind": "embed",
+          "original": "![[Beta#^block2]]",
+          "link": "Beta#^block2",
+          "linkEscaped": "Beta#^block2",
+          "displayText": "Beta > ^block2",
+          "linkpath": "Beta",
+          "subpath": "#^block2",
+          "dest": "Beta.md",
+          "destEscaped": "Beta.md"
+        },
+        {
+          "kind": "embed",
+          "original": "![[images/diagram.png]]",
+          "link": "images/diagram.png",
+          "linkEscaped": "images/diagram.png",
+          "displayText": "images/diagram.png",
+          "linkpath": "images/diagram.png",
+          "subpath": "",
+          "dest": "images/diagram.png",
+          "destEscaped": "images/diagram.png"
+        },
+        {
+          "kind": "embed",
+          "original": "![[photo.png|200]]",
+          "link": "photo.png",
+          "linkEscaped": "photo.png",
+          "displayText": "200",
+          "linkpath": "photo.png",
+          "subpath": "",
+          "dest": "photo.png",
+          "destEscaped": "photo.png"
+        },
+        {
+          "kind": "embed",
+          "original": "![[spec.pdf]]",
+          "link": "spec.pdf",
+          "linkEscaped": "spec.pdf",
+          "displayText": "spec.pdf",
+          "linkpath": "spec.pdf",
+          "subpath": "",
+          "dest": "attachments/spec.pdf",
+          "destEscaped": "attachments/spec.pdf"
+        },
+        {
+          "kind": "embed",
+          "original": "![[Missing Image.png]]",
+          "link": "Missing Image.png",
+          "linkEscaped": "Missing Image.png",
+          "displayText": "Missing Image.png",
+          "linkpath": "Missing Image.png",
+          "subpath": "",
+          "dest": null,
+          "destEscaped": null
+        }
+      ],
+      "resolvedLinks": {
+        "Alpha.md": 1,
+        "Projects/Alpha.md": 1,
+        "Archive/2024/Alpha.md": 2,
+        "Beta.md": 8,
+        "Gamma.md": 1,
+        "Café.md": 2,
+        "Notes/Résumé.md": 1,
+        "Note with spaces.md": 1,
+        "photo.png": 2,
+        "Work/Sub/Delta.md": 1,
+        "images/diagram.png": 1,
+        "attachments/spec.pdf": 1
+      },
+      "unresolvedLinks": {
+        "G": 1,
+        "Gamma Ray": 1,
+        "Missing Note": 2,
+        "Commented Link": 1,
+        "Commented Multi": 1,
+        "Missing Image.png": 1
+      },
+      "backlinks": {
+        "Café.md": 1,
+        "Daily/2024-01-01.md": 1
+      },
+      "getBacklinksForFile": {
+        "Café.md": 1,
+        "Daily/2024-01-01.md": 1
+      }
+    },
+    "Ideas/Delta.md": {
+      "path": "Ideas/Delta.md",
+      "pathEscaped": "Ideas/Delta.md",
+      "pathIsNFC": true,
+      "name": "Delta.md",
+      "basename": "Delta",
+      "extension": "md",
+      "size": 16,
+      "cache": {
+        "headings": [
+          {
+            "position": {
+              "start": {
+                "line": 0,
+                "col": 0,
+                "offset": 0
+              },
+              "end": {
+                "line": 0,
+                "col": 15,
+                "offset": 15
+              }
+            },
+            "heading": "Delta (Ideas)",
+            "level": 1
+          }
+        ],
+        "sections": [
+          "heading"
+        ]
+      },
+      "getAllTags": [],
+      "firstLinkpathDest": [],
+      "resolvedLinks": {},
+      "unresolvedLinks": {},
+      "backlinks": {
+        "Root Ref.md": 2,
+        "Ideas/Ref Ideas.md": 1
+      },
+      "getBacklinksForFile": {
+        "Root Ref.md": 2,
+        "Ideas/Ref Ideas.md": 1
+      }
+    },
+    "Ideas/Ref Ideas.md": {
+      "path": "Ideas/Ref Ideas.md",
+      "pathEscaped": "Ideas/Ref Ideas.md",
+      "pathIsNFC": true,
+      "name": "Ref Ideas.md",
+      "basename": "Ref Ideas",
+      "extension": "md",
+      "size": 33,
+      "cache": {
+        "links": [
+          {
+            "position": {
+              "start": {
+                "line": 2,
+                "col": 0,
+                "offset": 13
+              },
+              "end": {
+                "line": 2,
+                "col": 9,
+                "offset": 22
+              }
+            },
+            "link": "Delta",
+            "original": "[[Delta]]",
+            "displayText": "Delta"
+          },
+          {
+            "position": {
+              "start": {
+                "line": 2,
+                "col": 10,
+                "offset": 23
+              },
+              "end": {
+                "line": 2,
+                "col": 19,
+                "offset": 32
+              }
+            },
+            "link": "Alpha",
+            "original": "[[Alpha]]",
+            "displayText": "Alpha"
+          }
+        ],
+        "headings": [
+          {
+            "position": {
+              "start": {
+                "line": 0,
+                "col": 0,
+                "offset": 0
+              },
+              "end": {
+                "line": 0,
+                "col": 11,
+                "offset": 11
+              }
+            },
+            "heading": "Ref Ideas",
+            "level": 1
+          }
+        ],
+        "sections": [
+          "heading",
+          "paragraph"
+        ]
+      },
+      "getAllTags": [],
+      "firstLinkpathDest": [
+        {
+          "kind": "link",
+          "original": "[[Delta]]",
+          "link": "Delta",
+          "linkEscaped": "Delta",
+          "displayText": "Delta",
+          "linkpath": "Delta",
+          "subpath": "",
+          "dest": "Ideas/Delta.md",
+          "destEscaped": "Ideas/Delta.md"
+        },
+        {
+          "kind": "link",
+          "original": "[[Alpha]]",
+          "link": "Alpha",
+          "linkEscaped": "Alpha",
+          "displayText": "Alpha",
+          "linkpath": "Alpha",
+          "subpath": "",
+          "dest": "Alpha.md",
+          "destEscaped": "Alpha.md"
+        }
+      ],
+      "resolvedLinks": {
+        "Ideas/Delta.md": 1,
+        "Alpha.md": 1
+      },
+      "unresolvedLinks": {},
+      "backlinks": {},
+      "getBacklinksForFile": {}
+    },
+    "Note with spaces.md": {
+      "path": "Note with spaces.md",
+      "pathEscaped": "Note with spaces.md",
+      "pathIsNFC": true,
+      "name": "Note with spaces.md",
+      "basename": "Note with spaces",
+      "extension": "md",
+      "size": 26,
+      "cache": {
+        "headings": [
+          {
+            "position": {
+              "start": {
+                "line": 0,
+                "col": 0,
+                "offset": 0
+              },
+              "end": {
+                "line": 0,
+                "col": 18,
+                "offset": 18
+              }
+            },
+            "heading": "Note with spaces",
+            "level": 1
+          }
+        ],
+        "sections": [
+          "heading",
+          "paragraph"
+        ]
+      },
+      "getAllTags": [],
+      "firstLinkpathDest": [],
+      "resolvedLinks": {},
+      "unresolvedLinks": {},
+      "backlinks": {
+        "Home.md": 1,
+        "Docs/Markdown Links.md": 2
+      },
+      "getBacklinksForFile": {
+        "Home.md": 1,
+        "Docs/Markdown Links.md": 2
+      }
+    },
+    "Notes/Naïve.md": {
+      "path": "Notes/Naïve.md",
+      "pathEscaped": "Notes/Na\\u00efve.md",
+      "pathIsNFC": true,
+      "name": "Naïve.md",
+      "basename": "Naïve",
+      "extension": "md",
+      "size": 31,
+      "cache": {
+        "headings": [
+          {
+            "position": {
+              "start": {
+                "line": 0,
+                "col": 0,
+                "offset": 0
+              },
+              "end": {
+                "line": 0,
+                "col": 7,
+                "offset": 7
+              }
+            },
+            "heading": "Naive",
+            "level": 1
+          }
+        ],
+        "sections": [
+          "heading",
+          "paragraph"
+        ]
+      },
+      "getAllTags": [],
+      "firstLinkpathDest": [],
+      "resolvedLinks": {},
+      "unresolvedLinks": {},
+      "backlinks": {
+        "Notes/Résumé.md": 2
+      },
+      "getBacklinksForFile": {
+        "Notes/Résumé.md": 2
+      }
+    },
+    "Notes/Résumé.md": {
+      "path": "Notes/Résumé.md",
+      "pathEscaped": "Notes/R\\u00e9sum\\u00e9.md",
+      "pathIsNFC": true,
+      "name": "Résumé.md",
+      "basename": "Résumé",
+      "extension": "md",
+      "size": 85,
+      "cache": {
+        "links": [
+          {
+            "position": {
+              "start": {
+                "line": 2,
+                "col": 17,
+                "offset": 27
+              },
+              "end": {
+                "line": 2,
+                "col": 27,
+                "offset": 37
+              }
+            },
+            "link": "Naïve",
+            "original": "[[Naïve]]",
+            "displayText": "Naïve"
+          },
+          {
+            "position": {
+              "start": {
+                "line": 2,
+                "col": 60,
+                "offset": 70
+              },
+              "end": {
+                "line": 2,
+                "col": 69,
+                "offset": 79
+              }
+            },
+            "link": "Naïve",
+            "original": "[[Naïve]]",
+            "displayText": "Naïve"
+          }
+        ],
+        "headings": [
+          {
+            "position": {
+              "start": {
+                "line": 0,
+                "col": 0,
+                "offset": 0
+              },
+              "end": {
+                "line": 0,
+                "col": 8,
+                "offset": 8
+              }
+            },
+            "heading": "Résumé",
+            "level": 1
+          }
+        ],
+        "sections": [
+          "heading",
+          "paragraph"
+        ]
+      },
+      "getAllTags": [],
+      "firstLinkpathDest": [
+        {
+          "kind": "link",
+          "original": "[[Naïve]]",
+          "link": "Naïve",
+          "linkEscaped": "Na\\u00efve",
+          "displayText": "Naïve",
+          "linkpath": "Naïve",
+          "subpath": "",
+          "dest": "Notes/Naïve.md",
+          "destEscaped": "Notes/Na\\u00efve.md"
+        },
+        {
+          "kind": "link",
+          "original": "[[Naïve]]",
+          "link": "Naïve",
+          "linkEscaped": "Na\\u00efve",
+          "displayText": "Naïve",
+          "linkpath": "Naïve",
+          "subpath": "",
+          "dest": "Notes/Naïve.md",
+          "destEscaped": "Notes/Na\\u00efve.md"
+        }
+      ],
+      "resolvedLinks": {
+        "Notes/Naïve.md": 2
+      },
+      "unresolvedLinks": {},
+      "backlinks": {
+        "Home.md": 1
+      },
+      "getBacklinksForFile": {
+        "Home.md": 1
+      }
+    },
+    "Projects/Alpha.md": {
+      "path": "Projects/Alpha.md",
+      "pathEscaped": "Projects/Alpha.md",
+      "pathIsNFC": true,
+      "name": "Alpha.md",
+      "basename": "Alpha",
+      "extension": "md",
+      "size": 72,
+      "cache": {
+        "links": [
+          {
+            "position": {
+              "start": {
+                "line": 2,
+                "col": 5,
+                "offset": 25
+              },
+              "end": {
+                "line": 2,
+                "col": 14,
+                "offset": 34
+              }
+            },
+            "link": "Alpha",
+            "original": "[[Alpha]]",
+            "displayText": "Alpha"
+          },
+          {
+            "position": {
+              "start": {
+                "line": 2,
+                "col": 42,
+                "offset": 62
+              },
+              "end": {
+                "line": 2,
+                "col": 50,
+                "offset": 70
+              }
+            },
+            "link": "Beta",
+            "original": "[[Beta]]",
+            "displayText": "Beta"
+          }
+        ],
+        "headings": [
+          {
+            "position": {
+              "start": {
+                "line": 0,
+                "col": 0,
+                "offset": 0
+              },
+              "end": {
+                "line": 0,
+                "col": 18,
+                "offset": 18
+              }
+            },
+            "heading": "Alpha (Projects)",
+            "level": 1
+          }
+        ],
+        "sections": [
+          "heading",
+          "paragraph"
+        ]
+      },
+      "getAllTags": [],
+      "firstLinkpathDest": [
+        {
+          "kind": "link",
+          "original": "[[Alpha]]",
+          "link": "Alpha",
+          "linkEscaped": "Alpha",
+          "displayText": "Alpha",
+          "linkpath": "Alpha",
+          "subpath": "",
+          "dest": "Alpha.md",
+          "destEscaped": "Alpha.md"
+        },
+        {
+          "kind": "link",
+          "original": "[[Beta]]",
+          "link": "Beta",
+          "linkEscaped": "Beta",
+          "displayText": "Beta",
+          "linkpath": "Beta",
+          "subpath": "",
+          "dest": "Beta.md",
+          "destEscaped": "Beta.md"
+        }
+      ],
+      "resolvedLinks": {
+        "Alpha.md": 1,
+        "Beta.md": 1
+      },
+      "unresolvedLinks": {},
+      "backlinks": {
+        "Alpha.md": 1,
+        "Home.md": 1,
+        "Frontmatter.md": 1,
+        "Root Ref.md": 1,
+        "Docs/Markdown Links.md": 1
+      },
+      "getBacklinksForFile": {
+        "Alpha.md": 1,
+        "Home.md": 1,
+        "Frontmatter.md": 1,
+        "Root Ref.md": 1,
+        "Docs/Markdown Links.md": 1
+      }
+    },
+    "RenameSources/Uses Aliased.md": {
+      "path": "RenameSources/Uses Aliased.md",
+      "pathEscaped": "RenameSources/Uses Aliased.md",
+      "pathIsNFC": true,
+      "name": "Uses Aliased.md",
+      "basename": "Uses Aliased",
+      "extension": "md",
+      "size": 102,
+      "cache": {
+        "links": [
+          {
+            "position": {
+              "start": {
+                "line": 0,
+                "col": 0,
+                "offset": 0
+              },
+              "end": {
+                "line": 0,
+                "col": 24,
+                "offset": 24
+              }
+            },
+            "link": "Aliased",
+            "original": "[[Aliased|Display Text]]",
+            "displayText": "Display Text"
+          },
+          {
+            "position": {
+              "start": {
+                "line": 1,
+                "col": 0,
+                "offset": 25
+              },
+              "end": {
+                "line": 1,
+                "col": 36,
+                "offset": 61
+              }
+            },
+            "link": "RenameTargets/Aliased",
+            "original": "[[RenameTargets/Aliased|Path Alias]]",
+            "displayText": "Path Alias"
+          },
+          {
+            "position": {
+              "start": {
+                "line": 2,
+                "col": 0,
+                "offset": 62
+              },
+              "end": {
+                "line": 2,
+                "col": 39,
+                "offset": 101
+              }
+            },
+            "link": "../RenameTargets/Aliased.md",
+            "original": "[Md Alias](../RenameTargets/Aliased.md)",
+            "displayText": "Md Alias"
+          }
+        ],
+        "sections": [
+          "paragraph"
+        ]
+      },
+      "getAllTags": [],
+      "firstLinkpathDest": [
+        {
+          "kind": "link",
+          "original": "[[Aliased|Display Text]]",
+          "link": "Aliased",
+          "linkEscaped": "Aliased",
+          "displayText": "Display Text",
+          "linkpath": "Aliased",
+          "subpath": "",
+          "dest": "RenameTargets/Aliased.md",
+          "destEscaped": "RenameTargets/Aliased.md"
+        },
+        {
+          "kind": "link",
+          "original": "[[RenameTargets/Aliased|Path Alias]]",
+          "link": "RenameTargets/Aliased",
+          "linkEscaped": "RenameTargets/Aliased",
+          "displayText": "Path Alias",
+          "linkpath": "RenameTargets/Aliased",
+          "subpath": "",
+          "dest": "RenameTargets/Aliased.md",
+          "destEscaped": "RenameTargets/Aliased.md"
+        },
+        {
+          "kind": "link",
+          "original": "[Md Alias](../RenameTargets/Aliased.md)",
+          "link": "../RenameTargets/Aliased.md",
+          "linkEscaped": "../RenameTargets/Aliased.md",
+          "displayText": "Md Alias",
+          "linkpath": "../RenameTargets/Aliased.md",
+          "subpath": "",
+          "dest": "RenameTargets/Aliased.md",
+          "destEscaped": "RenameTargets/Aliased.md"
+        }
+      ],
+      "resolvedLinks": {
+        "RenameTargets/Aliased.md": 3
+      },
+      "unresolvedLinks": {},
+      "backlinks": {},
+      "getBacklinksForFile": {}
+    },
+    "RenameSources/Uses Collide.md": {
+      "path": "RenameSources/Uses Collide.md",
+      "pathEscaped": "RenameSources/Uses Collide.md",
+      "pathIsNFC": true,
+      "name": "Uses Collide.md",
+      "basename": "Uses Collide",
+      "extension": "md",
+      "size": 32,
+      "cache": {
+        "links": [
+          {
+            "position": {
+              "start": {
+                "line": 0,
+                "col": 0,
+                "offset": 0
+              },
+              "end": {
+                "line": 0,
+                "col": 11,
+                "offset": 11
+              }
+            },
+            "link": "Collide",
+            "original": "[[Collide]]",
+            "displayText": "Collide"
+          },
+          {
+            "position": {
+              "start": {
+                "line": 1,
+                "col": 0,
+                "offset": 12
+              },
+              "end": {
+                "line": 1,
+                "col": 19,
+                "offset": 31
+              }
+            },
+            "link": "Collide",
+            "original": "[[Collide|aliased]]",
+            "displayText": "aliased"
+          }
+        ],
+        "sections": [
+          "paragraph"
+        ]
+      },
+      "getAllTags": [],
+      "firstLinkpathDest": [
+        {
+          "kind": "link",
+          "original": "[[Collide]]",
+          "link": "Collide",
+          "linkEscaped": "Collide",
+          "displayText": "Collide",
+          "linkpath": "Collide",
+          "subpath": "",
+          "dest": "RenameTargets/Collide.md",
+          "destEscaped": "RenameTargets/Collide.md"
+        },
+        {
+          "kind": "link",
+          "original": "[[Collide|aliased]]",
+          "link": "Collide",
+          "linkEscaped": "Collide",
+          "displayText": "aliased",
+          "linkpath": "Collide",
+          "subpath": "",
+          "dest": "RenameTargets/Collide.md",
+          "destEscaped": "RenameTargets/Collide.md"
+        }
+      ],
+      "resolvedLinks": {
+        "RenameTargets/Collide.md": 2
+      },
+      "unresolvedLinks": {},
+      "backlinks": {},
+      "getBacklinksForFile": {}
+    },
+    "RenameSources/Uses Embedded.md": {
+      "path": "RenameSources/Uses Embedded.md",
+      "pathEscaped": "RenameSources/Uses Embedded.md",
+      "pathIsNFC": true,
+      "name": "Uses Embedded.md",
+      "basename": "Uses Embedded",
+      "extension": "md",
+      "size": 88,
+      "cache": {
+        "embeds": [
+          {
+            "position": {
+              "start": {
+                "line": 0,
+                "col": 0,
+                "offset": 0
+              },
+              "end": {
+                "line": 0,
+                "col": 13,
+                "offset": 13
+              }
+            },
+            "link": "Embedded",
+            "original": "![[Embedded]]",
+            "displayText": "Embedded"
+          },
+          {
+            "position": {
+              "start": {
+                "line": 1,
+                "col": 0,
+                "offset": 14
+              },
+              "end": {
+                "line": 1,
+                "col": 18,
+                "offset": 32
+              }
+            },
+            "link": "Embedded#Part",
+            "original": "![[Embedded#Part]]",
+            "displayText": "Embedded > Part"
+          },
+          {
+            "position": {
+              "start": {
+                "line": 2,
+                "col": 0,
+                "offset": 33
+              },
+              "end": {
+                "line": 2,
+                "col": 18,
+                "offset": 51
+              }
+            },
+            "link": "Embedded#^emb",
+            "original": "![[Embedded#^emb]]",
+            "displayText": "Embedded > ^emb"
+          },
+          {
+            "position": {
+              "start": {
+                "line": 3,
+                "col": 0,
+                "offset": 52
+              },
+              "end": {
+                "line": 3,
+                "col": 35,
+                "offset": 87
+              }
+            },
+            "link": "../RenameTargets/Embedded.md",
+            "original": "![md](../RenameTargets/Embedded.md)",
+            "displayText": "md"
+          }
+        ],
+        "sections": [
+          "paragraph"
+        ]
+      },
+      "getAllTags": [],
+      "firstLinkpathDest": [
+        {
+          "kind": "embed",
+          "original": "![[Embedded]]",
+          "link": "Embedded",
+          "linkEscaped": "Embedded",
+          "displayText": "Embedded",
+          "linkpath": "Embedded",
+          "subpath": "",
+          "dest": "RenameTargets/Embedded.md",
+          "destEscaped": "RenameTargets/Embedded.md"
+        },
+        {
+          "kind": "embed",
+          "original": "![[Embedded#Part]]",
+          "link": "Embedded#Part",
+          "linkEscaped": "Embedded#Part",
+          "displayText": "Embedded > Part",
+          "linkpath": "Embedded",
+          "subpath": "#Part",
+          "dest": "RenameTargets/Embedded.md",
+          "destEscaped": "RenameTargets/Embedded.md"
+        },
+        {
+          "kind": "embed",
+          "original": "![[Embedded#^emb]]",
+          "link": "Embedded#^emb",
+          "linkEscaped": "Embedded#^emb",
+          "displayText": "Embedded > ^emb",
+          "linkpath": "Embedded",
+          "subpath": "#^emb",
+          "dest": "RenameTargets/Embedded.md",
+          "destEscaped": "RenameTargets/Embedded.md"
+        },
+        {
+          "kind": "embed",
+          "original": "![md](../RenameTargets/Embedded.md)",
+          "link": "../RenameTargets/Embedded.md",
+          "linkEscaped": "../RenameTargets/Embedded.md",
+          "displayText": "md",
+          "linkpath": "../RenameTargets/Embedded.md",
+          "subpath": "",
+          "dest": "RenameTargets/Embedded.md",
+          "destEscaped": "RenameTargets/Embedded.md"
+        }
+      ],
+      "resolvedLinks": {
+        "RenameTargets/Embedded.md": 4
+      },
+      "unresolvedLinks": {},
+      "backlinks": {},
+      "getBacklinksForFile": {}
+    },
+    "RenameSources/Uses Headed.md": {
+      "path": "RenameSources/Uses Headed.md",
+      "pathEscaped": "RenameSources/Uses Headed.md",
+      "pathIsNFC": true,
+      "name": "Uses Headed.md",
+      "basename": "Uses Headed",
+      "extension": "md",
+      "size": 109,
+      "cache": {
+        "links": [
+          {
+            "position": {
+              "start": {
+                "line": 0,
+                "col": 0,
+                "offset": 0
+              },
+              "end": {
+                "line": 0,
+                "col": 20,
+                "offset": 20
+              }
+            },
+            "link": "Headed#Section A",
+            "original": "[[Headed#Section A]]",
+            "displayText": "Headed > Section A"
+          },
+          {
+            "position": {
+              "start": {
+                "line": 1,
+                "col": 0,
+                "offset": 21
+              },
+              "end": {
+                "line": 1,
+                "col": 26,
+                "offset": 47
+              }
+            },
+            "link": "Headed#Section A",
+            "original": "[[Headed#Section A|alias]]",
+            "displayText": "alias"
+          },
+          {
+            "position": {
+              "start": {
+                "line": 2,
+                "col": 0,
+                "offset": 48
+              },
+              "end": {
+                "line": 2,
+                "col": 15,
+                "offset": 63
+              }
+            },
+            "link": "Headed#^blk",
+            "original": "[[Headed#^blk]]",
+            "displayText": "Headed > ^blk"
+          },
+          {
+            "position": {
+              "start": {
+                "line": 3,
+                "col": 0,
+                "offset": 64
+              },
+              "end": {
+                "line": 3,
+                "col": 44,
+                "offset": 108
+              }
+            },
+            "link": "../RenameTargets/Headed.md#Section A",
+            "original": "[md](../RenameTargets/Headed.md#Section%20A)",
+            "displayText": "md"
+          }
+        ],
+        "sections": [
+          "paragraph"
+        ]
+      },
+      "getAllTags": [],
+      "firstLinkpathDest": [
+        {
+          "kind": "link",
+          "original": "[[Headed#Section A]]",
+          "link": "Headed#Section A",
+          "linkEscaped": "Headed#Section A",
+          "displayText": "Headed > Section A",
+          "linkpath": "Headed",
+          "subpath": "#Section A",
+          "dest": "RenameTargets/Headed.md",
+          "destEscaped": "RenameTargets/Headed.md"
+        },
+        {
+          "kind": "link",
+          "original": "[[Headed#Section A|alias]]",
+          "link": "Headed#Section A",
+          "linkEscaped": "Headed#Section A",
+          "displayText": "alias",
+          "linkpath": "Headed",
+          "subpath": "#Section A",
+          "dest": "RenameTargets/Headed.md",
+          "destEscaped": "RenameTargets/Headed.md"
+        },
+        {
+          "kind": "link",
+          "original": "[[Headed#^blk]]",
+          "link": "Headed#^blk",
+          "linkEscaped": "Headed#^blk",
+          "displayText": "Headed > ^blk",
+          "linkpath": "Headed",
+          "subpath": "#^blk",
+          "dest": "RenameTargets/Headed.md",
+          "destEscaped": "RenameTargets/Headed.md"
+        },
+        {
+          "kind": "link",
+          "original": "[md](../RenameTargets/Headed.md#Section%20A)",
+          "link": "../RenameTargets/Headed.md#Section A",
+          "linkEscaped": "../RenameTargets/Headed.md#Section A",
+          "displayText": "md",
+          "linkpath": "../RenameTargets/Headed.md",
+          "subpath": "#Section A",
+          "dest": "RenameTargets/Headed.md",
+          "destEscaped": "RenameTargets/Headed.md"
+        }
+      ],
+      "resolvedLinks": {
+        "RenameTargets/Headed.md": 4
+      },
+      "unresolvedLinks": {},
+      "backlinks": {},
+      "getBacklinksForFile": {}
+    },
+    "RenameSources/Uses Shortest.md": {
+      "path": "RenameSources/Uses Shortest.md",
+      "pathEscaped": "RenameSources/Uses Shortest.md",
+      "pathIsNFC": true,
+      "name": "Uses Shortest.md",
+      "basename": "Uses Shortest",
+      "extension": "md",
+      "size": 48,
+      "cache": {
+        "links": [
+          {
+            "position": {
+              "start": {
+                "line": 0,
+                "col": 0,
+                "offset": 0
+              },
+              "end": {
+                "line": 0,
+                "col": 12,
+                "offset": 12
+              }
+            },
+            "link": "Shortest",
+            "original": "[[Shortest]]",
+            "displayText": "Shortest"
+          },
+          {
+            "position": {
+              "start": {
+                "line": 1,
+                "col": 0,
+                "offset": 13
+              },
+              "end": {
+                "line": 1,
+                "col": 34,
+                "offset": 47
+              }
+            },
+            "link": "../RenameTargets/Shortest.md",
+            "original": "[md](../RenameTargets/Shortest.md)",
+            "displayText": "md"
+          }
+        ],
+        "sections": [
+          "paragraph"
+        ]
+      },
+      "getAllTags": [],
+      "firstLinkpathDest": [
+        {
+          "kind": "link",
+          "original": "[[Shortest]]",
+          "link": "Shortest",
+          "linkEscaped": "Shortest",
+          "displayText": "Shortest",
+          "linkpath": "Shortest",
+          "subpath": "",
+          "dest": "RenameTargets/Shortest.md",
+          "destEscaped": "RenameTargets/Shortest.md"
+        },
+        {
+          "kind": "link",
+          "original": "[md](../RenameTargets/Shortest.md)",
+          "link": "../RenameTargets/Shortest.md",
+          "linkEscaped": "../RenameTargets/Shortest.md",
+          "displayText": "md",
+          "linkpath": "../RenameTargets/Shortest.md",
+          "subpath": "",
+          "dest": "RenameTargets/Shortest.md",
+          "destEscaped": "RenameTargets/Shortest.md"
+        }
+      ],
+      "resolvedLinks": {
+        "RenameTargets/Shortest.md": 2
+      },
+      "unresolvedLinks": {},
+      "backlinks": {},
+      "getBacklinksForFile": {}
+    },
+    "RenameTargets/Aliased.md": {
+      "path": "RenameTargets/Aliased.md",
+      "pathEscaped": "RenameTargets/Aliased.md",
+      "pathIsNFC": true,
+      "name": "Aliased.md",
+      "basename": "Aliased",
+      "extension": "md",
+      "size": 10,
+      "cache": {
+        "headings": [
+          {
+            "position": {
+              "start": {
+                "line": 0,
+                "col": 0,
+                "offset": 0
+              },
+              "end": {
+                "line": 0,
+                "col": 9,
+                "offset": 9
+              }
+            },
+            "heading": "Aliased",
+            "level": 1
+          }
+        ],
+        "sections": [
+          "heading"
+        ]
+      },
+      "getAllTags": [],
+      "firstLinkpathDest": [],
+      "resolvedLinks": {},
+      "unresolvedLinks": {},
+      "backlinks": {
+        "RenameSources/Uses Aliased.md": 3
+      },
+      "getBacklinksForFile": {
+        "RenameSources/Uses Aliased.md": 3
+      }
+    },
+    "RenameTargets/Collide.md": {
+      "path": "RenameTargets/Collide.md",
+      "pathEscaped": "RenameTargets/Collide.md",
+      "pathIsNFC": true,
+      "name": "Collide.md",
+      "basename": "Collide",
+      "extension": "md",
+      "size": 10,
+      "cache": {
+        "headings": [
+          {
+            "position": {
+              "start": {
+                "line": 0,
+                "col": 0,
+                "offset": 0
+              },
+              "end": {
+                "line": 0,
+                "col": 9,
+                "offset": 9
+              }
+            },
+            "heading": "Collide",
+            "level": 1
+          }
+        ],
+        "sections": [
+          "heading"
+        ]
+      },
+      "getAllTags": [],
+      "firstLinkpathDest": [],
+      "resolvedLinks": {},
+      "unresolvedLinks": {},
+      "backlinks": {
+        "RenameSources/Uses Collide.md": 2
+      },
+      "getBacklinksForFile": {
+        "RenameSources/Uses Collide.md": 2
+      }
+    },
+    "RenameTargets/Embedded.md": {
+      "path": "RenameTargets/Embedded.md",
+      "pathEscaped": "RenameTargets/Embedded.md",
+      "pathIsNFC": true,
+      "name": "Embedded.md",
+      "basename": "Embedded",
+      "extension": "md",
+      "size": 31,
+      "cache": {
+        "headings": [
+          {
+            "position": {
+              "start": {
+                "line": 0,
+                "col": 0,
+                "offset": 0
+              },
+              "end": {
+                "line": 0,
+                "col": 10,
+                "offset": 10
+              }
+            },
+            "heading": "Embedded",
+            "level": 1
+          },
+          {
+            "position": {
+              "start": {
+                "line": 2,
+                "col": 0,
+                "offset": 12
+              },
+              "end": {
+                "line": 2,
+                "col": 7,
+                "offset": 19
+              }
+            },
+            "heading": "Part",
+            "level": 2
+          }
+        ],
+        "blocks": {
+          "emb": {
+            "position": {
+              "start": {
+                "line": 4,
+                "col": 0,
+                "offset": 21
+              },
+              "end": {
+                "line": 4,
+                "col": 9,
+                "offset": 30
+              }
+            },
+            "id": "emb"
+          }
+        },
+        "sections": [
+          "heading",
+          "heading",
+          "paragraph"
+        ]
+      },
+      "getAllTags": [],
+      "firstLinkpathDest": [],
+      "resolvedLinks": {},
+      "unresolvedLinks": {},
+      "backlinks": {
+        "RenameSources/Uses Embedded.md": 4
+      },
+      "getBacklinksForFile": {
+        "RenameSources/Uses Embedded.md": 4
+      }
+    },
+    "RenameTargets/Headed.md": {
+      "path": "RenameTargets/Headed.md",
+      "pathEscaped": "RenameTargets/Headed.md",
+      "pathIsNFC": true,
+      "name": "Headed.md",
+      "basename": "Headed",
+      "extension": "md",
+      "size": 34,
+      "cache": {
+        "headings": [
+          {
+            "position": {
+              "start": {
+                "line": 0,
+                "col": 0,
+                "offset": 0
+              },
+              "end": {
+                "line": 0,
+                "col": 8,
+                "offset": 8
+              }
+            },
+            "heading": "Headed",
+            "level": 1
+          },
+          {
+            "position": {
+              "start": {
+                "line": 2,
+                "col": 0,
+                "offset": 10
+              },
+              "end": {
+                "line": 2,
+                "col": 12,
+                "offset": 22
+              }
+            },
+            "heading": "Section A",
+            "level": 2
+          }
+        ],
+        "blocks": {
+          "blk": {
+            "position": {
+              "start": {
+                "line": 4,
+                "col": 0,
+                "offset": 24
+              },
+              "end": {
+                "line": 4,
+                "col": 9,
+                "offset": 33
+              }
+            },
+            "id": "blk"
+          }
+        },
+        "sections": [
+          "heading",
+          "heading",
+          "paragraph"
+        ]
+      },
+      "getAllTags": [],
+      "firstLinkpathDest": [],
+      "resolvedLinks": {},
+      "unresolvedLinks": {},
+      "backlinks": {
+        "RenameSources/Uses Headed.md": 4
+      },
+      "getBacklinksForFile": {
+        "RenameSources/Uses Headed.md": 4
+      }
+    },
+    "RenameTargets/Shortest.md": {
+      "path": "RenameTargets/Shortest.md",
+      "pathEscaped": "RenameTargets/Shortest.md",
+      "pathIsNFC": true,
+      "name": "Shortest.md",
+      "basename": "Shortest",
+      "extension": "md",
+      "size": 32,
+      "cache": {
+        "headings": [
+          {
+            "position": {
+              "start": {
+                "line": 0,
+                "col": 0,
+                "offset": 0
+              },
+              "end": {
+                "line": 0,
+                "col": 10,
+                "offset": 10
+              }
+            },
+            "heading": "Shortest",
+            "level": 1
+          },
+          {
+            "position": {
+              "start": {
+                "line": 2,
+                "col": 0,
+                "offset": 12
+              },
+              "end": {
+                "line": 2,
+                "col": 7,
+                "offset": 19
+              }
+            },
+            "heading": "Part",
+            "level": 2
+          }
+        ],
+        "blocks": {
+          "sblk": {
+            "position": {
+              "start": {
+                "line": 4,
+                "col": 0,
+                "offset": 21
+              },
+              "end": {
+                "line": 4,
+                "col": 10,
+                "offset": 31
+              }
+            },
+            "id": "sblk"
+          }
+        },
+        "sections": [
+          "heading",
+          "heading",
+          "paragraph"
+        ]
+      },
+      "getAllTags": [],
+      "firstLinkpathDest": [],
+      "resolvedLinks": {},
+      "unresolvedLinks": {},
+      "backlinks": {
+        "RenameSources/Uses Shortest.md": 2
+      },
+      "getBacklinksForFile": {
+        "RenameSources/Uses Shortest.md": 2
+      }
+    },
+    "Root Ref.md": {
+      "path": "Root Ref.md",
+      "pathEscaped": "Root Ref.md",
+      "pathIsNFC": true,
+      "name": "Root Ref.md",
+      "basename": "Root Ref",
+      "extension": "md",
+      "size": 96,
+      "cache": {
+        "links": [
+          {
+            "position": {
+              "start": {
+                "line": 2,
+                "col": 0,
+                "offset": 12
+              },
+              "end": {
+                "line": 2,
+                "col": 9,
+                "offset": 21
+              }
+            },
+            "link": "Delta",
+            "original": "[[Delta]]",
+            "displayText": "Delta"
+          },
+          {
+            "position": {
+              "start": {
+                "line": 2,
+                "col": 10,
+                "offset": 22
+              },
+              "end": {
+                "line": 2,
+                "col": 19,
+                "offset": 31
+              }
+            },
+            "link": "Alpha",
+            "original": "[[Alpha]]",
+            "displayText": "Alpha"
+          },
+          {
+            "position": {
+              "start": {
+                "line": 2,
+                "col": 20,
+                "offset": 32
+              },
+              "end": {
+                "line": 2,
+                "col": 34,
+                "offset": 46
+              }
+            },
+            "link": "2024/Alpha",
+            "original": "[[2024/Alpha]]",
+            "displayText": "2024/Alpha"
+          },
+          {
+            "position": {
+              "start": {
+                "line": 2,
+                "col": 35,
+                "offset": 47
+              },
+              "end": {
+                "line": 2,
+                "col": 53,
+                "offset": 65
+              }
+            },
+            "link": "Projects/Alpha",
+            "original": "[[Projects/Alpha]]",
+            "displayText": "Projects/Alpha"
+          },
+          {
+            "position": {
+              "start": {
+                "line": 2,
+                "col": 54,
+                "offset": 66
+              },
+              "end": {
+                "line": 2,
+                "col": 67,
+                "offset": 79
+              }
+            },
+            "link": "Sub/Delta",
+            "original": "[[Sub/Delta]]",
+            "displayText": "Sub/Delta"
+          },
+          {
+            "position": {
+              "start": {
+                "line": 2,
+                "col": 68,
+                "offset": 80
+              },
+              "end": {
+                "line": 2,
+                "col": 83,
+                "offset": 95
+              }
+            },
+            "link": "Ideas/Delta",
+            "original": "[[Ideas/Delta]]",
+            "displayText": "Ideas/Delta"
+          }
+        ],
+        "headings": [
+          {
+            "position": {
+              "start": {
+                "line": 0,
+                "col": 0,
+                "offset": 0
+              },
+              "end": {
+                "line": 0,
+                "col": 10,
+                "offset": 10
+              }
+            },
+            "heading": "Root Ref",
+            "level": 1
+          }
+        ],
+        "sections": [
+          "heading",
+          "paragraph"
+        ]
+      },
+      "getAllTags": [],
+      "firstLinkpathDest": [
+        {
+          "kind": "link",
+          "original": "[[Delta]]",
+          "link": "Delta",
+          "linkEscaped": "Delta",
+          "displayText": "Delta",
+          "linkpath": "Delta",
+          "subpath": "",
+          "dest": "Ideas/Delta.md",
+          "destEscaped": "Ideas/Delta.md"
+        },
+        {
+          "kind": "link",
+          "original": "[[Alpha]]",
+          "link": "Alpha",
+          "linkEscaped": "Alpha",
+          "displayText": "Alpha",
+          "linkpath": "Alpha",
+          "subpath": "",
+          "dest": "Alpha.md",
+          "destEscaped": "Alpha.md"
+        },
+        {
+          "kind": "link",
+          "original": "[[2024/Alpha]]",
+          "link": "2024/Alpha",
+          "linkEscaped": "2024/Alpha",
+          "displayText": "2024/Alpha",
+          "linkpath": "2024/Alpha",
+          "subpath": "",
+          "dest": "Archive/2024/Alpha.md",
+          "destEscaped": "Archive/2024/Alpha.md"
+        },
+        {
+          "kind": "link",
+          "original": "[[Projects/Alpha]]",
+          "link": "Projects/Alpha",
+          "linkEscaped": "Projects/Alpha",
+          "displayText": "Projects/Alpha",
+          "linkpath": "Projects/Alpha",
+          "subpath": "",
+          "dest": "Projects/Alpha.md",
+          "destEscaped": "Projects/Alpha.md"
+        },
+        {
+          "kind": "link",
+          "original": "[[Sub/Delta]]",
+          "link": "Sub/Delta",
+          "linkEscaped": "Sub/Delta",
+          "displayText": "Sub/Delta",
+          "linkpath": "Sub/Delta",
+          "subpath": "",
+          "dest": "Work/Sub/Delta.md",
+          "destEscaped": "Work/Sub/Delta.md"
+        },
+        {
+          "kind": "link",
+          "original": "[[Ideas/Delta]]",
+          "link": "Ideas/Delta",
+          "linkEscaped": "Ideas/Delta",
+          "displayText": "Ideas/Delta",
+          "linkpath": "Ideas/Delta",
+          "subpath": "",
+          "dest": "Ideas/Delta.md",
+          "destEscaped": "Ideas/Delta.md"
+        }
+      ],
+      "resolvedLinks": {
+        "Ideas/Delta.md": 2,
+        "Alpha.md": 1,
+        "Archive/2024/Alpha.md": 1,
+        "Projects/Alpha.md": 1,
+        "Work/Sub/Delta.md": 1
+      },
+      "unresolvedLinks": {},
+      "backlinks": {},
+      "getBacklinksForFile": {}
+    },
+    "Self Links.md": {
+      "path": "Self Links.md",
+      "pathEscaped": "Self Links.md",
+      "pathIsNFC": true,
+      "name": "Self Links.md",
+      "basename": "Self Links",
+      "extension": "md",
+      "size": 73,
+      "cache": {
+        "links": [
+          {
+            "position": {
+              "start": {
+                "line": 2,
+                "col": 0,
+                "offset": 7
+              },
+              "end": {
+                "line": 2,
+                "col": 8,
+                "offset": 15
+              }
+            },
+            "link": "#Top",
+            "original": "[[#Top]]",
+            "displayText": "Top"
+          },
+          {
+            "position": {
+              "start": {
+                "line": 2,
+                "col": 9,
+                "offset": 16
+              },
+              "end": {
+                "line": 2,
+                "col": 24,
+                "offset": 31
+              }
+            },
+            "link": "#^selfblock",
+            "original": "[[#^selfblock]]",
+            "displayText": "^selfblock"
+          },
+          {
+            "position": {
+              "start": {
+                "line": 2,
+                "col": 25,
+                "offset": 32
+              },
+              "end": {
+                "line": 2,
+                "col": 43,
+                "offset": 50
+              }
+            },
+            "link": "Self Links#Top",
+            "original": "[[Self Links#Top]]",
+            "displayText": "Self Links > Top"
+          }
+        ],
+        "headings": [
+          {
+            "position": {
+              "start": {
+                "line": 0,
+                "col": 0,
+                "offset": 0
+              },
+              "end": {
+                "line": 0,
+                "col": 5,
+                "offset": 5
+              }
+            },
+            "heading": "Top",
+            "level": 1
+          }
+        ],
+        "blocks": {
+          "selfblock": {
+            "position": {
+              "start": {
+                "line": 4,
+                "col": 0,
+                "offset": 52
+              },
+              "end": {
+                "line": 4,
+                "col": 20,
+                "offset": 72
+              }
+            },
+            "id": "selfblock"
+          }
+        },
+        "sections": [
+          "heading",
+          "paragraph",
+          "paragraph"
+        ]
+      },
+      "getAllTags": [],
+      "firstLinkpathDest": [
+        {
+          "kind": "link",
+          "original": "[[#Top]]",
+          "link": "#Top",
+          "linkEscaped": "#Top",
+          "displayText": "Top",
+          "linkpath": "",
+          "subpath": "#Top",
+          "dest": "Self Links.md",
+          "destEscaped": "Self Links.md"
+        },
+        {
+          "kind": "link",
+          "original": "[[#^selfblock]]",
+          "link": "#^selfblock",
+          "linkEscaped": "#^selfblock",
+          "displayText": "^selfblock",
+          "linkpath": "",
+          "subpath": "#^selfblock",
+          "dest": "Self Links.md",
+          "destEscaped": "Self Links.md"
+        },
+        {
+          "kind": "link",
+          "original": "[[Self Links#Top]]",
+          "link": "Self Links#Top",
+          "linkEscaped": "Self Links#Top",
+          "displayText": "Self Links > Top",
+          "linkpath": "Self Links",
+          "subpath": "#Top",
+          "dest": "Self Links.md",
+          "destEscaped": "Self Links.md"
+        }
+      ],
+      "resolvedLinks": {
+        "Self Links.md": 3
+      },
+      "unresolvedLinks": {},
+      "backlinks": {
+        "Self Links.md": 3
+      },
+      "getBacklinksForFile": {
+        "Self Links.md": 3
+      }
+    },
+    "Tags.md": {
+      "path": "Tags.md",
+      "pathEscaped": "Tags.md",
+      "pathIsNFC": true,
+      "name": "Tags.md",
+      "basename": "Tags",
+      "extension": "md",
+      "size": 260,
+      "cache": {
+        "headings": [
+          {
+            "position": {
+              "start": {
+                "line": 5,
+                "col": 0,
+                "offset": 75
+              },
+              "end": {
+                "line": 5,
+                "col": 6,
+                "offset": 81
+              }
+            },
+            "heading": "Tags",
+            "level": 1
+          },
+          {
+            "position": {
+              "start": {
+                "line": 10,
+                "col": 0,
+                "offset": 209
+              },
+              "end": {
+                "line": 10,
+                "col": 23,
+                "offset": 232
+              }
+            },
+            "heading": "Heading #heading-tag",
+            "level": 2
+          }
+        ],
+        "tags": [
+          {
+            "position": {
+              "start": {
+                "line": 7,
+                "col": 0,
+                "offset": 83
+              },
+              "end": {
+                "line": 7,
+                "col": 7,
+                "offset": 90
+              }
+            },
+            "tag": "#inline"
+          },
+          {
+            "position": {
+              "start": {
+                "line": 7,
+                "col": 8,
+                "offset": 91
+              },
+              "end": {
+                "line": 7,
+                "col": 21,
+                "offset": 104
+              }
+            },
+            "tag": "#inline/child"
+          },
+          {
+            "position": {
+              "start": {
+                "line": 7,
+                "col": 22,
+                "offset": 105
+              },
+              "end": {
+                "line": 7,
+                "col": 28,
+                "offset": 111
+              }
+            },
+            "tag": "#UPPER"
+          },
+          {
+            "position": {
+              "start": {
+                "line": 7,
+                "col": 29,
+                "offset": 112
+              },
+              "end": {
+                "line": 7,
+                "col": 35,
+                "offset": 118
+              }
+            },
+            "tag": "#upper"
+          },
+          {
+            "position": {
+              "start": {
+                "line": 7,
+                "col": 36,
+                "offset": 119
+              },
+              "end": {
+                "line": 7,
+                "col": 58,
+                "offset": 141
+              }
+            },
+            "tag": "#tag/with/deep/nesting"
+          },
+          {
+            "position": {
+              "start": {
+                "line": 7,
+                "col": 59,
+                "offset": 142
+              },
+              "end": {
+                "line": 7,
+                "col": 63,
+                "offset": 146
+              }
+            },
+            "tag": "#日本語"
+          },
+          {
+            "position": {
+              "start": {
+                "line": 8,
+                "col": 23,
+                "offset": 170
+              },
+              "end": {
+                "line": 8,
+                "col": 27,
+                "offset": 174
+              }
+            },
+            "tag": "#end"
+          },
+          {
+            "position": {
+              "start": {
+                "line": 9,
+                "col": 15,
+                "offset": 191
+              },
+              "end": {
+                "line": 9,
+                "col": 22,
+                "offset": 198
+              }
+            },
+            "tag": "#trail/"
+          },
+          {
+            "position": {
+              "start": {
+                "line": 9,
+                "col": 27,
+                "offset": 203
+              },
+              "end": {
+                "line": 9,
+                "col": 32,
+                "offset": 208
+              }
+            },
+            "tag": "#a/b/"
+          },
+          {
+            "position": {
+              "start": {
+                "line": 10,
+                "col": 11,
+                "offset": 220
+              },
+              "end": {
+                "line": 10,
+                "col": 23,
+                "offset": 232
+              }
+            },
+            "tag": "#heading-tag"
+          },
+          {
+            "position": {
+              "start": {
+                "line": 11,
+                "col": 11,
+                "offset": 244
+              },
+              "end": {
+                "line": 11,
+                "col": 20,
+                "offset": 253
+              }
+            },
+            "tag": "#task-tag"
+          }
+        ],
+        "frontmatter": {
+          "tags": [
+            "fm-one",
+            "fm-two",
+            "Fm-One"
+          ],
+          "tag": "singular-key",
+          "Tags": "capital-key"
+        },
+        "frontmatterLinks": [],
+        "frontmatterPosition": {
+          "start": {
+            "line": 0,
+            "col": 0,
+            "offset": 0
+          },
+          "end": {
+            "line": 4,
+            "col": 3,
+            "offset": 74
+          }
+        },
+        "sections": [
+          "yaml",
+          "heading",
+          "paragraph",
+          "heading",
+          "list"
+        ],
+        "listItems": 1
+      },
+      "getAllTags": [
+        "#fm-one",
+        "#fm-two",
+        "#Fm-One",
+        "#inline",
+        "#inline/child",
+        "#UPPER",
+        "#upper",
+        "#tag/with/deep/nesting",
+        "#日本語",
+        "#end",
+        "#trail/",
+        "#a/b/",
+        "#heading-tag",
+        "#task-tag"
+      ],
+      "firstLinkpathDest": [],
+      "resolvedLinks": {},
+      "unresolvedLinks": {},
+      "backlinks": {},
+      "getBacklinksForFile": {}
+    },
+    "Work/Sub/Delta.md": {
+      "path": "Work/Sub/Delta.md",
+      "pathEscaped": "Work/Sub/Delta.md",
+      "pathIsNFC": true,
+      "name": "Delta.md",
+      "basename": "Delta",
+      "extension": "md",
+      "size": 19,
+      "cache": {
+        "headings": [
+          {
+            "position": {
+              "start": {
+                "line": 0,
+                "col": 0,
+                "offset": 0
+              },
+              "end": {
+                "line": 0,
+                "col": 18,
+                "offset": 18
+              }
+            },
+            "heading": "Delta (Work/Sub)",
+            "level": 1
+          }
+        ],
+        "sections": [
+          "heading"
+        ]
+      },
+      "getAllTags": [],
+      "firstLinkpathDest": [],
+      "resolvedLinks": {},
+      "unresolvedLinks": {},
+      "backlinks": {
+        "Home.md": 1,
+        "Root Ref.md": 1,
+        "Work/Sub/Ref Work.md": 1
+      },
+      "getBacklinksForFile": {
+        "Home.md": 1,
+        "Root Ref.md": 1,
+        "Work/Sub/Ref Work.md": 1
+      }
+    },
+    "Work/Sub/Ref Work.md": {
+      "path": "Work/Sub/Ref Work.md",
+      "pathEscaped": "Work/Sub/Ref Work.md",
+      "pathIsNFC": true,
+      "name": "Ref Work.md",
+      "basename": "Ref Work",
+      "extension": "md",
+      "size": 32,
+      "cache": {
+        "links": [
+          {
+            "position": {
+              "start": {
+                "line": 2,
+                "col": 0,
+                "offset": 12
+              },
+              "end": {
+                "line": 2,
+                "col": 9,
+                "offset": 21
+              }
+            },
+            "link": "Delta",
+            "original": "[[Delta]]",
+            "displayText": "Delta"
+          },
+          {
+            "position": {
+              "start": {
+                "line": 2,
+                "col": 10,
+                "offset": 22
+              },
+              "end": {
+                "line": 2,
+                "col": 19,
+                "offset": 31
+              }
+            },
+            "link": "Alpha",
+            "original": "[[Alpha]]",
+            "displayText": "Alpha"
+          }
+        ],
+        "headings": [
+          {
+            "position": {
+              "start": {
+                "line": 0,
+                "col": 0,
+                "offset": 0
+              },
+              "end": {
+                "line": 0,
+                "col": 10,
+                "offset": 10
+              }
+            },
+            "heading": "Ref Work",
+            "level": 1
+          }
+        ],
+        "sections": [
+          "heading",
+          "paragraph"
+        ]
+      },
+      "getAllTags": [],
+      "firstLinkpathDest": [
+        {
+          "kind": "link",
+          "original": "[[Delta]]",
+          "link": "Delta",
+          "linkEscaped": "Delta",
+          "displayText": "Delta",
+          "linkpath": "Delta",
+          "subpath": "",
+          "dest": "Work/Sub/Delta.md",
+          "destEscaped": "Work/Sub/Delta.md"
+        },
+        {
+          "kind": "link",
+          "original": "[[Alpha]]",
+          "link": "Alpha",
+          "linkEscaped": "Alpha",
+          "displayText": "Alpha",
+          "linkpath": "Alpha",
+          "subpath": "",
+          "dest": "Alpha.md",
+          "destEscaped": "Alpha.md"
+        }
+      ],
+      "resolvedLinks": {
+        "Work/Sub/Delta.md": 1,
+        "Alpha.md": 1
+      },
+      "unresolvedLinks": {},
+      "backlinks": {},
+      "getBacklinksForFile": {}
+    },
+    "attachments/spec.pdf": {
+      "path": "attachments/spec.pdf",
+      "pathEscaped": "attachments/spec.pdf",
+      "pathIsNFC": true,
+      "name": "spec.pdf",
+      "basename": "spec",
+      "extension": "pdf",
+      "size": 45,
+      "cache": {},
+      "getAllTags": [],
+      "firstLinkpathDest": [],
+      "resolvedLinks": null,
+      "unresolvedLinks": null,
+      "backlinks": {
+        "Home.md": 1
+      },
+      "getBacklinksForFile": {
+        "Home.md": 1
+      }
+    },
+    "images/diagram.png": {
+      "path": "images/diagram.png",
+      "pathEscaped": "images/diagram.png",
+      "pathIsNFC": true,
+      "name": "diagram.png",
+      "basename": "diagram",
+      "extension": "png",
+      "size": 70,
+      "cache": {},
+      "getAllTags": [],
+      "firstLinkpathDest": [],
+      "resolvedLinks": null,
+      "unresolvedLinks": null,
+      "backlinks": {
+        "Home.md": 1,
+        "Docs/Markdown Links.md": 1
+      },
+      "getBacklinksForFile": {
+        "Home.md": 1,
+        "Docs/Markdown Links.md": 1
+      }
+    },
+    "photo.png": {
+      "path": "photo.png",
+      "pathEscaped": "photo.png",
+      "pathIsNFC": true,
+      "name": "photo.png",
+      "basename": "photo",
+      "extension": "png",
+      "size": 70,
+      "cache": {},
+      "getAllTags": [],
+      "firstLinkpathDest": [],
+      "resolvedLinks": null,
+      "unresolvedLinks": null,
+      "backlinks": {
+        "Callouts.md": 1,
+        "Home.md": 2
+      },
+      "getBacklinksForFile": {
+        "Callouts.md": 1,
+        "Home.md": 2
+      }
+    }
+  },
+  "vaultTags": {
+    "#beta-tag": 1,
+    "#callout-tag": 1,
+    "#café": 1,
+    "#café": 1,
+    "#greek": 1,
+    "#hash-in-fm": 1,
+    "#fm-tag": 1,
+    "#nested/fm-child": 1,
+    "#nested": 2,
+    "#comment-tag": 1,
+    "#comment-multi-tag": 1,
+    "#home": 1,
+    "#nested/child": 1,
+    "#CamelTag": 1,
+    "#with-dash": 1,
+    "#with_underscore": 1,
+    "#1a": 1,
+    "#notatag": 1,
+    "#fm-one": 2,
+    "#fm-two": 1,
+    "#inline": 2,
+    "#inline/child": 1,
+    "#UPPER": 2,
+    "#tag/with/deep/nesting": 1,
+    "#tag/with/deep": 1,
+    "#tag/with": 1,
+    "#tag": 1,
+    "#日本語": 1,
+    "#end": 1,
+    "#trail": 1,
+    "#a/b": 1,
+    "#a": 1,
+    "#heading-tag": 1,
+    "#task-tag": 1,
+    "#daily": 1
+  },
+  "propertyInfos": {
+    "aliases": {
+      "name": "aliases",
+      "widget": "aliases"
+    },
+    "cssclasses": {
+      "name": "cssclasses",
+      "widget": "multitext"
+    },
+    "tags": {
+      "name": "tags",
+      "widget": "tags"
+    },
+    "title": {
+      "name": "title",
+      "widget": "text"
+    },
+    "related": {
+      "name": "related",
+      "widget": "text"
+    },
+    "links": {
+      "name": "links",
+      "widget": "multitext"
+    },
+    "count": {
+      "name": "count",
+      "widget": "number"
+    },
+    "done": {
+      "name": "done",
+      "widget": "checkbox"
+    },
+    "date": {
+      "name": "date",
+      "widget": "date"
+    },
+    "tag": {
+      "name": "tag",
+      "widget": "text"
+    }
+  }
+}

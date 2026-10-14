@@ -1,0 +1,2 @@
+[[Collide]]
+[[Collide|aliased]]

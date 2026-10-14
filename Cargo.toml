@@ -1,6 +1,7 @@
 [workspace]
 resolver = "3"
 members = [
+    "crates/notes-index",
     "crates/persistence",
     "services/notes",
 ]
@@ -14,6 +15,7 @@ repository   = "https://github.com/po4yka/ratatoskr-notes"
 
 [workspace.dependencies]
 # ---- in-repo ----
+ratatoskr-notes-index       = { version = "0.1.0", path = "crates/notes-index" }
 ratatoskr-notes-persistence = { version = "0.1.0", path = "crates/persistence" }
 
 # ---- fleet contracts ----
@@ -61,6 +63,10 @@ sha2 = { version = "0.10", default-features = false, features = ["std"] }
 # The watcher of a working tree reads inotify on Linux (workspace design D3), through the tokio
 # reactor. No second thread and no unsafe code in this repository.
 inotify = { version = "0.11", default-features = false, features = ["stream"] }
+
+# ---- the index of a note (workspace design D8) ----
+# Paths and link text are compared and published in Unicode NFC.
+unicode-normalization = { version = "0.1.25", default-features = false, features = ["std"] }
 
 # ---- configuration ----
 figment = { version = "0.10", features = ["env"] }

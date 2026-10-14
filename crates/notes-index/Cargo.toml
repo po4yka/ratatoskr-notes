@@ -1,0 +1,19 @@
+[package]
+name        = "ratatoskr-notes-index"
+description = "The index of a Markdown note with the Obsidian extensions, and link resolution with Obsidian's rules."
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+
+[dependencies]
+serde.workspace      = true
+serde_json.workspace = true
+
+[dev-dependencies]
+serde_json.workspace            = true
+unicode-normalization.workspace = true
+
+[lints]
+workspace = true

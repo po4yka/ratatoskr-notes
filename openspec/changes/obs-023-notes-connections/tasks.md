@@ -65,3 +65,16 @@ service reads only that namespace. Owner decision B: the working tree of a conne
 - [x] 6.20 GREEN: the watcher opens the root of its tree once, at its start: it opens the parent of the tree, then the tree with `O_NOFOLLOW | O_DIRECTORY`, and stops with an error when the tree is a symbolic link. It keeps that file descriptor while it runs, and opens each file and each directory beneath it, on Linux and on other platforms. Also review item L-4: wrap the unit comments at 100 columns, name both Linux-only watcher tests in `DEVELOPMENT.md`, and shorten the longest new sentences. Verify 6.19, 6.13 and 6.3.
 - [x] 6.21 RED: add `services/notes/tests/start_umask.rs::strict_umask_fails_the_start` (Linux only; review item M-1): with the umask 0077, `serve()` returns an error that names the umask before it reaches the database. `RATATOSKR__BLOBS__ROOT` is added to the configuration and is not used yet. Confirm that it fails by assertion.
 - [x] 6.22 GREEN: `serve()` opens the blob store with `BlobStore::open` from `RATATOSKR__BLOBS__ROOT` (default `/mnt/nvme/ratatoskr/blobs/ratatoskr-notes`) as its first step, so a umask stricter than 0027 fails the start with exit 1. Also review item L-2: write the parent of each new blob directory to disk. Also review item L-1: add `sync_supervisor.rs::lines_go_to_their_own_connection`. Verify 6.21 and 6.15.
+
+## 7. Index, file events and read API (workspace tasks 7.1 to 7.8)
+
+The numbers of this group are the numbers of the workspace tasks.
+
+- [x] 7.1 RED: commit the fixture vault and the engine output of spike 3.6 under `crates/notes-index/tests/fixtures/obsidian-1.14.4/`, and add `crates/notes-index/tests/golden.rs::index_matches_obsidian_engine_output`, which compares the links, the embeds, the frontmatter links, the resolved and unresolved links, the backlinks, the tags, the properties, the headings and the block ids of each fixture file with the stored output. Add also `parse.rs::every_link_form_is_indexed`, `parse.rs::comment_links_count_and_code_links_do_not` and `resolve.rs::same_folder_then_shortest_path_wins`. The crate `ratatoskr-notes-index` has its types and an empty parser. Confirm that the four fail by assertion.
+- [ ] 7.2 GREEN: implement the parser and the link resolution of workspace design D8. Verify the four tests of 7.1.
+- [ ] 7.3 RED: `crates/notes-index/tests/paths.rs::case_fold_collision_publishes_one`, `obsidian_config_is_never_published` and `nfd_path_is_published_as_nfc`, as workspace task 7.3 words them. Confirm that all three fail by assertion.
+- [ ] 7.4 GREEN: implement NFC paths, path keys (Unicode default case folding), collisions and exclusions (`.obsidian/`, `.trash/`, the excluded folders of the owner, and files over the size limit, 64 MiB by default). Verify 7.3.
+- [ ] 7.5 RED: in `services/notes/tests/file_events.rs`, the five tests of workspace task 7.5. Confirm that all five fail by assertion.
+- [ ] 7.6 GREEN: implement revisions, the outbox rows of `notes.file.changed.v1`, the gapless connection sequence, the excluded-folder setting, and the outbox relay to NATS. Verify 7.5.
+- [ ] 7.7 RED: `services/notes/tests/read_api.rs::foreign_connection_is_not_found` and `file_routes_refuse_writes`, as workspace task 7.7 words them. Confirm that both fail by assertion.
+- [ ] 7.8 GREEN: implement the read routes on the listener 8099. Verify 7.7.

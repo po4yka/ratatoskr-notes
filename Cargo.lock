@@ -1731,6 +1731,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "ratatoskr-notes-index"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "unicode-normalization",
+]
+
+[[package]]
 name = "ratatoskr-notes-persistence"
 version = "0.1.0"
 dependencies = [
