@@ -223,9 +223,21 @@ async fn insert<B: SystemdBus>(
         })?;
     match outcome {
         CreateOutcome::Created => Ok(()),
+        // A second device of the same channel presents the vault id of a connection that has its
+        // device: the vault folder was copied or synced by another tool (workspace design D5).
+        CreateOutcome::VaultAlreadyConnected {
+            channel, device_id, ..
+        } if channel == new.channel
+            && device_id.is_some()
+            && new.device_id.is_some()
+            && device_id != new.device_id =>
+        {
+            Err(ApiFault::ChannelMismatch)
+        }
         CreateOutcome::VaultAlreadyConnected {
             connection_id,
             channel,
+            ..
         } => Err(ApiFault::VaultAlreadyConnected {
             connection_id,
             channel,

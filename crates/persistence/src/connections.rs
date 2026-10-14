@@ -52,6 +52,8 @@ pub enum CreateOutcome {
         connection_id: Uuid,
         /// The wire word of its channel.
         channel: String,
+        /// The device of a `plugin` or `cli` connection.
+        device_id: Option<Uuid>,
     },
 }
 
@@ -113,8 +115,8 @@ impl Database {
                 return Ok(CreateOutcome::Created);
             }
 
-            let existing: Option<(Uuid, String)> = sqlx::query_as(&format!(
-                "select connection_id, channel from notes.connections
+            let existing: Option<(Uuid, String, Option<Uuid>)> = sqlx::query_as(&format!(
+                "select connection_id, channel, device_id from notes.connections
                  where owner_id = $1 and vault_key = $2 and {HOLDS_VAULT_KEY}"
             ))
             .bind(new.owner_id)
@@ -126,10 +128,11 @@ impl Database {
                 .rollback()
                 .await
                 .map_err(PersistenceError::Query)?;
-            if let Some((connection_id, channel)) = existing {
+            if let Some((connection_id, channel, device_id)) = existing {
                 return Ok(CreateOutcome::VaultAlreadyConnected {
                     connection_id,
                     channel,
+                    device_id,
                 });
             }
         }

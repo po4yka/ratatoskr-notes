@@ -18,6 +18,8 @@ pub struct LockedConnection {
     pub owner_id: Uuid,
     /// The wire word of its channel.
     pub channel: String,
+    /// The device of a `plugin` or `cli` connection, the only one whose changes it takes.
+    pub device_id: Option<Uuid>,
     /// The folders that the owner excluded.
     pub excluded_folders: Vec<String>,
     /// The highest device change sequence that is committed; 0 for a `sync` connection.
@@ -65,6 +67,9 @@ pub struct FileTransaction {
     connection_id: Uuid,
 }
 
+/// The row of a [`LockedConnection`]: owner, channel, device, excluded folders, device sequence.
+type LockedRow = (Uuid, String, Option<Uuid>, Vec<String>, i64);
+
 fn query_error(error: sqlx::Error) -> PersistenceError {
     PersistenceError::Query(error)
 }
@@ -82,8 +87,9 @@ impl Database {
         connection_id: Uuid,
     ) -> Result<Option<(FileTransaction, LockedConnection)>, PersistenceError> {
         let mut transaction = self.pool.begin().await.map_err(query_error)?;
-        let row: Option<(Uuid, String, Vec<String>, i64)> = sqlx::query_as(
-            "select owner_id, channel, excluded_folders, device_sequence from notes.connections
+        let row: Option<LockedRow> = sqlx::query_as(
+            "select owner_id, channel, device_id, excluded_folders, device_sequence
+             from notes.connections
              where connection_id = $1 and state in ('connecting', 'active')
              for update",
         )
@@ -91,8 +97,8 @@ impl Database {
         .fetch_optional(&mut *transaction)
         .await
         .map_err(query_error)?;
-        Ok(
-            row.map(|(owner_id, channel, excluded_folders, device_sequence)| {
+        Ok(row.map(
+            |(owner_id, channel, device_id, excluded_folders, device_sequence)| {
                 (
                     FileTransaction {
                         transaction,
@@ -101,13 +107,14 @@ impl Database {
                     LockedConnection {
                         owner_id,
                         channel,
+                        device_id,
                         excluded_folders,
                         // A CHECK keeps the sequence at 0 or more.
                         device_sequence: u64::try_from(device_sequence).unwrap_or_default(),
                     },
                 )
-            }),
-        )
+            },
+        ))
     }
 }
 

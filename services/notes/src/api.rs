@@ -22,6 +22,7 @@ use tokio_util::task::TaskTracker;
 use uuid::Uuid;
 
 use crate::blobs::BlobStore;
+use crate::channel::device_kind_of;
 use crate::events;
 use crate::files::{self, ExcludedFoldersSet, FileRecorder};
 use crate::operation::{self, Report};
@@ -540,15 +541,6 @@ fn device_claim(headers: &HeaderMap) -> Result<DeviceClaim<'_>, ApiFault> {
         .filter(|kind| !kind.is_empty())
         .ok_or(ApiFault::Unauthenticated)?;
     Ok(DeviceClaim { device_id, kind })
-}
-
-/// The device kind that a device channel takes (workspace design D5 and D6).
-const fn device_kind_of(channel: &str) -> Option<&'static str> {
-    match channel.as_bytes() {
-        b"plugin" => Some("obsidian_plugin"),
-        b"cli" => Some("export_agent"),
-        _ => None,
-    }
 }
 
 /// The owner from the minted claim.

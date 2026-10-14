@@ -15,12 +15,51 @@ use std::collections::BTreeSet;
 use ratatoskr_identifiers::DigestHex;
 use ratatoskr_notes_contracts::{FileChangeKind, VaultPath};
 use ratatoskr_notes_index::paths::nfc_path;
+use ratatoskr_notes_persistence::{FileTransaction, LockedConnection};
 use uuid::Uuid;
 
 use crate::files::{FileRecorder, RecordError, Revision};
 
 /// The most changes of one batch.
 pub const MAX_BATCH_CHANGES: usize = 256;
+
+/// The device kind that a device channel takes (workspace design D5 and D6).
+#[must_use]
+pub const fn device_kind_of(channel: &str) -> Option<&'static str> {
+    match channel.as_bytes() {
+        b"plugin" => Some("obsidian_plugin"),
+        b"cli" => Some("export_agent"),
+        _ => None,
+    }
+}
+
+/// The owner and the device of a request, from the claims that Edge mints.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Sender<'a> {
+    /// The owner.
+    pub owner_id: Uuid,
+    /// The paired device.
+    pub device_id: Uuid,
+    /// The kind of the device, for example `obsidian_plugin`.
+    pub kind: &'a str,
+}
+
+/// Whether `sender` may send the changes of `connection`. A connection of another owner is
+/// [`BatchOutcome::NotFound`], as one that does not exist. A device of another kind than the
+/// channel, or another device than the one that created the connection, is
+/// [`BatchOutcome::ChannelMismatch`].
+#[must_use]
+pub fn admits(sender: &Sender<'_>, connection: &LockedConnection) -> Option<BatchOutcome> {
+    if connection.owner_id != sender.owner_id {
+        return Some(BatchOutcome::NotFound);
+    }
+    if device_kind_of(&connection.channel) != Some(sender.kind)
+        || connection.device_id != Some(sender.device_id)
+    {
+        return Some(BatchOutcome::ChannelMismatch);
+    }
+    None
+}
 
 /// One change of a batch, as a device sends it.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
@@ -56,8 +95,10 @@ pub enum BatchOutcome {
     TooLarge,
     /// A change breaks a rule of the batch format; nothing is committed.
     Invalid,
-    /// No connection takes changes under this id.
+    /// No connection of the owner takes changes under this id.
     NotFound,
+    /// The device is of another kind than the channel, or is not the device of the connection.
+    ChannelMismatch,
 }
 
 /// A change after its checks: an NFC path that the contract accepts, and the facts of the bytes
@@ -77,6 +118,7 @@ struct Checked {
 /// [`RecordError`] when the database fails or an event cannot be built.
 pub async fn apply_batch(
     recorder: &FileRecorder,
+    sender: &Sender<'_>,
     connection_id: Uuid,
     changes: &[DeviceChange],
 ) -> Result<BatchOutcome, RecordError> {
@@ -99,6 +141,9 @@ pub async fn apply_batch(
     else {
         return Ok(BatchOutcome::NotFound);
     };
+    if let Some(refused) = admits(sender, &connection) {
+        return Ok(refused);
+    }
     let committed = connection.device_sequence;
     let first = checked.first().map_or(0, |change| change.sequence);
     if first > committed.saturating_add(1) {
@@ -151,8 +196,8 @@ pub async fn apply_batch(
 /// Apply one change that passed its checks.
 async fn apply(
     recorder: &FileRecorder,
-    transaction: &mut ratatoskr_notes_persistence::FileTransaction,
-    connection: &ratatoskr_notes_persistence::LockedConnection,
+    transaction: &mut FileTransaction,
+    connection: &LockedConnection,
     connection_id: Uuid,
     change: &Checked,
     note_index: Option<&serde_json::Value>,
