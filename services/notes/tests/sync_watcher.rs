@@ -5,8 +5,11 @@
 //! A file is read only when its path stays inside the tree: a symbolic link in the tree never makes
 //! a revision of a file outside it (review item M3 of group 6).
 //!
+//! The tree itself is not read through a symbolic link either (review item H-1).
+//!
 //! The tests run under paused tokio time, so the settle window and the rescan take no real time.
-//! The watcher reads inotify, so the tests run on Linux only. On macOS they are ignored.
+//! The tests of events need inotify, so they run on Linux only. On macOS they are ignored. The test
+//! of a linked tree needs only the first read of the tree, so it runs on every platform.
 
 #![allow(
     clippy::expect_used,
@@ -165,6 +168,41 @@ async fn linked_folder_does_not_leak_outside_content() {
             path: PathBuf::from("Daily/first.md")
         }],
         "the first note is no longer in the tree"
+    );
+
+    stop.cancel();
+    watching.await.expect("the watcher stops");
+}
+
+#[tokio::test(start_paused = true)]
+async fn linked_tree_root_leaks_no_outside_content() {
+    let host = tempfile::tempdir().expect("a host directory");
+    let trees = host.path().join("trees");
+    let outside = host.path().join("outside");
+    std::fs::create_dir(&trees).expect("the trees root");
+    std::fs::create_dir(&outside).expect("a directory outside the trees root");
+    std::fs::write(outside.join("secret.md"), OUTSIDE).expect("a file outside is written");
+    // ob, which owns the trees root, puts a link to the outside directory in place of the tree.
+    let tree = trees.join("0192");
+    std::os::unix::fs::symlink(&outside, &tree).expect("a link takes the place of the tree");
+    let blob_root = tempfile::tempdir().expect("a blob root");
+    let (sender, mut changes) = mpsc::channel(16);
+    let stop = CancellationToken::new();
+    let watching = watcher::watch(tree, BlobStore::new(blob_root.path()), sender, stop.clone());
+
+    // Every change for the first read, the settle window and the next rescan.
+    let mut seen = Vec::new();
+    while let Ok(Some(change)) = tokio::time::timeout(Duration::from_mins(20), changes.recv()).await
+    {
+        seen.push(change);
+    }
+    assert!(
+        seen.is_empty(),
+        "no change comes from a directory outside the trees root: {seen:?}"
+    );
+    assert!(
+        !holds(blob_root.path(), OUTSIDE),
+        "no blob holds the content outside the trees root"
     );
 
     stop.cancel();
