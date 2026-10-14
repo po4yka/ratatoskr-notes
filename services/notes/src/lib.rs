@@ -147,8 +147,8 @@ pub async fn serve<B: SystemdBus>(
     shutdown: impl Future<Output = ()> + Send,
 ) -> Result<(), String> {
     // First, so that a umask that can remove the setgid bit of a blob directory stops the start
-    // (workspace design D12). The watcher of task 7.6 gets this store.
-    let _blobs = BlobStore::open(&config.blobs.root)
+    // (workspace design D12). The read routes read the bytes from this store.
+    let blobs = BlobStore::open(&config.blobs.root)
         .map_err(|error| format!("the blob store cannot be used: {error}"))?;
     let database = Database::connect(
         &config.database.url,
@@ -185,6 +185,7 @@ pub async fn serve<B: SystemdBus>(
     }
 
     let state = ApiState::new(database.clone(), systemd)
+        .with_blobs(blobs)
         .with_key_file(config.secrets.key_file.clone())
         .with_credentials_dir(credentials_dir)
         .with_max_logins(config.connections.max_logins);

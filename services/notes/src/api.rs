@@ -12,7 +12,7 @@ use std::sync::Arc;
 use axum::extract::rejection::{JsonRejection, PathRejection};
 use axum::extract::{DefaultBodyLimit, Path, State};
 use axum::http::{HeaderMap, StatusCode};
-use axum::routing::{delete, post, put};
+use axum::routing::{delete, get, post, put};
 use axum::{Json, Router};
 use ratatoskr_notes_contracts::{VaultChannel, VaultDisplayName};
 use ratatoskr_notes_persistence::{CreateOutcome, Database, NewConnection, NewSecret, OutboxEvent};
@@ -30,6 +30,7 @@ use crate::secrets::{Sealed, SecretKind, SecretsKey};
 use crate::supervisor::Supervisor;
 
 mod fault;
+mod read;
 mod removals;
 
 use crate::systemd::{JobResult, SystemdBus, UnitName};
@@ -228,7 +229,22 @@ impl<B: SystemdBus> ApiState<B> {
 pub fn domain_router<B: SystemdBus>(state: ApiState<B>) -> Router {
     remove_stale_credentials(&state.credentials_dir);
     Router::new()
-        .route("/v1/notes/connections", post(create_connection::<B>))
+        .route(
+            "/v1/notes/connections",
+            post(create_connection::<B>).get(read::list_connections::<B>),
+        )
+        .route(
+            "/v1/notes/connections/{connection_id}/files",
+            get(read::list_files::<B>),
+        )
+        .route(
+            "/v1/notes/connections/{connection_id}/files/{*path}",
+            get(read::read_file::<B>),
+        )
+        .route(
+            "/v1/notes/connections/{connection_id}/index/{*path}",
+            get(read::read_index::<B>),
+        )
         .route(
             "/v1/notes/connections/{connection_id}",
             delete(remove_connection::<B>),

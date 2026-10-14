@@ -39,8 +39,9 @@ sqlx = { version = "0.8.6", default-features = false, features = [
 tokio = { version = "1.46", features = ["rt-multi-thread", "macros", "signal", "net", "time", "sync", "fs", "io-util", "process"] }
 # TaskTracker and CancellationToken: the service waits for the connects that run when it stops, and
 # tells each one to fail its login (workspace task 5.17).
-tokio-util = { version = "0.7", default-features = false, features = ["rt"] }
-axum  = { version = "0.8", default-features = false, features = ["http1", "json", "tokio", "tracing"] }
+# `io`: the read route streams the bytes of a blob without a copy in memory.
+tokio-util = { version = "0.7", default-features = false, features = ["rt", "io"] }
+axum  = { version = "0.8", default-features = false, features = ["http1", "json", "query", "tokio", "tracing"] }
 
 # ---- systemd ----
 # The client of the systemd D-Bus API (workspace design D3): StartUnit, StopUnit and the JobRemoved

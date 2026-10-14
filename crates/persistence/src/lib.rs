@@ -15,6 +15,7 @@ pub mod test_support;
 mod connections;
 mod files;
 mod outbox;
+mod reads;
 
 use std::time::Duration;
 
@@ -26,6 +27,7 @@ pub use crate::connections::{
 };
 pub use crate::files::{FileRow, FileTransaction, LockedConnection, NewRevision};
 pub use crate::outbox::PendingEvent;
+pub use crate::reads::{ConnectionStatus, FileSummary};
 
 /// The schema, embedded at compile time.
 ///

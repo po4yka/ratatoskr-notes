@@ -77,4 +77,4 @@ The numbers of this group are the numbers of the workspace tasks.
 - [x] 7.5 RED: in `services/notes/tests/file_events.rs`, the five tests of workspace task 7.5, and `outbox_relay_publishes_each_event_once_on_its_subject`: the relay publishes the stored envelope unchanged on `evt.notes.file.changed.v1` with its event id as `Nats-Msg-Id`, once. CI starts a JetStream server for it (`NOTES_TEST_NATS_URL`). Confirm that all six fail by assertion.
 - [x] 7.6 GREEN: implement revisions, the outbox rows of `notes.file.changed.v1`, the gapless connection sequence, the excluded-folder setting (`PUT /v1/notes/connections/{id}/excluded-folders`), and the outbox relay to NATS with the inbox prefix `_INBOX_notes`. Verify the six tests of 7.5.
 - [x] 7.7 RED: `services/notes/tests/read_api.rs::foreign_connection_is_not_found` and `file_routes_refuse_writes`, as workspace task 7.7 words them. Confirm that both fail by assertion.
-- [ ] 7.8 GREEN: implement the read routes on the listener 8099. Verify 7.7.
+- [x] 7.8 GREEN: implement the read routes on the listener 8099. Verify 7.7.

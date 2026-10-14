@@ -19,6 +19,7 @@ pub(super) enum ApiFault {
         channel: String,
     },
     NotFound,
+    FileNotFound,
     Login(LoginFailure),
     CleanupFailed,
     Unavailable,
@@ -30,7 +31,7 @@ impl ApiFault {
             Self::Unauthenticated => StatusCode::UNAUTHORIZED,
             Self::InvalidRequest => StatusCode::BAD_REQUEST,
             Self::VaultAlreadyConnected { .. } => StatusCode::CONFLICT,
-            Self::NotFound => StatusCode::NOT_FOUND,
+            Self::NotFound | Self::FileNotFound => StatusCode::NOT_FOUND,
             Self::Login(_) => StatusCode::UNPROCESSABLE_ENTITY,
             Self::CleanupFailed | Self::Unavailable => StatusCode::SERVICE_UNAVAILABLE,
         }
@@ -53,6 +54,11 @@ impl ApiFault {
             Self::NotFound => (
                 "notes.connection.not_found",
                 "The connection does not exist.",
+                false,
+            ),
+            Self::FileNotFound => (
+                "notes.file.not_found",
+                "The file does not exist at this revision.",
                 false,
             ),
             Self::Login(failure) => {
