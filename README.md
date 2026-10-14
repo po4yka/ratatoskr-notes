@@ -65,9 +65,15 @@ answers:
   then becomes `failed`, keeps no ciphertext, and does not hold the vault key, so the owner can try
   again.
 
-`DELETE /v1/notes/connections/{id}` stops the sync unit, runs the cleanup unit, and then, in one
-transaction, marks the connection removed, deletes its ciphertext, and writes
-`notes.vault.disconnected.v1` to the outbox. When the cleanup fails, nothing is committed and the
+When the client goes away while the login runs, the connect continues in its own task: it stops
+the login unit, runs the cleanup unit, and marks the connection `failed`, as after a failed login.
+A SIGTERM does not wait for that task beyond `RATATOSKR__SHUTDOWN__GRACE_SECONDS`. A connection
+whose login a stop of the service interrupted stays `connecting` with its ciphertext, and the
+owner removes it with a disconnect.
+
+`DELETE /v1/notes/connections/{id}` stops the sync unit and a login unit that still runs, runs the
+cleanup unit, and then, in one transaction, marks the connection removed, deletes its ciphertext,
+and writes `notes.vault.disconnected.v1` to the outbox. When the cleanup fails, nothing is committed and the
 owner can send the request again.
 
 ## Template units
@@ -98,7 +104,9 @@ one-time code and is never stored.
   only the ciphertext. A failed login or a disconnect deletes it.
 - **To the login:** the service writes the email, the two passwords, the MFA code and the vault id
   to files in `/run/ratatoskr-notes/credentials/<id>/` (directory 0700, files 0600), starts the
-  login unit, and deletes the files when the unit stops, whatever its result. The unit loads them
+  login unit, and deletes the files when the unit stops, whatever its result. At start, the
+  service removes `/run/ratatoskr-notes/credentials`, so that no files of a login that a crash
+  interrupted stay there. The unit loads them
   with `LoadCredential=`. `ob` reads each password on standard input from
   `$CREDENTIALS_DIRECTORY`. No password is in the command line of a process. Only the email, the
   vault id and the MFA code are in the arguments of `ob`, and the service refuses each of them
@@ -112,7 +120,8 @@ one-time code and is never stored.
 
 - [x] Service skeleton: strict configuration, logging, operator plane, embedded schema, CI gate.
 - [x] Connections and the one-channel rule (tasks 5.2 to 5.5).
-- [x] Secret custody and the login unit (tasks 5.6 to 5.9).
+- [x] Secret custody and the login unit (tasks 5.6 to 5.9), and its review follow-ups (tasks 5.12
+  to 5.15).
 - [ ] Sync supervisor and blob root (group 6).
 - [ ] Index, file events and the read API (group 7).
 - [ ] Device channel routes (group 8).

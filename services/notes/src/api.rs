@@ -17,6 +17,7 @@ use ratatoskr_identifiers::SafeMessage;
 use ratatoskr_notes_contracts::{VaultChannel, VaultDisplayName};
 use ratatoskr_notes_persistence::{CreateOutcome, Database, NewConnection, NewSecret, OutboxEvent};
 use secrecy::ExposeSecret as _;
+use tokio::sync::oneshot;
 use uuid::Uuid;
 
 use crate::events;
@@ -89,7 +90,11 @@ impl<B: SystemdBus> ApiState<B> {
 }
 
 /// The domain router. It is served only on the domain listener, never on the operator listener.
+///
+/// The service builds it once, at start, before any login can run. It first removes the
+/// credentials root: a directory under it is what a crash during a login left behind.
 pub fn domain_router<B: SystemdBus>(state: ApiState<B>) -> Router {
+    remove_stale_credentials(&state.credentials_dir);
     Router::new()
         .route("/v1/notes/connections", post(create_connection::<B>))
         .route(
@@ -98,6 +103,18 @@ pub fn domain_router<B: SystemdBus>(state: ApiState<B>) -> Router {
         )
         .layer(DefaultBodyLimit::max(MAX_REQUEST_BYTES))
         .with_state(state)
+}
+
+/// Remove the credential files that earlier logins left behind. A failure is logged, and the
+/// start continues: the files of a new login are in a new directory.
+fn remove_stale_credentials(root: &FsPath) {
+    match std::fs::remove_dir_all(root) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            tracing::error!(%error, root = %root.display(), "the stale credential files could not be removed");
+        }
+    }
 }
 
 /// The body of `POST /v1/notes/connections`.
@@ -126,6 +143,11 @@ struct ConnectAccepted {
 /// transaction, and then runs its login unit and waits for it. When the login fails, the cleanup
 /// unit removes what the login left on the host, the connection becomes `failed` without its
 /// ciphertext, and the answer is `422` with one of the four stable login codes.
+///
+/// After the checks, the connect runs to its end in a task that the request does not own. When the
+/// client goes away, the request future is dropped, but the task continues: it stops the login,
+/// runs the cleanup unit and marks the connection `failed`, so that the connection does not stay
+/// `connecting` and the vault key is free again.
 async fn create_connection<B: SystemdBus>(
     State(state): State<ApiState<B>>,
     headers: HeaderMap,
@@ -138,21 +160,57 @@ async fn create_connection<B: SystemdBus>(
     if !valid_vault_key(&request.vault_key) {
         return Err(ApiFault::InvalidRequest);
     }
-    let sync_login = match (channel, request.sync_login) {
+    match (channel, &request.sync_login) {
         ("sync", Some(sync_login))
-            if sync_login.is_valid() && login::valid_remote_vault_id(&request.vault_key) =>
-        {
-            Some(sync_login)
-        }
-        ("plugin" | "cli", None) => None,
+            if sync_login.is_valid() && login::valid_remote_vault_id(&request.vault_key) => {}
+        ("plugin" | "cli", None) => {}
         _ => return Err(ApiFault::InvalidRequest),
-    };
+    }
 
     let connection_id = Uuid::now_v7();
-    let sealed = match &sync_login {
+    let sealed = match &request.sync_login {
         Some(sync_login) => seal_secrets(&state.key_file, connection_id, sync_login)?,
         None => Vec::new(),
     };
+
+    // The sender lives as long as the request. The task sees its drop as the end of the request.
+    let (request_alive, request_gone) = oneshot::channel::<()>();
+    let connect = tokio::spawn(finish_connect(
+        state,
+        connection_id,
+        owner_id,
+        channel,
+        request,
+        sealed,
+        request_gone,
+    ));
+    let finished = connect.await;
+    drop(request_alive);
+    finished.map_err(|error| {
+        tracing::error!(%error, %connection_id, "the connect task stopped before its end");
+        ApiFault::Unavailable
+    })??;
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(ConnectAccepted {
+            connection_id,
+            channel,
+            state: "connecting",
+        }),
+    ))
+}
+
+/// Insert the connection with its ciphertext and, for `sync`, run the first login. It runs in its
+/// own task, so a dropped request does not stop it halfway.
+async fn finish_connect<B: SystemdBus>(
+    state: ApiState<B>,
+    connection_id: Uuid,
+    owner_id: Uuid,
+    channel: &'static str,
+    request: ConnectRequest,
+    sealed: Vec<Sealed>,
+    request_gone: oneshot::Receiver<()>,
+) -> Result<(), ApiFault> {
     let secrets: Vec<NewSecret<'_>> = sealed
         .iter()
         .map(|sealed| NewSecret {
@@ -188,17 +246,17 @@ async fn create_connection<B: SystemdBus>(
     }
     tracing::info!(%connection_id, channel, "a connection was created");
 
-    if let Some(sync_login) = &sync_login {
-        log_in(&state, connection_id, &request.vault_key, sync_login).await?;
-    }
-    Ok((
-        StatusCode::ACCEPTED,
-        Json(ConnectAccepted {
+    if let Some(sync_login) = &request.sync_login {
+        log_in(
+            &state,
             connection_id,
-            channel,
-            state: "connecting",
-        }),
-    ))
+            &request.vault_key,
+            sync_login,
+            request_gone,
+        )
+        .await?;
+    }
+    Ok(())
 }
 
 /// Seal the account password and, when the owner gave one, the end-to-end password. The MFA
@@ -231,14 +289,16 @@ fn seal_secrets(
 /// Write the credential files of a new `sync` connection, run its login unit, wait for it, and
 /// delete the files.
 ///
-/// When the login fails, the cleanup unit removes what it left in `ob-home` (a token, when only
-/// the setup step failed), and the connection becomes `failed`. When the cleanup fails, the
+/// When the login fails, or the request ends while the login runs, the cleanup step stops the
+/// login unit, the cleanup unit removes what the login left in `ob-home` (a token, when only the
+/// setup step failed), and the connection becomes `failed`. When the cleanup fails, the
 /// connection stays `connecting` with its ciphertext, and the owner removes it with a disconnect.
 async fn log_in<B: SystemdBus>(
     state: &ApiState<B>,
     connection_id: Uuid,
     vault_id: &str,
     sync_login: &SyncLogin,
+    request_gone: oneshot::Receiver<()>,
 ) -> Result<(), ApiFault> {
     let fault = match CredentialFiles::write(
         &state.credentials_dir,
@@ -247,14 +307,23 @@ async fn log_in<B: SystemdBus>(
         sync_login,
     ) {
         Ok(credentials) => {
-            let outcome = login::run(state.systemd.as_ref(), connection_id).await;
+            // `None` when the request ended first. The wait for the unit is then dropped, and the
+            // cleanup below stops the unit.
+            let outcome = tokio::select! {
+                outcome = login::run(state.systemd.as_ref(), connection_id) => Some(outcome),
+                _ = request_gone => None,
+            };
             // The files are deleted whatever the result of the unit.
             drop(credentials);
             match outcome {
-                Ok(None) => return Ok(()),
-                Ok(Some(failure)) => ApiFault::Login(failure),
-                Err(error) => {
+                Some(Ok(None)) => return Ok(()),
+                Some(Ok(Some(failure))) => ApiFault::Login(failure),
+                Some(Err(error)) => {
                     tracing::error!(%error, %connection_id, "the login unit could not run");
+                    ApiFault::Unavailable
+                }
+                None => {
+                    tracing::warn!(%connection_id, "the connect request ended while the login ran; the login is stopped");
                     ApiFault::Unavailable
                 }
             }
@@ -279,7 +348,8 @@ async fn log_in<B: SystemdBus>(
 
 /// `DELETE /v1/notes/connections/{id}`: remove a connection of this owner.
 ///
-/// A `sync` connection first stops its sync unit and runs its cleanup unit, which deletes the
+/// A `sync` connection first stops its sync unit and a login unit that still runs, and runs its
+/// cleanup unit, which deletes the
 /// working tree and the client state. Only then does one transaction mark the connection removed,
 /// delete the stored ciphertext, and write `notes.vault.disconnected.v1` to the outbox. When the
 /// cleanup fails nothing is committed, and the owner can repeat the request.
@@ -345,13 +415,16 @@ async fn remove_connection<B: SystemdBus>(
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// Stop the sync unit, then run the cleanup unit and wait for it (workspace design D3).
+/// Stop the sync unit and the login unit, then run the cleanup unit and wait for it (workspace
+/// design D3). The stop of a unit that does not run does nothing. The login unit is stopped so
+/// that it cannot write to `ob-home` after the cleanup unit removed it.
 async fn clean_up_sync_client<B: SystemdBus>(
     systemd: &B,
     connection_id: Uuid,
 ) -> Result<(), ApiFault> {
     for (unit, stop) in [
         (UnitName::sync(connection_id), true),
+        (UnitName::login(connection_id), true),
         (UnitName::cleanup(connection_id), false),
     ] {
         let job = if stop {
