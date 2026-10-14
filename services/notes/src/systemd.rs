@@ -8,6 +8,7 @@
 
 use std::fmt;
 use std::future::Future;
+use std::path::PathBuf;
 use std::process::Stdio;
 use std::time::Duration;
 
@@ -54,6 +55,23 @@ impl fmt::Display for UnitName {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(&self.0)
     }
+}
+
+/// The working tree of a `sync` connection on the host, which `ob` writes and the watcher reads.
+#[must_use]
+pub fn tree_dir(connection_id: Uuid) -> PathBuf {
+    PathBuf::from(format!(
+        "/mnt/nvme/ratatoskr/notes/connections/{connection_id}/tree"
+    ))
+}
+
+/// The client state of a `sync` connection on the host (`ob-home`: the Sync token and the vault
+/// configuration of `ob`).
+#[must_use]
+pub fn client_dir(connection_id: Uuid) -> PathBuf {
+    PathBuf::from(format!(
+        "/mnt/nvme/ratatoskr/notes/connections/{connection_id}/ob-home"
+    ))
 }
 
 /// The result of one systemd job, as the `JobRemoved` signal reports it.
