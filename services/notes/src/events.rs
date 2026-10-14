@@ -130,6 +130,27 @@ pub(crate) fn envelope<P: EventPayload + serde::Serialize>(
     owner_id: Uuid,
     payload: &P,
 ) -> Result<EventEnvelope, EnvelopeBuildError> {
+    let correlation_id = format!("event:{event_id}");
+    correlated_envelope(
+        event_id,
+        event_type,
+        aggregate_id,
+        &correlation_id,
+        owner_id,
+        payload,
+    )
+}
+
+/// An envelope of this service with `payload`, owned by `owner_id`, that correlates to
+/// `correlation_id`, for example `operation:<uuid>` for a report of an operation.
+pub(crate) fn correlated_envelope<P: EventPayload + serde::Serialize>(
+    event_id: Uuid,
+    event_type: ratatoskr_event_envelope::EventType,
+    aggregate_id: &str,
+    correlation_id: &str,
+    owner_id: Uuid,
+    payload: &P,
+) -> Result<EventEnvelope, EnvelopeBuildError> {
     let mut envelope = EventEnvelope {
         event_id: EventId(event_id),
         event_type,
@@ -137,7 +158,7 @@ pub(crate) fn envelope<P: EventPayload + serde::Serialize>(
         producer: ProducerName::parse(PRODUCER).map_err(|_| EnvelopeBuildError("producer"))?,
         aggregate_id: EntityRef::parse(aggregate_id)
             .map_err(|_| EnvelopeBuildError("aggregate_id"))?,
-        correlation_id: EntityRef::parse(&format!("event:{event_id}"))
+        correlation_id: EntityRef::parse(correlation_id)
             .map_err(|_| EnvelopeBuildError("correlation_id"))?,
         causation_id: None,
         tenant_id: Some(

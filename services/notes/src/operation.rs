@@ -1,8 +1,8 @@
 //! The connect operation (workspace design D10): Edge mints the operation of kind
 //! `notes.connection.connect` and sends its id in `x-ratatoskr-operation-id`; notes is its only
 //! reporter (lane `ratatoskr-notes`). Notes writes each report to its outbox as
-//! `platform.operation.reported.v1`, owned by `user:<owner>`, and the relay publishes it on
-//! `evt.platform.operation.reported.v1`.
+//! `platform.operation.reported.v1`, owned by `user:<owner>` and correlated to
+//! `operation:<operation id>`, and the relay publishes it on `evt.platform.operation.reported.v1`.
 //!
 //! The phases of a `sync` connect are `login`, `setup`, `first_sync` and `indexing`; a `plugin` or
 //! `cli` connect starts at `first_sync`. The operation succeeds in the transaction that makes the
@@ -121,10 +121,13 @@ pub fn report_envelope(
         }
     }
     payload.validate().map_err(|_| EnvelopeBuildError::STAGE)?;
-    events::envelope(
+    // A report correlates to its operation, as the other reporters of the fleet do.
+    let operation = operation_aggregate(operation_id);
+    events::correlated_envelope(
         event_id,
         OperationReported::event_type(),
-        &operation_aggregate(operation_id),
+        &operation,
+        &operation,
         owner_id,
         &payload,
     )
