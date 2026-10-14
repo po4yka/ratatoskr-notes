@@ -335,3 +335,23 @@ impl Database {
         .map_err(PersistenceError::Query)
     }
 }
+
+impl Database {
+    /// The `sync` connections whose sync unit must run: their first login finished, and they are
+    /// `connecting` or `active`. The service starts the unit of each one at its start.
+    ///
+    /// # Errors
+    ///
+    /// [`PersistenceError::Query`] when the statement fails.
+    pub async fn sync_connections_to_run(&self) -> Result<Vec<Uuid>, PersistenceError> {
+        sqlx::query_scalar(
+            "select connection_id from notes.connections
+             where channel = 'sync' and state in ('connecting', 'active')
+               and logged_in_at is not null
+             order by created_at",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(PersistenceError::Query)
+    }
+}

@@ -29,6 +29,7 @@ use uuid::Uuid;
 use crate::events;
 use crate::login::{self, CredentialFiles, LoginFailure, SyncLogin};
 use crate::secrets::{Sealed, SecretKind, SecretsKey};
+use crate::supervisor::Supervisor;
 use crate::systemd::{JobResult, SystemdBus, UnitName};
 
 /// The owner claim that Edge mints.
@@ -124,6 +125,7 @@ impl Drop for Removal {
 pub struct ApiState<B> {
     database: Database,
     systemd: Arc<B>,
+    supervisor: Supervisor<B>,
     key_file: PathBuf,
     credentials_dir: PathBuf,
     logins: Arc<Semaphore>,
@@ -138,6 +140,7 @@ impl<B> Clone for ApiState<B> {
         Self {
             database: self.database.clone(),
             systemd: Arc::clone(&self.systemd),
+            supervisor: self.supervisor.clone(),
             key_file: self.key_file.clone(),
             credentials_dir: self.credentials_dir.clone(),
             logins: Arc::clone(&self.logins),
@@ -153,9 +156,11 @@ impl<B: SystemdBus> ApiState<B> {
     /// The state of the domain routes.
     #[must_use]
     pub fn new(database: Database, systemd: B) -> Self {
+        let systemd = Arc::new(systemd);
         Self {
+            supervisor: Supervisor::new(database.clone(), Arc::clone(&systemd)),
             database,
-            systemd: Arc::new(systemd),
+            systemd,
             key_file: PathBuf::from(DEFAULT_KEY_FILE),
             credentials_dir: PathBuf::from(DEFAULT_CREDENTIALS_DIR),
             logins: Arc::new(Semaphore::new(DEFAULT_MAX_LOGINS)),
@@ -231,6 +236,13 @@ impl<B: SystemdBus> ApiState<B> {
                 }
             }
         }
+    }
+
+    /// Start the sync unit of each `sync` connection whose first login finished. The service calls
+    /// it at start, after [`Self::reconcile_interrupted_logins`] and before the listeners accept a
+    /// request, so that a disconnect cannot run while a unit starts.
+    pub async fn resume_sync_connections(&self) {
+        self.supervisor.resume().await;
     }
 
     /// Read the secrets key from `path` instead of [`DEFAULT_KEY_FILE`].
@@ -479,6 +491,10 @@ fn seal_secrets(
 /// when the connection is removed. When the login finished before the disconnect stopped it, the
 /// login can write to `ob-home` after the cleanup of the disconnect, so the cleanup runs again.
 ///
+/// After the login, the sync unit of the connection starts before the login is recorded, so the
+/// cleanup that runs again after a disconnect also stops the sync unit. A sync unit that does not
+/// start fails the connect as a failed login does, with `503`.
+///
 /// When the login fails, or the request ends or the service stops while the login runs, the
 /// cleanup step stops the login unit, the cleanup unit removes what the login left in `ob-home`
 /// (a token, when only the setup step failed), and the connection becomes `failed`. When the
@@ -546,6 +562,7 @@ async fn removed_meanwhile<B: SystemdBus>(state: &ApiState<B>, connection_id: Uu
 }
 
 /// Write the credential files of the login, run the login unit, wait for it, and delete the files.
+/// When the login succeeded, start the sync unit of the connection.
 ///
 /// The wait ends early when the request ends or the service stops. The wait for the unit is then
 /// dropped, and the caller stops the unit. When both happened, the end of the request counts.
@@ -577,13 +594,14 @@ async fn run_login<B: SystemdBus>(
     // The files are deleted whatever the result of the unit.
     drop(credentials);
     match outcome {
-        Some(Ok(None)) => Ok(()),
+        Some(Ok(None)) if state.supervisor.start(connection_id).await => Ok(()),
         Some(Ok(Some(failure))) => Err(ApiFault::Login(failure)),
         Some(Err(error)) => {
             tracing::error!(%error, %connection_id, "the login unit could not run");
             Err(ApiFault::Unavailable)
         }
-        None => Err(ApiFault::Unavailable),
+        // The sync unit did not start, or the wait for the login ended early.
+        Some(Ok(None)) | None => Err(ApiFault::Unavailable),
     }
 }
 

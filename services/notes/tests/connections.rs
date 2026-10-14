@@ -661,6 +661,7 @@ async fn serve_reconciles_before_it_accepts() {
             Call::Stop(format!("ratatoskr-notes-login@{interrupted}.service")),
             Call::Start(format!("ratatoskr-notes-cleanup@{interrupted}.service")),
             Call::Start(format!("ratatoskr-notes-login@{id}.service")),
+            Call::Start(format!("ratatoskr-notes-sync@{id}.service")),
         ],
         "the start reconciles through the given bus before the first request starts its login"
     );

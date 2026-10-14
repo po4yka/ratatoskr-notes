@@ -1,0 +1,72 @@
+# Runs the continuous Obsidian Sync client of one `sync` connection: `ob sync --continuous` into the
+# working tree of the connection. The instance name is the connection id. ratatoskr-notes starts it
+# through the systemd D-Bus API after the first login of the connection succeeded, and again at each
+# start of the service; it stops it at a disconnect and when the Sync login expired (workspace change
+# add-notes-vault-connections, design D3). The unit is not enabled: only the service starts it.
+#
+# Every start first runs `ob sync-config`: pull-only mode, no sync of the `.obsidian` configuration,
+# and the device name ratatoskr-<id> in the Sync history. Notes never writes into a vault in this
+# phase (OBS-024 adds writes).
+#
+# ratatoskr-notes reads one line of this unit's journal, `Failed to authenticate:`, which ob 0.0.14
+# logs while its login token is refused. The version of obsidian-headless is pinned by the deploy
+# role of ratatoskr-workspace, because a release can change the line.
+#
+# services/notes/tests/sync_supervisor.rs runs the ExecStartPre= and ExecStart= lines of this file
+# through the fake systemd bus, with the connections root moved into a temporary directory and `ob`
+# replaced by a stub. Keep each command on one line, and use no `$` and no backslash.
+[Unit]
+Description=Ratatoskr notes: continuous Obsidian Sync of connection %i
+Documentation=https://github.com/po4yka/ratatoskr-notes
+Wants=network-online.target
+After=network-online.target
+# A sync that fails is started again after RestartSec=, without a limit.
+StartLimitIntervalSec=0
+
+[Service]
+# The start job is done when ob runs.
+Type=exec
+# The owner of the working tree and of ob-home, which the login unit created.
+User=ratatoskr-notes-sync
+Group=ratatoskr-notes-sync
+UMask=0077
+# ob keeps its state under $XDG_CONFIG_HOME/obsidian-headless on Linux (spike 3.2).
+Environment=HOME=/mnt/nvme/ratatoskr/notes/connections/%i/ob-home
+Environment=XDG_CONFIG_HOME=/mnt/nvme/ratatoskr/notes/connections/%i/ob-home
+ExecStartPre=/usr/bin/ob sync-config --path /mnt/nvme/ratatoskr/notes/connections/%i/tree --mode pull-only --configs "" --device-name ratatoskr-%i
+ExecStart=/usr/bin/ob sync --continuous --path /mnt/nvme/ratatoskr/notes/connections/%i/tree
+Restart=on-failure
+RestartSec=30
+# ob stops cleanly on SIGTERM (spike 3.2). A disconnect waits for this stop, and Edge ends a request
+# after 300 seconds.
+TimeoutStopSec=30
+
+# One ob is one Node.js process. PROVISIONAL: 512M is not measured. Spike 3.1 measures the resident
+# memory of one continuous sync of a 1 GiB vault, and this value becomes that measurement plus 50 %.
+MemoryMax=512M
+TasksMax=64
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+ProtectKernelLogs=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+RestrictNamespaces=yes
+RestrictRealtime=yes
+CapabilityBoundingSet=
+# ob is Node.js: no MemoryDenyWriteExecute=, because the JIT needs writable and executable pages.
+# ob reaches https://api.obsidian.md and wss://*.obsidian.md over TCP.
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+SystemCallFilter=@system-service
+SystemCallArchitectures=native
+# The working tree and ob-home of this connection only. The login unit created both.
+ReadWritePaths=/mnt/nvme/ratatoskr/notes/connections/%i

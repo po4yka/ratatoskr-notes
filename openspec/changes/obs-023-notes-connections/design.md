@@ -134,6 +134,27 @@ failure of the bus answers `503` with `notes.service.unavailable`. When the clea
 login fails, the connection stays `connecting` with its ciphertext, the answer is `503` with
 `notes.connection.cleanup_failed`, and the owner removes the connection with a disconnect.
 
+### 9. The Sync supervisor and the sync unit
+
+`deploy/systemd/ratatoskr-notes-sync@.service` runs `ob sync --continuous --path <tree>` as
+`ratatoskr-notes-sync`, with `HOME` and `XDG_CONFIG_HOME` set to `ob-home`, as the login unit does.
+Its `ExecStartPre=` runs `ob sync-config --path <tree> --mode pull-only --configs "" --device-name
+ratatoskr-<id>`, so each start of the unit sets pull-only mode, no configuration sync and the device
+name again. The supervisor does not run `ob` itself. `Restart=on-failure` with `RestartSec=30` and
+no start limit restarts a sync that fails. The unit uses only `/usr/bin/ob`, `HOME` and
+`XDG_CONFIG_HOME`, so the template unit check of the workspace accepts it.
+
+`MemoryMax=512M` is PROVISIONAL. Spike 3.1 measures the resident memory of one continuous sync of a
+1 GiB vault, and the value then becomes that measurement plus 50 % (workspace design, Risks).
+
+The supervisor starts the unit when the login unit of a connect succeeded, before it records the
+login. A disconnect that runs while the unit starts makes the record fail, and the cleanup that
+then runs again stops the sync unit too. A sync unit that does not start fails the connect with
+`503` and the cleanup of a failed login. At each start of the service, after the interrupted logins
+are failed and before the listeners accept, the supervisor starts the unit of each `sync`
+connection whose login finished and that is `connecting` or `active`: the unit is not enabled, so a
+restart of the host does not start it.
+
 ## Risks / Trade-offs
 
 - The D-Bus implementation has no automated test in this change: neither macOS nor the CI runner

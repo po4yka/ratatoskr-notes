@@ -53,13 +53,15 @@ Notes on the steps:
 ## Tests of the template units
 
 The tests do not use a real systemd. `services/notes/tests/support/systemd.rs` is a fake systemd
-bus. When the service starts a login or cleanup unit, the fake reads the shipped file in
-`deploy/systemd/` and runs its `ExecStart=` lines with `%i` replaced, `$$` read as `$`, the host
+bus. When the service starts a login, sync or cleanup unit, the fake reads the shipped file in
+`deploy/systemd/` and runs its `ExecStartPre=` and `ExecStart=` lines with `%i` replaced, `$$` read as `$`, the host
 paths moved into a temporary directory, and `/usr/bin/ob` replaced by a stub. It reads
 `Environment=`, `EnvironmentFile=` and `LoadCredential=`, and gives the unit a
 `$CREDENTIALS_DIRECTORY` that it removes after the run. A test therefore checks the shipped unit
 file. Keep each command of a unit on one line, write `$$` for each shell `$`, and use no backslash.
-A test can hold each login unit before its first command until it releases it. A stop of a login
+The stub `ob` records `ob sync --continuous` and returns at once, so the start job of the sync unit
+is done when its command started, as for `Type=exec`. A test can hold each login unit before its
+first command until it releases it. A stop of a login
 unit that runs ends its start job with `canceled` and kills its command, as systemd does.
 
 `secret_custody.rs::no_secret_in_any_cmdline` reads `/proc/*/cmdline` as the user `nobody` while
@@ -120,6 +122,7 @@ again from `schema.sql` (AGENTS.md, Development status: no migrations).
 | `deploy/nats/identity.conf` | A copy of the `NOTES` stanza of Platform's NATS authorization file. |
 | `deploy/systemd/notes.conf.example` | The environment file of the service on the host. |
 | `deploy/systemd/ratatoskr-notes-login@.service` | The oneshot unit that runs the first `ob login` and `ob sync-setup` of a `sync` connection. It reads the secrets with `LoadCredential=` from `/run/ratatoskr-notes/credentials/<id>/`. |
+| `deploy/systemd/ratatoskr-notes-sync@.service` | The continuous `ob sync` of a `sync` connection, in pull-only mode. The service starts it after the first login and at each of its own starts. |
 | `deploy/systemd/ratatoskr-notes-cleanup@.service` | The oneshot unit that removes the Sync client, the working tree and the client state of a removed `sync` connection, and of a connection whose login failed. |
 
 The host needs, before the first `sync` connect: the user `ratatoskr-notes-sync`; the directory

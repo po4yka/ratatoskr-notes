@@ -17,6 +17,7 @@ pub mod config;
 pub mod events;
 mod login;
 pub mod secrets;
+mod supervisor;
 pub mod systemd;
 
 use std::future::Future;
@@ -43,8 +44,8 @@ use crate::systemd::{DbusSystemd, SystemdBus};
 /// 2. Initialise logging and the metrics recorder; on failure exit 1.
 /// 3. Connect the database and apply the schema; on failure exit 1.
 /// 4. Bind the operator and the domain listeners; on failure exit 1.
-/// 5. Fail each `sync` login that a stop of the previous process interrupted, before the listeners
-///    accept a request.
+/// 5. Fail each `sync` login that a stop of the previous process interrupted, and start the sync
+///    unit of each `sync` connection whose login finished, before the listeners accept a request.
 /// 6. Serve until SIGTERM or SIGINT. Then, within the grace window, let in-flight requests finish,
 ///    and fail each connect whose login still runs.
 pub async fn run() -> ExitCode {
@@ -162,6 +163,7 @@ pub async fn serve<B: SystemdBus>(
     // After the binds, so that a second process that cannot bind changes nothing, and before the
     // listeners accept, so that no connect of this process runs yet.
     state.reconcile_interrupted_logins().await;
+    state.resume_sync_connections().await;
 
     let (stop_sender, stop_receiver) = tokio::sync::watch::channel(false);
     let admin_task = spawn_server(

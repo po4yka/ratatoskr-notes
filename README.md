@@ -59,7 +59,8 @@ A `sync` connection also needs `sync_login`: `email`, `password`, and the option
 `e2e_password`. Its vault key is the remote vault id. The service runs the first login before it
 answers:
 
-- `202` with the state `connecting` when the login and the setup succeed;
+- `202` with the state `connecting` when the login and the setup succeed and the sync unit of the
+  connection started;
 - `422` with one of the stable codes `notes.sync.login_failed`, `notes.sync.mfa_required`,
   `notes.sync.e2e_password_wrong` or `notes.sync.vault_not_found` when they fail. The connection
   then becomes `failed`, keeps no ciphertext, and does not hold the vault key, so the owner can try
@@ -92,10 +93,11 @@ The service starts and stops the units through the systemd D-Bus API as the user
 | Unit | Type | Started | Does |
 |---|---|---|---|
 | `ratatoskr-notes-login@.service` | oneshot | at the connect of a `sync` connection | `ob login`, then `ob sync-setup`. The exit status names the failure: 10 login failed, 11 MFA code needed, 12 end-to-end password wrong, 13 no such remote vault. |
-| `ratatoskr-notes-sync@.service` | long-running | by the Sync supervisor (planned, group 6) | `ob sync --continuous`. It is stopped at a disconnect. |
+| `ratatoskr-notes-sync@.service` | long-running | by the Sync supervisor, after the first login and at each start of the service | `ob sync-config --mode pull-only --configs ""` with the device name `ratatoskr-<id>`, then `ob sync --continuous`. It is stopped at a disconnect. `MemoryMax=512M` is provisional until spike 3.1 measures it. |
 | `ratatoskr-notes-cleanup@.service` | oneshot | at a disconnect, and after a failed login | `ob sync-unlink`, then removes the working tree and `ob-home`. |
 
-The login and cleanup units are in `deploy/systemd/`. The sync unit ships with group 6.
+The three units are in `deploy/systemd/`. None of them is enabled: only the service starts them.
+The sync unit runs in pull-only mode, so Notes never writes into a vault.
 
 ## Secret custody
 
