@@ -76,7 +76,8 @@ fn operation_id(headers: &HeaderMap) -> Result<Uuid, ApiFault> {
 /// A `sync` connection stores its two passwords as ciphertext with the new row, in one
 /// transaction. Its login then runs in a task that the service tracks (see
 /// [`finish_sync_connect`]). The first report is `login` for `sync`, and `first_sync` for the
-/// device channels, whose first changes complete the operation (group 8 of the workspace change).
+/// device channels, whose first applied manifest completes the operation; without one within the
+/// bound, the connect fails (see `device_connect.rs`).
 ///
 /// At most the configured number of `sync` logins run at the same time. A `sync` connect over the
 /// limit answers `503` at once and creates nothing.
@@ -149,6 +150,10 @@ pub(super) async fn create_connection<B: SystemdBus>(
         Report::Running(first),
     )
     .await;
+    if request.sync_login.is_none() {
+        // The device sends its first manifest now; the connect fails when it does not.
+        state.wait_for_manifest(connection_id, state.manifest_deadline);
+    }
     if let Some(sync_login) = request.sync_login {
         let connect = SyncConnect {
             connection_id,

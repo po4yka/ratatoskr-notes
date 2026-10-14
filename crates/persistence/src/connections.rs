@@ -403,6 +403,33 @@ impl Database {
         .await
     }
 
+    /// The `plugin` and `cli` connections that are `connecting`, each with the time since it was
+    /// created. Each one waits for the first manifest of its device.
+    ///
+    /// # Errors
+    ///
+    /// [`PersistenceError::Query`] when the statement fails.
+    pub async fn waiting_device_connects(
+        &self,
+    ) -> Result<Vec<(Uuid, std::time::Duration)>, PersistenceError> {
+        let rows: Vec<(Uuid, f64)> = sqlx::query_as(
+            "select connection_id, extract(epoch from now() - created_at)::float8
+             from notes.connections
+             where channel in ('plugin', 'cli') and state = 'connecting'
+             order by created_at",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(PersistenceError::Query)?;
+        Ok(rows
+            .into_iter()
+            .map(|(connection_id, age)| {
+                let age = std::time::Duration::try_from_secs_f64(age.max(0.0)).unwrap_or_default();
+                (connection_id, age)
+            })
+            .collect())
+    }
+
     /// The connect operation of a connection, with its owner, channel, display name and state.
     ///
     /// # Errors

@@ -199,6 +199,7 @@ pub async fn serve<B: SystemdBus>(
     // listeners accept, so that no connect of this process runs yet.
     state.reconcile_interrupted_logins().await;
     state.resume_sync_connections().await;
+    state.resume_device_connects().await;
 
     let (stop_sender, stop_receiver) = tokio::sync::watch::channel(false);
     let admin_task = spawn_server(

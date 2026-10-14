@@ -36,6 +36,7 @@ pub use connect::OPERATION_HEADER;
 mod blobs;
 mod channel;
 mod connect;
+mod device_connect;
 mod fault;
 mod read;
 mod removals;
@@ -156,11 +157,6 @@ impl<B: SystemdBus> ApiState<B> {
         self.manifest_deadline = deadline;
         self
     }
-
-    /// Wait again for the first manifest of each `plugin` or `cli` connection that is
-    /// `connecting`. The service calls it at start.
-    #[expect(clippy::unused_async, reason = "workspace task 8.14 fills it")]
-    pub async fn resume_device_connects(&self) {}
 
     /// Watch the working trees under `root` instead of [`crate::systemd::TREES_ROOT`]. For tests:
     /// the sync units on the host write under [`crate::systemd::TREES_ROOT`].

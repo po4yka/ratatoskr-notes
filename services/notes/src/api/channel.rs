@@ -126,6 +126,7 @@ pub(super) async fn post_manifest<B: SystemdBus>(
         })),
         ManifestOutcome::Applied { committed } => {
             tracing::info!(%connection_id, "a manifest was applied");
+            state.complete_device_connect(connection_id).await;
             Ok(Json(ManifestAnswer {
                 needed_sha256: Vec::new(),
                 committed_sequence: committed,
