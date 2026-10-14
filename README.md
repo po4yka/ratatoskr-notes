@@ -154,7 +154,10 @@ one-time code and is never stored.
 - [x] Connections and the one-channel rule (tasks 5.2 to 5.5).
 - [x] Secret custody and the login unit (tasks 5.6 to 5.9), and its review follow-ups (tasks 5.12
   to 5.15).
-- [ ] Sync supervisor and blob root (group 6).
+- [x] Sync supervisor, the sync unit, the watcher of the working tree and the blob root with its
+  read group (group 6, tasks 6.1 to 6.4 and 6.7 to 6.10). `MemoryMax=` of the sync unit and the
+  line of an expired login are provisional until spike 3.1.
+- [ ] The pull-only session of spike 3.3 and its replay test (tasks 6.5 and 6.6).
 - [ ] Index, file events and the read API (group 7).
 - [ ] Device channel routes (group 8).
 

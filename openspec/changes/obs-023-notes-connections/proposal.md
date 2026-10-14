@@ -24,6 +24,13 @@ the part of them that belongs to group 5 of the workspace task list, and does no
   the working tree and the client state of the connection.
 - Later, in the same change: secret custody, the connect flow and the login unit (workspace tasks
   5.6 to 5.9), and the documentation (5.10).
+- Group 6 (workspace tasks 6.1 to 6.10): ship `deploy/systemd/ratatoskr-notes-sync@.service`, which
+  runs `ob sync --continuous` in pull-only mode; the Sync supervisor, which starts the unit after
+  the first login and at each start of the service, and marks a connection `login_expired` when the
+  journal of its unit shows `Failed to authenticate:` for 5 minutes; the inotify watcher of a
+  working tree with its settle window and rescan; and the blob store, whose blobs only the read
+  group `ratatoskr-notes-blobs` can read. Workspace tasks 6.5 and 6.6 wait for the pull-only
+  session that spike 3.3 records.
 
 ## Capabilities
 
@@ -39,6 +46,7 @@ None.
 ## Impact
 
 `schema.sql` (connections, secrets, outbox), `crates/persistence` (connection queries),
-`services/notes` (the routes, the systemd trait and its D-Bus implementation),
-`deploy/systemd/ratatoskr-notes-cleanup@.service`. The routes are reached only through Edge, which
+`services/notes` (the routes, the systemd trait and its D-Bus implementation, the supervisor, the
+watcher and the blob store), `deploy/systemd/ratatoskr-notes-cleanup@.service`,
+`ratatoskr-notes-login@.service` and `ratatoskr-notes-sync@.service`. The routes are reached only through Edge, which
 adds them in workspace task 9.2.
