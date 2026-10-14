@@ -139,3 +139,29 @@ fn obsidian_and_trash_match_by_path_key() {
         "as an excluded folder of the owner does"
     );
 }
+
+#[test]
+fn case_only_rename_publishes_the_new_path() {
+    let mut table = PathTable::new();
+    let rules = PathRules::default();
+
+    // As the service sees a rename in Finder: the new path while the old one is present, then the
+    // removal of the old path.
+    table.observe("Note.md", &revision('a'), 10, &rules);
+    let waiting = table.observe("note.md", &revision('a'), 10, &rules);
+    let removed = table.remove("Note.md");
+    let again = table.observe("note.md", &revision('a'), 10, &rules);
+
+    assert!(matches!(waiting, Observation::Collision(_)), "{waiting:?}");
+    assert!(removed.is_some(), "the old path is deleted");
+    assert!(
+        table.conditions().is_empty(),
+        "no collision is left: {:?}",
+        table.conditions()
+    );
+    assert_eq!(
+        again,
+        Observation::Unchanged,
+        "the new path already holds its revision"
+    );
+}
