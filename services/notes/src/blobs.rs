@@ -11,7 +11,10 @@
 //! 2750, whatever the umask, and the setgid bit gives each new file and directory the group of the
 //! root. So the read group can read a blob, and no other user can. On Linux a new directory in a
 //! setgid directory gets the bit from the kernel, and the store changes its mode only when it
-//! differs: a `chmod` by a user that is not in the group would remove the bit.
+//! differs: a `chmod` by a user that is not in the group would remove the bit. The service user is
+//! not in the group, so [`BlobStore::open`] refuses a umask stricter than 0027, which would make the
+//! store run that `chmod` on each new directory. It also deletes the staged copies that a stop left
+//! behind.
 
 use std::fs::{DirBuilder, File, OpenOptions};
 use std::io::{Read as _, Write as _};
@@ -31,6 +34,14 @@ const BLOB_MODE: u32 = 0o640;
 
 /// The mode of each directory: the setgid bit keeps the group of the root.
 const DIRECTORY_MODE: u32 = 0o2750;
+
+/// The strictest umask that keeps [`BLOB_MODE`] and [`DIRECTORY_MODE`] at the create, so that the
+/// store never runs `chmod` on a new directory on Linux.
+#[cfg(target_os = "linux")]
+const STRICTEST_UMASK: u32 = 0o027;
+
+/// The extension of a staged copy.
+const PART: &str = "part";
 
 /// The content-addressed store under one blob root.
 #[derive(Debug, Clone)]
@@ -54,13 +65,21 @@ impl BlobStore {
         Self { root: root.into() }
     }
 
-    /// The store under `root`, for the service. The deploy role creates the root.
+    /// The store under `root`, for the service, which calls it at its start. The deploy role
+    /// creates the root. It refuses a umask stricter than 0027: with it, the store would run
+    /// `chmod` on each new directory, and a `chmod` by an owner that is not in the group of the
+    /// root removes the setgid bit. It deletes each staged copy that a stop of the service left in
+    /// `<root>/staging/`. It blocks.
     ///
     /// # Errors
     ///
-    /// The reason when the store cannot keep the modes of the root.
+    /// The reason when the umask is stricter than 0027 or cannot be read, or when a staged copy
+    /// cannot be deleted.
     pub fn open(root: impl Into<PathBuf>) -> std::io::Result<Self> {
-        Ok(Self::new(root))
+        check_umask()?;
+        let store = Self::new(root);
+        store.remove_stale_parts()?;
+        Ok(store)
     }
 
     /// The blob root.
@@ -101,7 +120,7 @@ impl BlobStore {
     pub fn store_open_file(&self, input: &File) -> std::io::Result<StoredBlob> {
         let staging_dir = self.root.join("staging");
         self.create_directories(&staging_dir)?;
-        let staging = staging_dir.join(format!("{}.part", Uuid::now_v7()));
+        let staging = staging_dir.join(format!("{}.{PART}", Uuid::now_v7()));
         let copied = copy_and_hash(input, &staging);
         let (digest, length) = match copied {
             Ok(copied) => copied,
@@ -116,6 +135,22 @@ impl BlobStore {
         Ok(StoredBlob { digest, length })
     }
 
+    /// Delete each staged copy in `<root>/staging/`. Only one process writes the store.
+    fn remove_stale_parts(&self) -> std::io::Result<()> {
+        let entries = match std::fs::read_dir(self.root.join("staging")) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(error) => return Err(error),
+        };
+        for entry in entries {
+            let path = entry?.path();
+            if path.extension().is_some_and(|extension| extension == PART) {
+                std::fs::remove_file(&path)?;
+            }
+        }
+        Ok(())
+    }
+
     /// Give the staged copy its content name, unless a blob with that name exists already.
     fn link(&self, staging: &Path, digest: &str) -> std::io::Result<()> {
         let target = self
@@ -128,7 +163,8 @@ impl BlobStore {
             self.create_directories(parent)?;
         }
         match std::fs::hard_link(staging, &target) {
-            Ok(()) => Ok(()),
+            // The new name is on disk when this returns.
+            Ok(()) => sync_parent(&target),
             // Two writers of the same bytes: the first link wins, and the bytes are equal.
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
             Err(error) => Err(error),
@@ -154,6 +190,43 @@ impl BlobStore {
         }
         Ok(())
     }
+}
+
+/// Write the directory that holds `path` to disk, so that a new name in it stays after a crash.
+fn sync_parent(path: &Path) -> std::io::Result<()> {
+    match path.parent() {
+        Some(parent) => File::open(parent)?.sync_all(),
+        None => Ok(()),
+    }
+}
+
+/// Refuse a umask stricter than [`STRICTEST_UMASK`]. Linux gives the umask in `/proc/self/status`
+/// without changing it. Other platforms are not a host, and there the check does nothing.
+#[cfg(target_os = "linux")]
+fn check_umask() -> std::io::Result<()> {
+    let status = std::fs::read_to_string("/proc/self/status")?;
+    let umask = status
+        .lines()
+        .find_map(|line| line.strip_prefix("Umask:"))
+        .and_then(|value| u32::from_str_radix(value.trim(), 8).ok())
+        .ok_or_else(|| std::io::Error::other("the umask of the process cannot be read"))?;
+    if umask & !STRICTEST_UMASK & 0o777 != 0 {
+        return Err(std::io::Error::other(format!(
+            "the umask {umask:04o} is stricter than 0027: the blob store would remove the setgid \
+             bit of its directories; give the service UMask=0027"
+        )));
+    }
+    Ok(())
+}
+
+/// Other platforms are not a host: the umask cannot be read there without changing it.
+#[cfg(not(target_os = "linux"))]
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "the same signature as the Linux implementation"
+)]
+fn check_umask() -> std::io::Result<()> {
+    Ok(())
 }
 
 /// Give `path` the mode `mode` unless it has it already. The kernel gives a new directory in a
@@ -208,4 +281,26 @@ fn copy_and_hash(mut input: &File, staging: &Path) -> std::io::Result<(String, u
     }
     output.sync_all()?;
     Ok((format!("{:x}", hasher.finalize()), length))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::BlobStore;
+
+    #[test]
+    fn open_deletes_stale_parts_only() {
+        let root = tempfile::tempdir().expect("a blob root");
+        let staging = root.path().join("staging");
+        std::fs::create_dir(&staging).expect("the staging directory");
+        std::fs::write(staging.join("0192.part"), b"a copy that a stop left").expect("a part");
+        std::fs::write(staging.join("keep.txt"), b"not a part").expect("another file");
+
+        BlobStore::open(root.path()).expect("the store opens");
+
+        assert!(
+            !staging.join("0192.part").exists(),
+            "the stale part is gone"
+        );
+        assert!(staging.join("keep.txt").exists(), "another file stays");
+    }
 }
