@@ -195,13 +195,15 @@ revisions, the outbox and the excluded folders of workspace task 7.6 consume its
 again only when the umask removed a bit. On Linux a directory that is made in a setgid directory
 gets the setgid bit and the group from the kernel. The store does not run `chmod` on it then,
 because a `chmod` by an owner that is not in the group removes the setgid bit; `ratatoskr-notes`
-is not in `ratatoskr-notes-blobs`. So `BlobStore::open`, which the service calls at its start,
-refuses a umask stricter than 0027: with it, the create would remove a bit of 2750 and the store
-would run that `chmod`. Linux gives the umask in `/proc/self/status` without changing it; other
+is not in `ratatoskr-notes-blobs`. So `BlobStore::open` refuses a umask stricter than 0027. With
+such a umask, the create would remove a bit of 2750, and the store would run that `chmod`. `serve()`
+opens the blob store from `RATATOSKR__BLOBS__ROOT` as its first step, so such a umask fails the start
+with exit 1 (`tests/start_umask.rs`). The watcher of task 7.6 gets that store. Linux gives the umask in `/proc/self/status` without changing it; other
 platforms are not a host, and there the store does not check. This repository ships no unit for
 the service, so `UMask=0027` belongs to the service unit that the deploy role of
 `ratatoskr-workspace` installs. `BlobStore::open` also deletes each staged `.part` copy that a stop
-left behind, and the store writes the directory of a new blob to disk after the link.
+left behind. The store writes the directory of a new blob to disk after the link, and the parent of
+each new directory after the directory is made.
 
 ### 12. An expired Sync login
 

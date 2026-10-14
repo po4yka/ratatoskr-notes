@@ -8,7 +8,7 @@
 //! | Code | Meaning |
 //! |---|---|
 //! | `0` | Clean start and clean shutdown |
-//! | `1` | Runtime startup failure: telemetry, the database, the schema, or a listener |
+//! | `1` | Runtime startup failure: telemetry, the blob store, the database, the schema, or a listener |
 //! | `78` | `EX_CONFIG`: the configuration is unreadable or invalid; nothing was bound |
 
 pub mod admin;
@@ -37,6 +37,7 @@ use tracing_subscriber::util::SubscriberInitExt as _;
 
 use crate::admin::{RuntimeState, admin_router};
 use crate::api::{ApiState, DEFAULT_CREDENTIALS_DIR, domain_router};
+use crate::blobs::BlobStore;
 use crate::config::{LogFormat, NotesConfig, TelemetryConfig};
 use crate::systemd::{DbusSystemd, SystemdBus};
 
@@ -44,11 +45,12 @@ use crate::systemd::{DbusSystemd, SystemdBus};
 ///
 /// 1. Load the configuration; on failure write the report to stderr and exit 78.
 /// 2. Initialise logging and the metrics recorder; on failure exit 1.
-/// 3. Connect the database and apply the schema; on failure exit 1.
-/// 4. Bind the operator and the domain listeners; on failure exit 1.
-/// 5. Fail each `sync` login that a stop of the previous process interrupted, and start the sync
+/// 3. Open the blob store, which refuses a umask stricter than 0027; on failure exit 1.
+/// 4. Connect the database and apply the schema; on failure exit 1.
+/// 5. Bind the operator and the domain listeners; on failure exit 1.
+/// 6. Fail each `sync` login that a stop of the previous process interrupted, and start the sync
 ///    unit of each `sync` connection whose login finished, before the listeners accept a request.
-/// 6. Serve until SIGTERM or SIGINT. Then, within the grace window, let in-flight requests finish,
+/// 7. Serve until SIGTERM or SIGINT. Then, within the grace window, let in-flight requests finish,
 ///    and fail each connect whose login still runs.
 pub async fn run() -> ExitCode {
     let config = match config::load() {
@@ -126,13 +128,13 @@ fn init_telemetry(telemetry: &TelemetryConfig) -> Result<PrometheusHandle, Strin
 
 /// Serve with a loaded configuration until `shutdown` completes, then stop within the grace window.
 ///
-/// Steps 3 to 6 of [`run`]. [`run`] gives it the systemd manager on the system bus,
+/// Steps 3 to 7 of [`run`]. [`run`] gives it the systemd manager on the system bus,
 /// [`DEFAULT_CREDENTIALS_DIR`] and the arrival of SIGTERM or SIGINT. A test gives it a fake bus, a
 /// temporary directory and a future that the test completes.
 ///
 /// # Errors
 ///
-/// The reason, when the database, the schema or a listener cannot be used.
+/// The reason, when the blob store, the database, the schema or a listener cannot be used.
 pub async fn serve<B: SystemdBus>(
     config: &NotesConfig,
     metrics: PrometheusHandle,
@@ -140,6 +142,10 @@ pub async fn serve<B: SystemdBus>(
     credentials_dir: PathBuf,
     shutdown: impl Future<Output = ()> + Send,
 ) -> Result<(), String> {
+    // First, so that a umask that can remove the setgid bit of a blob directory stops the start
+    // (workspace design D12). The watcher of task 7.6 gets this store.
+    let _blobs = BlobStore::open(&config.blobs.root)
+        .map_err(|error| format!("the blob store cannot be used: {error}"))?;
     let database = Database::connect(
         &config.database.url,
         config.database.max_connections,

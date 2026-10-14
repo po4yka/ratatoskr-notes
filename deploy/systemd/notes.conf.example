@@ -14,6 +14,11 @@ RATATOSKR__DATABASE__URL=postgres://ratatoskr_notes:CHANGE-ME@127.0.0.1:5432/rat
 
 RATATOSKR__TELEMETRY__LOG_FORMAT=json
 
+# The notes blob root: owner ratatoskr-notes, group ratatoskr-notes-blobs, mode 2750. The start
+# fails when the umask is stricter than 0027; give the service unit UMask=0027. This line repeats
+# the default.
+RATATOSKR__BLOBS__ROOT=/mnt/nvme/ratatoskr/blobs/ratatoskr-notes
+
 # The key of the stored Obsidian passwords of each sync connection: 32 random bytes, mode 0400, owner
 # ratatoskr-notes. Create it once with `head -c 32 /dev/urandom`. A lost key makes the stored
 # passwords unreadable; the owner then connects the vault again. This line repeats the default.

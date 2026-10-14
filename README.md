@@ -135,8 +135,8 @@ read-only, as the fleet spec `blob-references` allows. No other service may read
 - The service writes each blob with mode 0640 and each new directory with mode 2750. The setgid bit
   gives each new file and directory the group of the root, so the read group can read a blob and
   no other user can. The service unit runs the service with `UMask=0027`. The service is not in
-  the read group, and a `chmod` by it would remove the setgid bit, so the blob store refuses to open
-  when the umask is stricter than 0027.
+  the read group, and a `chmod` by it would remove the setgid bit. So the start of the service fails
+  when the umask is stricter than 0027 (`RATATOSKR__BLOBS__ROOT` names the root).
 - A later consumer, for example `ratatoskr-sites`, joins the group in its own change.
 
 `services/notes/tests/blob_root.rs` checks the modes and the group of a new blob, and

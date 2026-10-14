@@ -110,6 +110,7 @@ validates the environment and binds nothing (exit 0 valid, exit 78 invalid).
 | `RATATOSKR__CONNECTIONS__MAX_LOGINS` | `2` | How many first logins of `sync` connections run at the same time, 1 to 16. A `sync` connect over the limit answers `503`. |
 | `RATATOSKR__ADMIN__BIND` | `127.0.0.1:9471` | The operator listener. |
 | `RATATOSKR__API__LISTEN_ADDRESS` | `127.0.0.1:8099` | The domain API listener. It must differ from the operator listener. |
+| `RATATOSKR__BLOBS__ROOT` | `/mnt/nvme/ratatoskr/blobs/ratatoskr-notes` | The notes blob root. The start fails when the umask is stricter than 0027, because the store would then remove the setgid bit of a new directory. |
 | `RATATOSKR__SECRETS__KEY_FILE` | `/etc/ratatoskr/notes-secrets.key` | The 32-byte key of the stored Obsidian passwords: a regular file, not a symbolic link, mode 0400 or 0600, owned by the user of the service. Read at each `sync` connect. |
 | `RATATOSKR__SHUTDOWN__GRACE_SECONDS` | `10` | How long in-flight requests and running logins may take after SIGTERM, 1 to 60. The service fails each running login in this window; the next start fails a login that it did not reach. |
 | `RATATOSKR__TELEMETRY__LOG_FORMAT` | `text` | `text` or `json`. |

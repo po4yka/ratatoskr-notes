@@ -186,7 +186,11 @@ impl BlobStore {
                 .mode(DIRECTORY_MODE & 0o777)
                 .create(&current)
             {
-                Ok(()) => set_mode_if_different(&current, DIRECTORY_MODE)?,
+                Ok(()) => {
+                    set_mode_if_different(&current, DIRECTORY_MODE)?;
+                    // The new directory stays after a crash.
+                    sync_parent(&current)?;
+                }
                 Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
                 Err(error) => return Err(error),
             }

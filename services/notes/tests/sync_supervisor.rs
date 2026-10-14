@@ -289,3 +289,69 @@ async fn ended_follower_is_started_again() {
         .await
         .expect("the test database is dropped");
 }
+
+#[tokio::test]
+async fn lines_go_to_their_own_connection() {
+    let fixture = TestDatabase::create().await.expect("a test database");
+    let systemd = FakeSystemd::new();
+    let expired = insert_active_connection(&fixture).await;
+    let other_vault = Uuid::now_v7();
+    sqlx::query(
+        "insert into notes.connections
+             (connection_id, owner_id, channel, vault_key, vault_display_name, state,
+              logged_in_at, created_at, updated_at)
+         values ($1, $2, 'sync', 'remote-vault-0062', 'Work', 'active', now(), now(), now())",
+    )
+    .bind(other_vault)
+    .bind(OWNER)
+    .execute(fixture.pool())
+    .await
+    .expect("a second active connection is inserted");
+    let expired_unit = format!("ratatoskr-notes-sync@{expired}.service");
+    let other_unit = format!("ratatoskr-notes-sync@{other_vault}.service");
+    // A sync unit that this process did not start.
+    let unknown_unit = format!("ratatoskr-notes-sync@{}.service", Uuid::now_v7());
+
+    let api = free_address();
+    let unknown = format!("/v1/notes/connections/{}", Uuid::nil());
+    let steps = async {
+        let answer = send_tcp(api, Method::DELETE, &unknown, OWNER, None).await;
+        assert_eq!(answer.status, StatusCode::NOT_FOUND, "{:?}", answer.body);
+        let journals = systemd.journals();
+        // In journal order: the other connection fails for 2 minutes only, the unknown unit for
+        // 10 minutes, and the expired connection for 10 minutes.
+        journals.log_auth_failures(&other_unit, Duration::from_mins(2));
+        journals.log_auth_failures(&unknown_unit, Duration::from_mins(10));
+        journals.log_auth_failures(&expired_unit, Duration::from_mins(10));
+        systemd.wait_for_stop(&expired_unit).await
+    };
+    let (unit_stopped, stopped) = run_service(&fixture, &systemd, steps, api).await;
+    assert!(stopped, "serve stops without a failure");
+
+    assert!(
+        unit_stopped,
+        "the expired unit is stopped: {:?}",
+        systemd.calls()
+    );
+    assert_eq!(state_of(&fixture, expired).await, "login_expired");
+    assert_eq!(
+        state_of(&fixture, other_vault).await,
+        "active",
+        "2 minutes of failures of another unit do not expire this connection"
+    );
+    let unit_stops: Vec<Call> = systemd
+        .calls()
+        .into_iter()
+        .filter(|call| matches!(call, Call::Stop(_)))
+        .collect();
+    assert_eq!(
+        unit_stops,
+        [Call::Stop(expired_unit)],
+        "only the unit of the expired login stops; a unit that the service did not start is not counted"
+    );
+
+    fixture
+        .cleanup()
+        .await
+        .expect("the test database is dropped");
+}
