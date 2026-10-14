@@ -20,6 +20,10 @@
 //!
 //! Before it runs the login unit, the fake records the credentials directory of the connection
 //! that the service wrote, so that a test can check the modes and the contents.
+//!
+//! A test can hold each login unit before its first command, so that the login runs as long as the
+//! test needs. A stop of a login unit that runs ends its start job with `canceled` and kills the
+//! command that runs, as systemd does.
 
 #![allow(
     clippy::expect_used,
@@ -27,9 +31,12 @@
     reason = "test scaffolding; not every test binary uses every helper"
 )]
 
+use std::collections::HashMap;
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+
+use tokio::sync::{Notify, watch};
 
 use ratatoskr_notes::systemd::{BusError, JobResult, SystemdBus, UnitName};
 use uuid::Uuid;
@@ -104,6 +111,11 @@ pub(crate) struct FakeSystemd {
     snapshots: Arc<Mutex<Vec<(String, CredentialSnapshot)>>>,
     journal: Arc<Mutex<String>>,
     directory: Arc<tempfile::TempDir>,
+    /// `true` while each login unit waits before its first command.
+    logins_held: Arc<watch::Sender<bool>>,
+    /// The login units that run now: the signal that stops each one, and the channel whose close
+    /// tells that it ended.
+    running: Arc<Mutex<HashMap<String, (Arc<Notify>, watch::Receiver<()>)>>>,
 }
 
 impl FakeSystemd {
@@ -130,7 +142,21 @@ impl FakeSystemd {
             snapshots: Arc::new(Mutex::new(Vec::new())),
             journal: Arc::new(Mutex::new(String::new())),
             directory: Arc::new(directory),
+            logins_held: Arc::new(watch::Sender::new(false)),
+            running: Arc::new(Mutex::new(HashMap::new())),
         }
+    }
+
+    /// Each login unit waits before its first command until [`Self::release_logins`] or a stop of
+    /// the unit. The start of the unit is recorded before the wait.
+    pub(crate) fn hold_logins(self) -> Self {
+        self.logins_held.send_replace(true);
+        self
+    }
+
+    /// The login units that wait continue, and the next ones do not wait.
+    pub(crate) fn release_logins(&self) {
+        self.logins_held.send_replace(false);
     }
 
     /// The fake Obsidian account refuses the end-to-end password that the owner gives.
@@ -327,8 +353,10 @@ impl FakeSystemd {
                 .map_or((false, command.as_str()), |rest| (true, rest));
             let words = split_command(command);
             let (program, arguments) = words.split_first().expect("a command");
+            // A dropped start job kills the command, as the stop of a unit does.
             let output = tokio::process::Command::new(program)
                 .args(arguments)
+                .kill_on_drop(true)
                 .env_clear()
                 .env("PATH", "/usr/bin:/bin")
                 .envs(environment.iter().map(|(key, value)| (key, value)))
@@ -455,14 +483,66 @@ fn instance_of<'a>(unit: &'a UnitName, template: &str) -> Option<&'a str> {
         .and_then(|rest| rest.strip_suffix(".service"))
 }
 
+type Running = Arc<Mutex<HashMap<String, (Arc<Notify>, watch::Receiver<()>)>>>;
+
+/// A login unit that runs. Its drop removes it from the record of the running units and closes
+/// its channel, so that a stop that waits for it continues.
+struct RunningUnit {
+    running: Running,
+    name: String,
+    stop: Arc<Notify>,
+    _ended: watch::Sender<()>,
+}
+
+impl RunningUnit {
+    fn new(running: &Running, name: &str) -> Self {
+        let stop = Arc::new(Notify::new());
+        let (ended, receiver) = watch::channel(());
+        running
+            .lock()
+            .expect("the running units")
+            .insert(name.to_owned(), (Arc::clone(&stop), receiver));
+        Self {
+            running: Arc::clone(running),
+            name: name.to_owned(),
+            stop,
+            _ended: ended,
+        }
+    }
+}
+
+impl Drop for RunningUnit {
+    fn drop(&mut self) {
+        if let Ok(mut running) = self.running.lock() {
+            running.remove(&self.name);
+        }
+    }
+}
+
+impl FakeSystemd {
+    /// Runs the login unit of one instance: it waits while the logins are held, and a stop of the
+    /// unit ends it with `canceled` and kills its command.
+    async fn run_login(&self, unit: &UnitName, instance: &str) -> Result<JobResult, BusError> {
+        let running = RunningUnit::new(&self.running, unit.as_str());
+        let mut held = self.logins_held.subscribe();
+        let run = async {
+            let _ = held.wait_for(|held| !*held).await;
+            self.take_snapshot(instance);
+            self.run_template("ratatoskr-notes-login@.service", instance)
+                .await
+        };
+        tokio::select! {
+            result = run => result,
+            () = running.stop.notified() => Ok(JobResult::NotDone("canceled".to_owned())),
+        }
+    }
+}
+
 impl SystemdBus for FakeSystemd {
     async fn start_unit(&self, unit: &UnitName) -> Result<JobResult, BusError> {
         self.record(Call::Start(unit.as_str().to_owned()));
         if let Some(instance) = instance_of(unit, "ratatoskr-notes-login@.service") {
-            self.take_snapshot(instance);
-            return self
-                .run_template("ratatoskr-notes-login@.service", instance)
-                .await;
+            return self.run_login(unit, instance).await;
         }
         match instance_of(unit, "ratatoskr-notes-cleanup@.service") {
             Some(instance) => {
@@ -475,6 +555,17 @@ impl SystemdBus for FakeSystemd {
 
     async fn stop_unit(&self, unit: &UnitName) -> Result<JobResult, BusError> {
         self.record(Call::Stop(unit.as_str().to_owned()));
+        let running = self
+            .running
+            .lock()
+            .expect("the running units")
+            .get(unit.as_str())
+            .cloned();
+        // As systemd does, the stop job ends when the unit has stopped.
+        if let Some((stop, mut ended)) = running {
+            stop.notify_one();
+            while ended.changed().await.is_ok() {}
+        }
         Ok(JobResult::Done)
     }
 

@@ -3,7 +3,10 @@
 //! Every route reads the owner from the claim that Edge mints, `x-ratatoskr-user-id`. Edge strips
 //! any client-supplied copy, and this listener is reachable only on loopback.
 
+use std::fmt;
+use std::future::Future;
 use std::path::{Path as FsPath, PathBuf};
+use std::pin::Pin;
 use std::sync::Arc;
 
 use axum::extract::rejection::{JsonRejection, PathRejection};
@@ -17,7 +20,7 @@ use ratatoskr_identifiers::SafeMessage;
 use ratatoskr_notes_contracts::{VaultChannel, VaultDisplayName};
 use ratatoskr_notes_persistence::{CreateOutcome, Database, NewConnection, NewSecret, OutboxEvent};
 use secrecy::ExposeSecret as _;
-use tokio::sync::oneshot;
+use tokio::sync::{Semaphore, oneshot};
 use uuid::Uuid;
 
 use crate::events;
@@ -41,6 +44,19 @@ pub const DEFAULT_KEY_FILE: &str = "/etc/ratatoskr/notes-secrets.key";
 /// login unit names the same path in its `LoadCredential=` lines.
 pub const DEFAULT_CREDENTIALS_DIR: &str = "/run/ratatoskr-notes/credentials";
 
+/// How many first logins run at the same time when the configuration does not say.
+pub const DEFAULT_MAX_LOGINS: usize = 2;
+
+/// A pause between the insert of a connection and the start of its login. For tests.
+#[derive(Clone)]
+struct BeforeLogin(Arc<dyn Fn(Uuid) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync>);
+
+impl fmt::Debug for BeforeLogin {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("BeforeLogin")
+    }
+}
+
 /// What the domain handlers share.
 #[derive(Debug)]
 pub struct ApiState<B> {
@@ -48,6 +64,8 @@ pub struct ApiState<B> {
     systemd: Arc<B>,
     key_file: PathBuf,
     credentials_dir: PathBuf,
+    logins: Arc<Semaphore>,
+    before_login: Option<BeforeLogin>,
 }
 
 impl<B> Clone for ApiState<B> {
@@ -57,6 +75,8 @@ impl<B> Clone for ApiState<B> {
             systemd: Arc::clone(&self.systemd),
             key_file: self.key_file.clone(),
             credentials_dir: self.credentials_dir.clone(),
+            logins: Arc::clone(&self.logins),
+            before_login: self.before_login.clone(),
         }
     }
 }
@@ -70,8 +90,38 @@ impl<B: SystemdBus> ApiState<B> {
             systemd: Arc::new(systemd),
             key_file: PathBuf::from(DEFAULT_KEY_FILE),
             credentials_dir: PathBuf::from(DEFAULT_CREDENTIALS_DIR),
+            logins: Arc::new(Semaphore::new(DEFAULT_MAX_LOGINS)),
+            before_login: None,
         }
     }
+
+    /// Let at most `max_logins` first logins run at the same time instead of
+    /// [`DEFAULT_MAX_LOGINS`].
+    #[must_use]
+    pub fn with_max_logins(mut self, max_logins: usize) -> Self {
+        self.logins = Arc::new(Semaphore::new(max_logins));
+        self
+    }
+
+    /// Wait for `hook` after the insert of a `sync` connection and before its login starts. For
+    /// tests: it holds a connect in that step, so that a test can act there.
+    #[must_use]
+    pub fn with_before_login<F, Fut>(mut self, hook: F) -> Self
+    where
+        F: Fn(Uuid) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = ()> + Send + 'static,
+    {
+        self.before_login = Some(BeforeLogin(Arc::new(move |connection_id| {
+            Box::pin(hook(connection_id))
+        })));
+        self
+    }
+
+    /// The step of the stop of the service for the connects that still run: none.
+    pub async fn shut_down(&self) {}
+
+    /// The step of the start of the service for the connections that a stop interrupted: none.
+    pub async fn reconcile_interrupted_logins(&self) {}
 
     /// Read the secrets key from `path` instead of [`DEFAULT_KEY_FILE`].
     #[must_use]
@@ -247,6 +297,9 @@ async fn finish_connect<B: SystemdBus>(
     tracing::info!(%connection_id, channel, "a connection was created");
 
     if let Some(sync_login) = &request.sync_login {
+        if let Some(before_login) = &state.before_login {
+            (before_login.0)(connection_id).await;
+        }
         log_in(
             &state,
             connection_id,

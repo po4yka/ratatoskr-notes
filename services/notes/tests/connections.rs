@@ -1,7 +1,8 @@
 //! Vault connections (workspace spec `notes-vault-connections`): the one-channel rule
 //! (requirement "A vault connection has exactly one channel"), disconnect (requirement
-//! "Connection events name the connection and never its secrets"), and a connect request that
-//! the client drops while the login runs (workspace task 5.14).
+//! "Connection events name the connection and never its secrets"), a connect request that
+//! the client drops while the login runs (workspace task 5.14), and a connect that a stop of the
+//! service, a disconnect or the limit of concurrent logins meets (workspace task 5.16).
 
 #![allow(
     clippy::expect_used,
@@ -11,6 +12,8 @@
 
 mod support;
 
+use std::path::Path;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use axum::Router;
@@ -19,6 +22,8 @@ use ratatoskr_event_envelope::{EventEnvelope, EventPayload as _};
 use ratatoskr_notes::api::{ApiState, domain_router};
 use ratatoskr_notes_contracts::{VaultChannel, VaultDisconnected};
 use ratatoskr_notes_persistence::test_support::TestDatabase;
+use ratatoskr_notes_persistence::{NewConnection, NewSecret};
+use tokio::sync::{Notify, mpsc};
 use uuid::Uuid;
 
 use crate::support::systemd::{Call, FakeSystemd};
@@ -28,12 +33,14 @@ const OWNER_A: Uuid = Uuid::from_u128(0x0192_0000_0000_7000_8000_0000_0000_000a)
 const OWNER_B: Uuid = Uuid::from_u128(0x0192_0000_0000_7000_8000_0000_0000_000b);
 const REMOTE_VAULT_ID: &str = "remote-vault-0001";
 
+fn state(fixture: &TestDatabase, systemd: &FakeSystemd) -> ApiState<FakeSystemd> {
+    ApiState::new(fixture.database.clone(), systemd.clone())
+        .with_key_file(systemd.key_file())
+        .with_credentials_dir(systemd.credentials_root())
+}
+
 fn router(fixture: &TestDatabase, systemd: &FakeSystemd) -> Router {
-    domain_router(
-        ApiState::new(fixture.database.clone(), systemd.clone())
-            .with_key_file(systemd.key_file())
-            .with_credentials_dir(systemd.credentials_root()),
-    )
+    domain_router(state(fixture, systemd))
 }
 
 async fn connections_of(fixture: &TestDatabase, owner: Uuid) -> i64 {
@@ -252,21 +259,300 @@ async fn cancelled_connect_releases_the_vault() {
         "failed",
         "a dropped connect request does not leave its connection connecting"
     );
-    let calls = systemd.calls();
-    for call in [
-        Call::Stop(format!("ratatoskr-notes-login@{id}.service")),
-        Call::Start(format!("ratatoskr-notes-cleanup@{id}.service")),
-    ] {
-        assert!(calls.contains(&call), "{call:?} is missing from {calls:?}");
-    }
+    assert_login_stopped_then_cleaned_up(&systemd, id);
     assert_eq!(secrets_of(&fixture, id).await, 0, "the ciphertext is gone");
     assert!(
         !systemd.credentials_root().join(id.to_string()).exists(),
         "the credential files of the login are gone"
     );
+    assert!(
+        holds_nothing(&systemd.connection_dir(id).join("ob-home")),
+        "no client state of the stopped login stays"
+    );
 
     // The failed connection does not hold the vault key: the owner can connect the vault again.
     connection_id(&connect(&router, OWNER_A, "sync", REMOTE_VAULT_ID).await);
+
+    fixture
+        .cleanup()
+        .await
+        .expect("the test database is dropped");
+}
+
+/// The service stopped the login unit of a connection after it started it, and ran the cleanup unit
+/// after the stop.
+fn assert_login_stopped_then_cleaned_up(systemd: &FakeSystemd, id: Uuid) {
+    let calls = systemd.calls();
+    let position = |call: Call| calls.iter().position(|made| *made == call);
+    let started = position(Call::Start(format!("ratatoskr-notes-login@{id}.service")));
+    let stopped = position(Call::Stop(format!("ratatoskr-notes-login@{id}.service")));
+    let cleaned = position(Call::Start(format!("ratatoskr-notes-cleanup@{id}.service")));
+    assert!(
+        matches!(
+            (started, stopped, cleaned),
+            (Some(started), Some(stopped), Some(cleaned)) if started < stopped && stopped < cleaned
+        ),
+        "the login starts, then stops, then the cleanup unit runs: {calls:?}"
+    );
+}
+
+/// A directory that does not exist or is empty.
+fn holds_nothing(directory: &Path) -> bool {
+    match std::fs::read_dir(directory) {
+        Ok(mut entries) => entries.next().is_none(),
+        Err(_) => true,
+    }
+}
+
+/// The state of a connection now.
+async fn state_of(fixture: &TestDatabase, connection_id: Uuid) -> String {
+    sqlx::query_scalar("select state from notes.connections where connection_id = $1")
+        .bind(connection_id)
+        .fetch_one(fixture.pool())
+        .await
+        .expect("the connection can be read")
+}
+
+/// The login unit of a connection was started.
+fn login_started(systemd: &FakeSystemd, id: Uuid) -> bool {
+    systemd
+        .calls()
+        .contains(&Call::Start(format!("ratatoskr-notes-login@{id}.service")))
+}
+
+#[tokio::test]
+async fn shutdown_during_login_fails_the_connection() {
+    let fixture = TestDatabase::create().await.expect("a test database");
+    // The login unit runs until the service stops it.
+    let systemd = FakeSystemd::new().hold_logins();
+    let state = state(&fixture, &systemd);
+    let router = domain_router(state.clone());
+
+    let request = tokio::spawn({
+        let router = router.clone();
+        async move { connect(&router, OWNER_A, "sync", REMOTE_VAULT_ID).await }
+    });
+    let id = first_login_started(&systemd)
+        .await
+        .expect("the connect request starts the login unit");
+
+    // The stop signal arrives while the login runs. The service fails the connect in the grace
+    // window.
+    let drained = tokio::time::timeout(SETTLE, state.shut_down()).await;
+    assert!(drained.is_ok(), "the connects end in the grace window");
+    assert_eq!(
+        state_of(&fixture, id).await,
+        "failed",
+        "a stop of the service does not leave its connection connecting"
+    );
+    assert_login_stopped_then_cleaned_up(&systemd, id);
+    assert_eq!(secrets_of(&fixture, id).await, 0, "the ciphertext is gone");
+    assert!(
+        holds_nothing(&systemd.connection_dir(id).join("ob-home")),
+        "no client state of the stopped login stays"
+    );
+    let answer = request.await.expect("the connect request answers");
+    assert_eq!(
+        answer.status,
+        StatusCode::SERVICE_UNAVAILABLE,
+        "{:?}",
+        answer.body
+    );
+    assert_eq!(answer.body["code"], "notes.service.unavailable");
+
+    // A connect that arrives after the stop signal starts no login.
+    let late = connect(&router, OWNER_B, "sync", REMOTE_VAULT_ID).await;
+    assert_eq!(
+        late.status,
+        StatusCode::SERVICE_UNAVAILABLE,
+        "{:?}",
+        late.body
+    );
+    assert_eq!(connections_of(&fixture, OWNER_B).await, 0);
+
+    fixture
+        .cleanup()
+        .await
+        .expect("the test database is dropped");
+}
+
+#[tokio::test]
+async fn next_start_fails_an_interrupted_login() {
+    let fixture = TestDatabase::create().await.expect("a test database");
+    let systemd = FakeSystemd::new();
+    let router = router(&fixture, &systemd);
+    // A `sync` connection whose login finished stays `connecting` until its first scan, and so
+    // does a `plugin` connection. The start leaves both alone.
+    let logged_in = connection_id(&connect(&router, OWNER_A, "sync", "remote-vault-0002").await);
+    let plugin = connection_id(&connect(&router, OWNER_A, "plugin", "plugin-vault-0001").await);
+
+    // What a stop that the grace window cut short leaves: a `sync` connection with its ciphertext
+    // whose login never finished, and what the login wrote on the host.
+    let interrupted = Uuid::now_v7();
+    let nonce = [7_u8; 24];
+    let ciphertext = [9_u8; 32];
+    fixture
+        .database
+        .create_connection(&NewConnection {
+            connection_id: interrupted,
+            owner_id: OWNER_A,
+            channel: "sync",
+            vault_key: REMOTE_VAULT_ID,
+            vault_display_name: "Personal",
+            secrets: &[NewSecret {
+                kind: "account_password",
+                nonce: &nonce,
+                ciphertext: &ciphertext,
+            }],
+        })
+        .await
+        .expect("the interrupted connection is inserted");
+    let (tree, ob_home) = leave_sync_state(&systemd, interrupted);
+    let calls_before = systemd.calls().len();
+
+    // The next start of the service.
+    let next = state(&fixture, &systemd);
+    next.reconcile_interrupted_logins().await;
+
+    assert_eq!(
+        systemd.calls()[calls_before..],
+        [
+            Call::Stop(format!("ratatoskr-notes-sync@{interrupted}.service")),
+            Call::Stop(format!("ratatoskr-notes-login@{interrupted}.service")),
+            Call::Start(format!("ratatoskr-notes-cleanup@{interrupted}.service")),
+        ],
+        "the start stops the interrupted login and runs its cleanup unit, and nothing else"
+    );
+    assert_eq!(state_of(&fixture, interrupted).await, "failed");
+    assert_eq!(
+        secrets_of(&fixture, interrupted).await,
+        0,
+        "the ciphertext is gone"
+    );
+    assert!(!tree.exists(), "the working tree is gone");
+    assert!(!ob_home.exists(), "the client state is gone");
+
+    assert_eq!(state_of(&fixture, logged_in).await, "connecting");
+    assert_eq!(secrets_of(&fixture, logged_in).await, 2);
+    assert_eq!(state_of(&fixture, plugin).await, "connecting");
+
+    fixture
+        .cleanup()
+        .await
+        .expect("the test database is dropped");
+}
+
+#[tokio::test]
+async fn connect_after_delete_starts_no_login() {
+    let fixture = TestDatabase::create().await.expect("a test database");
+    let systemd = FakeSystemd::new();
+    // The connect waits after its insert until the test releases it.
+    let (reached_sender, mut reached) = mpsc::unbounded_channel::<Uuid>();
+    let release = Arc::new(Notify::new());
+    let router = domain_router(state(&fixture, &systemd).with_before_login({
+        let release = Arc::clone(&release);
+        move |connection_id| {
+            let reached = reached_sender.clone();
+            let release = Arc::clone(&release);
+            async move {
+                let _ = reached.send(connection_id);
+                release.notified().await;
+            }
+        }
+    }));
+
+    let request = tokio::spawn({
+        let router = router.clone();
+        async move { connect(&router, OWNER_A, "sync", REMOTE_VAULT_ID).await }
+    });
+    let id = tokio::time::timeout(SETTLE, reached.recv())
+        .await
+        .expect("the connect inserts its connection")
+        .expect("the connect names its connection");
+
+    // The owner removes the connection between its insert and the start of its login.
+    let removed = send(
+        &router,
+        Method::DELETE,
+        &format!("/v1/notes/connections/{id}"),
+        OWNER_A,
+        None,
+    )
+    .await;
+    assert_eq!(removed.status, StatusCode::NO_CONTENT, "{:?}", removed.body);
+    release.notify_one();
+    let answer = request.await.expect("the connect request answers");
+
+    assert!(
+        !login_started(&systemd, id),
+        "no login unit starts for a removed connection: {:?}",
+        systemd.calls()
+    );
+    assert_eq!(answer.status, StatusCode::NOT_FOUND, "{:?}", answer.body);
+    assert_eq!(answer.body["code"], "notes.connection.not_found");
+    assert_eq!(state_of(&fixture, id).await, "removed");
+    assert_eq!(secrets_of(&fixture, id).await, 0, "the ciphertext is gone");
+    assert!(
+        !systemd.credentials_root().join(id.to_string()).exists(),
+        "no credential files are written"
+    );
+
+    fixture
+        .cleanup()
+        .await
+        .expect("the test database is dropped");
+}
+
+#[tokio::test]
+async fn logins_are_bounded() {
+    let fixture = TestDatabase::create().await.expect("a test database");
+    let systemd = FakeSystemd::new().hold_logins();
+    let router = domain_router(state(&fixture, &systemd).with_max_logins(1));
+
+    let first = tokio::spawn({
+        let router = router.clone();
+        async move { connect(&router, OWNER_A, "sync", REMOTE_VAULT_ID).await }
+    });
+    let first_id = first_login_started(&systemd)
+        .await
+        .expect("the first connect starts its login unit");
+
+    // One login runs, and the limit is one: the next `sync` connect is refused at once.
+    let extra = tokio::time::timeout(
+        Duration::from_secs(5),
+        connect(&router, OWNER_B, "sync", REMOTE_VAULT_ID),
+    )
+    .await;
+    assert!(
+        extra.is_ok(),
+        "a connect over the limit answers at once and does not wait for a login: {:?}",
+        systemd.calls()
+    );
+    let extra = extra.expect("checked above");
+    assert_eq!(
+        extra.status,
+        StatusCode::SERVICE_UNAVAILABLE,
+        "{:?}",
+        extra.body
+    );
+    assert_eq!(extra.body["code"], "notes.service.unavailable");
+    assert_eq!(extra.body["retryable"], true);
+    assert_eq!(
+        connections_of(&fixture, OWNER_B).await,
+        0,
+        "the refused connect creates no connection"
+    );
+
+    // A `plugin` connect runs no login, so the limit does not apply to it.
+    connection_id(&connect(&router, OWNER_B, "plugin", "plugin-vault-0001").await);
+
+    // When the first login ends, its place is free again.
+    systemd.release_logins();
+    assert_eq!(
+        connection_id(&first.await.expect("the first connect answers")),
+        first_id
+    );
+    connection_id(&connect(&router, OWNER_B, "sync", REMOTE_VAULT_ID).await);
 
     fixture
         .cleanup()

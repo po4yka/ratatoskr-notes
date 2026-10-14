@@ -606,11 +606,27 @@ fn set_mode(path: &Path, mode: u32) {
 #[tokio::test]
 async fn unsafe_key_file_is_refused() {
     let fixture = TestDatabase::create().await.expect("a test database");
-    let cases: [(&str, PrepareKeyFile); 3] = [
+    let cases: [(&str, PrepareKeyFile); 5] = [
         ("mode 0644", |key| set_mode(key, 0o644)),
         ("31 bytes", |key| {
             set_mode(key, 0o600);
             std::fs::write(key, &KEY_BYTES[..31]).expect("the key file can be written");
+        }),
+        ("33 bytes", |key| {
+            set_mode(key, 0o600);
+            let mut longer = KEY_BYTES.to_vec();
+            longer.push(b'!');
+            std::fs::write(key, longer).expect("the key file can be written");
+        }),
+        // The open of a FIFO without a writer must not wait, and the type check refuses it.
+        ("a FIFO", |key| {
+            std::fs::remove_file(key).expect("the key file can be removed");
+            let made = std::process::Command::new("mkfifo")
+                .args(["-m", "0600"])
+                .arg(key)
+                .status()
+                .expect("mkfifo can be started");
+            assert!(made.success(), "mkfifo makes the FIFO");
         }),
         ("a symbolic link to a good key file", |key| {
             let target = key.with_extension("target");
