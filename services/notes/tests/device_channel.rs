@@ -570,3 +570,42 @@ async fn foreign_bytes_are_missing_for_another_connection() {
 
     channel.cleanup().await;
 }
+
+#[tokio::test]
+async fn bound_after_a_committed_manifest_changes_nothing() {
+    // The end of the manifest bound runs at once after the first manifest is applied and before
+    // its answer: the one step where it could still find the connection `connecting`.
+    let channel = Channel::with(|state| {
+        let bound = state.clone();
+        state.with_after_manifest(move |connection_id| {
+            let bound = bound.clone();
+            async move { bound.expire_device_connect(connection_id).await }
+        })
+    })
+    .await;
+    let connection = channel
+        .plugin_connection(OWNER, "vault-key-interleaved")
+        .await;
+    channel
+        .hold(OWNER, connection, b"committed before the bound\n")
+        .await;
+
+    let applied = channel
+        .device_call(
+            connection,
+            "manifest",
+            json!({ "entries": [entry("Note.md", b"committed before the bound\n")] }),
+        )
+        .await;
+    let report = terminal_report(&channel.fixture, connection).await;
+
+    assert_eq!(applied.status, StatusCode::OK, "{:?}", applied.body);
+    assert_eq!(
+        report["status"], "succeeded",
+        "a bound that ends after the manifest committed does not fail the connect: {report:?}"
+    );
+    assert_eq!(channel.connection_state(connection).await, "active");
+    assert_eq!(channel.connected_events(connection).await, 1);
+
+    channel.cleanup().await;
+}

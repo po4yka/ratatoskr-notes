@@ -67,16 +67,27 @@ pub const DEFAULT_MANIFEST_DEADLINE: Duration = Duration::from_mins(30);
 /// How many first logins run at the same time when the configuration does not say.
 pub const DEFAULT_MAX_LOGINS: usize = 2;
 
-/// The future of one [`BeforeLogin`] pause.
+/// The future of one [`TestHook`] pause.
 type Pause = Pin<Box<dyn Future<Output = ()> + Send>>;
 
-/// A pause between the insert of a connection and the start of its login. For tests.
+/// A pause at one step of a connection, for example between the insert of a connection and the
+/// start of its login. For tests.
 #[derive(Clone)]
-struct BeforeLogin(Arc<dyn Fn(Uuid) -> Pause + Send + Sync>);
+struct TestHook(Arc<dyn Fn(Uuid) -> Pause + Send + Sync>);
 
-impl fmt::Debug for BeforeLogin {
+impl fmt::Debug for TestHook {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("BeforeLogin")
+        formatter.write_str("TestHook")
+    }
+}
+
+impl TestHook {
+    fn of<F, Fut>(hook: F) -> Self
+    where
+        F: Fn(Uuid) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = ()> + Send + 'static,
+    {
+        Self(Arc::new(move |connection_id| Box::pin(hook(connection_id))))
     }
 }
 
@@ -92,7 +103,8 @@ pub struct ApiState<B> {
     connects: TaskTracker,
     stopping: CancellationToken,
     removals: Removals,
-    before_login: Option<BeforeLogin>,
+    before_login: Option<TestHook>,
+    after_manifest: Option<TestHook>,
     blobs: BlobStore,
     trees_root: PathBuf,
     max_file_bytes: u64,
@@ -113,6 +125,7 @@ impl<B> Clone for ApiState<B> {
             stopping: self.stopping.clone(),
             removals: self.removals.clone(),
             before_login: self.before_login.clone(),
+            after_manifest: self.after_manifest.clone(),
             blobs: self.blobs.clone(),
             trees_root: self.trees_root.clone(),
             max_file_bytes: self.max_file_bytes,
@@ -142,6 +155,7 @@ impl<B: SystemdBus> ApiState<B> {
             stopping: CancellationToken::new(),
             removals: Removals::default(),
             before_login: None,
+            after_manifest: None,
             blobs,
             trees_root,
             max_file_bytes,
@@ -218,9 +232,19 @@ impl<B: SystemdBus> ApiState<B> {
         F: Fn(Uuid) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = ()> + Send + 'static,
     {
-        self.before_login = Some(BeforeLogin(Arc::new(move |connection_id| {
-            Box::pin(hook(connection_id))
-        })));
+        self.before_login = Some(TestHook::of(hook));
+        self
+    }
+
+    /// Wait for `hook` after a manifest of a device connection is applied and before the answer.
+    /// For tests: a test can run the end of the manifest bound there.
+    #[must_use]
+    pub fn with_after_manifest<F, Fut>(mut self, hook: F) -> Self
+    where
+        F: Fn(Uuid) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = ()> + Send + 'static,
+    {
+        self.after_manifest = Some(TestHook::of(hook));
         self
     }
 

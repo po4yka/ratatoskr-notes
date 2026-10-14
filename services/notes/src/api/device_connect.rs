@@ -61,8 +61,9 @@ impl<B: SystemdBus> ApiState<B> {
         }
     }
 
-    /// Fail a device connect that is still `connecting` after its bound, and its operation.
-    async fn expire_device_connect(&self, connection_id: Uuid) {
+    /// Fail a device connect that is still `connecting` after its bound, and its operation. The
+    /// wait of the bound calls it; a test calls it to run the end of the bound at one step.
+    pub async fn expire_device_connect(&self, connection_id: Uuid) {
         let operation = match self.database.connect_operation(connection_id).await {
             Ok(Some(operation)) => operation,
             Ok(None) => return,
