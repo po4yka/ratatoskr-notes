@@ -15,8 +15,8 @@ use std::time::Duration;
 
 use metrics_exporter_prometheus::PrometheusBuilder;
 use ratatoskr_notes::config::{
-    AdminConfig, ApiConfig, BlobsConfig, ConnectionsConfig, DatabaseConfig, NotesConfig,
-    SecretsConfig, ShutdownConfig, TelemetryConfig,
+    AdminConfig, ApiConfig, BlobsConfig, BusConfig, ConnectionsConfig, DatabaseConfig, FilesConfig,
+    NotesConfig, SecretsConfig, ShutdownConfig, TelemetryConfig,
 };
 use ratatoskr_notes::systemd::DbusSystemd;
 use rustix::fs::Mode;
@@ -34,6 +34,8 @@ async fn strict_umask_fails_the_start() {
         blobs: BlobsConfig {
             root: host.path().join("blobs"),
         },
+        bus: BusConfig::default(),
+        files: FilesConfig::default(),
         connections: ConnectionsConfig::default(),
         // No database answers on port 1: a start that reaches the database fails there.
         database: DatabaseConfig {

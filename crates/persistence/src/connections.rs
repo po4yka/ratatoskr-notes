@@ -222,25 +222,34 @@ impl Database {
             .execute(&mut *transaction)
             .await
             .map_err(PersistenceError::Query)?;
-        sqlx::query(
-            "insert into notes.outbox
-                 (event_id, event_type, aggregate_type, aggregate_id, payload, created_at)
-             values ($1, $2, $3, $4, $5, now())",
-        )
-        .bind(event.event_id)
-        .bind(event.event_type)
-        .bind(event.aggregate_type)
-        .bind(event.aggregate_id)
-        .bind(event.envelope)
-        .execute(&mut *transaction)
-        .await
-        .map_err(PersistenceError::Query)?;
+        insert_outbox(&mut transaction, event).await?;
         transaction
             .commit()
             .await
             .map_err(PersistenceError::Query)?;
         Ok(true)
     }
+}
+
+/// Write `event` to the outbox in `transaction`.
+pub(crate) async fn insert_outbox(
+    transaction: &mut sqlx::Transaction<'static, sqlx::Postgres>,
+    event: &OutboxEvent<'_>,
+) -> Result<(), PersistenceError> {
+    sqlx::query(
+        "insert into notes.outbox
+             (event_id, event_type, aggregate_type, aggregate_id, payload, created_at)
+         values ($1, $2, $3, $4, $5, now())",
+    )
+    .bind(event.event_id)
+    .bind(event.event_type)
+    .bind(event.aggregate_type)
+    .bind(event.aggregate_id)
+    .bind(event.envelope)
+    .execute(&mut **transaction)
+    .await
+    .map_err(PersistenceError::Query)?;
+    Ok(())
 }
 
 impl Database {

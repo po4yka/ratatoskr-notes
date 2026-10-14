@@ -13,6 +13,8 @@
 pub mod test_support;
 
 mod connections;
+mod files;
+mod outbox;
 
 use std::time::Duration;
 
@@ -22,6 +24,8 @@ use sqlx::postgres::{PgPool, PgPoolOptions};
 pub use crate::connections::{
     ConnectionRecord, CreateOutcome, NewConnection, NewSecret, OutboxEvent,
 };
+pub use crate::files::{FileRow, FileTransaction, LockedConnection, NewRevision};
+pub use crate::outbox::PendingEvent;
 
 /// The schema, embedded at compile time.
 ///

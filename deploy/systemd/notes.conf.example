@@ -27,3 +27,13 @@ RATATOSKR__SECRETS__KEY_FILE=/etc/ratatoskr/notes-secrets.key
 # How many first logins of sync connections run at the same time, 1 to 16. Each login runs ob, a
 # Node.js process. A sync connect over the limit answers 503. This line repeats the default.
 RATATOSKR__CONNECTIONS__MAX_LOGINS=2
+
+# The NATS server and the seed of the NOTES identity: the outbox relay publishes the notes events and
+# the operation reports with the inbox prefix _INBOX_notes. The seed file is mode 0400, owner
+# ratatoskr-notes.
+RATATOSKR__BUS__URL=nats://127.0.0.1:4222
+RATATOSKR__BUS__NKEY_SEED_PATH=/etc/ratatoskr/notes.nkey
+
+# The largest file that is indexed, in bytes. A larger file publishes no event. This line repeats
+# the default, 64 MiB.
+RATATOSKR__FILES__MAX_FILE_BYTES=67108864

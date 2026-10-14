@@ -23,8 +23,8 @@ use axum::http::{Method, Request, StatusCode};
 use http_body_util::BodyExt as _;
 use metrics_exporter_prometheus::PrometheusBuilder;
 use ratatoskr_notes::config::{
-    AdminConfig, ApiConfig, BlobsConfig, ConnectionsConfig, DatabaseConfig, NotesConfig,
-    SecretsConfig, ShutdownConfig, TelemetryConfig,
+    AdminConfig, ApiConfig, BlobsConfig, BusConfig, ConnectionsConfig, DatabaseConfig, FilesConfig,
+    NotesConfig, SecretsConfig, ShutdownConfig, TelemetryConfig,
 };
 use ratatoskr_notes_persistence::test_support::TestDatabase;
 use serde_json::Value;
@@ -266,6 +266,8 @@ pub(crate) async fn run_service<T>(
         blobs: BlobsConfig {
             root: systemd.blob_root(),
         },
+        bus: BusConfig::default(),
+        files: FilesConfig::default(),
         connections: ConnectionsConfig { max_logins: 2 },
         database: DatabaseConfig {
             url: fixture.secret_url(),

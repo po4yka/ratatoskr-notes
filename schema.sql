@@ -44,6 +44,13 @@ create table notes.connections (
     -- runs, and for the other channels. At start, the service fails each `sync` connection that is
     -- `connecting` with no value here: a stop of the service interrupted its login.
     logged_in_at       timestamptz,
+    -- The folders that the owner excluded, relative to the vault root. A file under one of them is
+    -- not indexed and publishes no event (workspace design D7).
+    excluded_folders   text[]      not null default '{}',
+    -- The `connection_sequence` of the last `notes.file.changed.v1` of this connection. Each event
+    -- takes the next number under the lock of this row, in the transaction that writes it to the
+    -- outbox, so the numbers start at 1 and have no gap (workspace design D7).
+    last_sequence      bigint      not null default 0,
     created_at         timestamptz not null,
     updated_at         timestamptz not null,
 
@@ -62,7 +69,11 @@ create table notes.connections (
     constraint connections_updated_at_is_not_before_created_at
         check (updated_at >= created_at),
     constraint connections_only_sync_logs_in
-        check (logged_in_at is null or channel = 'sync')
+        check (logged_in_at is null or channel = 'sync'),
+    constraint connections_last_sequence_is_not_negative
+        check (last_sequence >= 0),
+    constraint connections_excluded_folders_are_bounded
+        check (cardinality(excluded_folders) <= 64)
 );
 
 comment on table notes.connections is
@@ -107,11 +118,86 @@ comment on table notes.connection_secrets is
     'Ciphertext of the Obsidian account password and end-to-end password; never the MFA code.';
 
 -- ---------------------------------------------------------------------------------------------
+-- files: one path of a vault connection, stable across its revisions
+-- ---------------------------------------------------------------------------------------------
+
+create table notes.files (
+    file_id       uuid        primary key,
+    connection_id uuid        not null references notes.connections (connection_id),
+    -- The path relative to the vault root, in Unicode NFC.
+    path          text        not null,
+    -- The path folded with Unicode default case folding. Two paths with one key are a collision
+    -- (workspace design D7); the second one gets no row here.
+    path_key      text        not null,
+    -- `present`, or `deleted` after the file left the vault or became excluded. A file that comes
+    -- back keeps its id.
+    state         text        not null,
+    -- The lowercase hex SHA-256 of the current bytes; of the last bytes for a deleted file.
+    revision      text        not null,
+    media_type    text        not null,
+    length_bytes  bigint      not null,
+    created_at    timestamptz not null,
+    updated_at    timestamptz not null,
+
+    constraint files_one_per_path_key unique (connection_id, path_key),
+    constraint files_state_is_known check (state in ('present', 'deleted')),
+    constraint files_revision_is_sha256 check (revision ~ '^[0-9a-f]{64}$'),
+    constraint files_path_is_bounded check (length(path) between 1 and 1024),
+    constraint files_length_is_not_negative check (length_bytes >= 0)
+);
+
+comment on table notes.files is
+    'One file of a vault connection by its NFC path and its case-folded path key.';
+
+-- ---------------------------------------------------------------------------------------------
+-- revisions: the bytes of a file at one SHA-256, in the notes blob root
+-- ---------------------------------------------------------------------------------------------
+
+create table notes.revisions (
+    file_id      uuid        not null references notes.files (file_id),
+    revision     text        not null,
+    media_type   text        not null,
+    length_bytes bigint      not null,
+    -- The index of a Markdown revision (frontmatter, tags, headings, block ids, aliases, links and
+    -- embeds as the note writes them; workspace design D8). Null for other files.
+    note_index   jsonb,
+    created_at   timestamptz not null,
+
+    primary key (file_id, revision),
+
+    constraint revisions_revision_is_sha256 check (revision ~ '^[0-9a-f]{64}$'),
+    constraint revisions_length_is_not_negative check (length_bytes >= 0)
+);
+
+comment on table notes.revisions is
+    'Each revision of a file; the bytes are in the notes blob root under the SHA-256.';
+
+-- ---------------------------------------------------------------------------------------------
+-- path_collisions: a path whose key another present file of the connection holds
+-- ---------------------------------------------------------------------------------------------
+
+create table notes.path_collisions (
+    connection_id uuid        not null references notes.connections (connection_id),
+    -- The NFC path that got no revision.
+    path          text        not null,
+    path_key      text        not null,
+    observed_at   timestamptz not null,
+
+    primary key (connection_id, path)
+);
+
+comment on table notes.path_collisions is
+    'The condition notes.file.path_collision of a connection, with the path that got no revision.';
+
+-- ---------------------------------------------------------------------------------------------
 -- outbox: events Notes owes the bus, written in the same transaction as their cause
 -- ---------------------------------------------------------------------------------------------
 
 create table notes.outbox (
     event_id       uuid        primary key,
+    -- The order in which the relay publishes. The events of one connection take this number under
+    -- the lock of the connection row, so it follows their `connection_sequence`.
+    position       bigint      generated always as identity,
     event_type     text        not null,
     aggregate_type text        not null,
     -- An entity reference, for example `notes_connection:<uuid>`.
@@ -124,7 +210,7 @@ create table notes.outbox (
 
     -- A CLOSED list: a type that Notes does not produce yet cannot be inserted.
     constraint outbox_event_type_is_known
-        check (event_type in ('notes.vault.disconnected.v1')),
+        check (event_type in ('notes.vault.disconnected.v1', 'notes.file.changed.v1')),
     constraint outbox_aggregate_type_is_bounded
         check (length(aggregate_type) between 1 and 64)
 );
@@ -132,4 +218,4 @@ create table notes.outbox (
 comment on table notes.outbox is
     'Transactional outbox. The relay to JetStream under the NOTES identity reads it.';
 
-create index outbox_unpublished_idx on notes.outbox (created_at) where published_at is null;
+create index outbox_unpublished_idx on notes.outbox (position) where published_at is null;

@@ -21,6 +21,17 @@ The tests create one database per test and drop it at the end. They read
 database that `compose.yaml` starts. If the postgres of another Ratatoskr repository uses port
 5432, stop it first or set `NOTES_TEST_DATABASE_URL`.
 
+The test of the outbox relay (`tests/file_events.rs`) needs a NATS server with JetStream. It reads
+`NOTES_TEST_NATS_URL`, and the default is `nats://127.0.0.1:4222`. CI starts one; on a laptop:
+
+```bash
+docker run -d --rm --name notes-nats -p 127.0.0.1:4222:4222 nats:2.15.0-alpine -js
+```
+
+The test makes the stream `notes_test_events` for the subjects `evt.notes.>` and
+`evt.platform.operation.reported.v1` on that server. Do not point it at a server that holds the
+stream `ratatoskr_events`, which takes the same subjects.
+
 ### Rust — also the CI gate
 
 The gate is `.github/workflows/ci.yml`; this list and that job's `run:` steps are one list, and a step in ci.yml fails when they differ. Run them in this order before you declare a change done:
@@ -111,6 +122,9 @@ validates the environment and binds nothing (exit 0 valid, exit 78 invalid).
 | `RATATOSKR__ADMIN__BIND` | `127.0.0.1:9471` | The operator listener. |
 | `RATATOSKR__API__LISTEN_ADDRESS` | `127.0.0.1:8099` | The domain API listener. It must differ from the operator listener. |
 | `RATATOSKR__BLOBS__ROOT` | `/mnt/nvme/ratatoskr/blobs/ratatoskr-notes` | The notes blob root. The start fails when the umask is stricter than 0027, because the store would then remove the setgid bit of a new directory. |
+| `RATATOSKR__BUS__URL` | none | The NATS server of the outbox relay, `nats://` or `tls://`. Without it no relay runs, and the events stay in the outbox. |
+| `RATATOSKR__BUS__NKEY_SEED_PATH` | none | An absolute path: the nkey seed of the `NOTES` identity, `/etc/ratatoskr/notes.nkey` on the host. The relay reads it at each connect. |
+| `RATATOSKR__FILES__MAX_FILE_BYTES` | `67108864` | The largest file that is indexed, 64 MiB, 1 to 1073741824. A larger file publishes no event. |
 | `RATATOSKR__SECRETS__KEY_FILE` | `/etc/ratatoskr/notes-secrets.key` | The 32-byte key of the stored Obsidian passwords: a regular file, not a symbolic link, mode 0400 or 0600, owned by the user of the service. Read at each `sync` connect. |
 | `RATATOSKR__SHUTDOWN__GRACE_SECONDS` | `10` | How long in-flight requests and running logins may take after SIGTERM, 1 to 60. The service fails each running login in this window; the next start fails a login that it did not reach. |
 | `RATATOSKR__TELEMETRY__LOG_FORMAT` | `text` | `text` or `json`. |
@@ -123,8 +137,10 @@ An unknown `RATATOSKR__` key stops the start with exit 78.
 `schema.sql` at the repository root is the whole schema. The binary embeds it and applies it to a
 database that has no `notes` schema. There are no migrations: a schema change edits `schema.sql`
 in place, and the next test database has it.
-A database made before the `logged_in_at` column of `notes.connections` does not get the column:
-drop its `notes` schema (`drop schema notes cascade`), and the next start of the service makes it
+A database made before a part of `schema.sql` does not get that part: the column `logged_in_at`,
+the columns `excluded_folders` and `last_sequence` of `notes.connections`, the column `position`
+of `notes.outbox`, or the tables `notes.files`, `notes.revisions` and `notes.path_collisions`. Drop
+its `notes` schema (`drop schema notes cascade`), and the next start of the service makes it
 again from `schema.sql` (AGENTS.md, Development status: no migrations).
 
 ## Deploy files

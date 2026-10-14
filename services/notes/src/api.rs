@@ -23,6 +23,7 @@ use tokio_util::task::TaskTracker;
 use uuid::Uuid;
 
 use crate::events;
+use crate::files::{self, ExcludedFoldersSet};
 use crate::login::{self, CredentialFiles, SyncLogin};
 use crate::secrets::{Sealed, SecretKind, SecretsKey};
 use crate::supervisor::Supervisor;
@@ -637,7 +638,8 @@ struct ExcludedFolders {
 }
 
 /// `PUT /v1/notes/connections/{id}/excluded-folders`: set the folders of a connection that are
-/// not indexed.
+/// not indexed (workspace design D7). Each present file under them is published `deleted` once,
+/// and a later change under them publishes nothing. The answer names the folders as stored.
 async fn set_excluded_folders<B: SystemdBus>(
     State(state): State<ApiState<B>>,
     headers: HeaderMap,
@@ -647,16 +649,27 @@ async fn set_excluded_folders<B: SystemdBus>(
     let owner_id = owner(&headers)?;
     let Path(connection_id) = connection_id.map_err(|_| ApiFault::NotFound)?;
     let Json(request) = body.map_err(|_| ApiFault::InvalidRequest)?;
-    state
-        .database
-        .connection_of_owner(owner_id, connection_id)
-        .await
-        .map_err(|error| {
-            tracing::error!(%error, "a connection could not be read");
-            ApiFault::Unavailable
-        })?
-        .ok_or(ApiFault::NotFound)?;
-    Ok(Json(request))
+    let outcome = files::set_excluded_folders(
+        &state.database,
+        owner_id,
+        connection_id,
+        &request.excluded_folders,
+    )
+    .await
+    .map_err(|error| {
+        tracing::error!(%error, %connection_id, "the excluded folders could not be set");
+        ApiFault::Unavailable
+    })?;
+    match outcome {
+        ExcludedFoldersSet::Set { folders, deleted } => {
+            tracing::info!(%connection_id, deleted, "the excluded folders of a connection were set");
+            Ok(Json(ExcludedFolders {
+                excluded_folders: folders,
+            }))
+        }
+        ExcludedFoldersSet::NotFound => Err(ApiFault::NotFound),
+        ExcludedFoldersSet::Invalid => Err(ApiFault::InvalidRequest),
+    }
 }
 
 /// Stop the sync unit and the login unit, then run the cleanup unit and wait for it (workspace

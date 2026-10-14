@@ -41,6 +41,7 @@ use crate::admin::{RuntimeState, admin_router};
 use crate::api::{ApiState, DEFAULT_CREDENTIALS_DIR, domain_router};
 use crate::blobs::BlobStore;
 use crate::config::{LogFormat, NotesConfig, TelemetryConfig};
+use crate::outbox::{BusSettings, OutboxRelay};
 use crate::systemd::{DbusSystemd, SystemdBus};
 
 /// The whole process lifecycle.
@@ -52,8 +53,9 @@ use crate::systemd::{DbusSystemd, SystemdBus};
 /// 5. Bind the operator and the domain listeners; on failure exit 1.
 /// 6. Fail each `sync` login that a stop of the previous process interrupted, and start the sync
 ///    unit of each `sync` connection whose login finished, before the listeners accept a request.
-/// 7. Serve until SIGTERM or SIGINT. Then, within the grace window, let in-flight requests finish,
-///    and fail each connect whose login still runs.
+/// 7. Start the outbox relay when `RATATOSKR__BUS__URL` is set.
+/// 8. Serve until SIGTERM or SIGINT. Then, within the grace window, let in-flight requests finish,
+///    and fail each connect whose login still runs. Then stop the relay.
 pub async fn run() -> ExitCode {
     let config = match config::load() {
         Ok(config) => config,
@@ -166,6 +168,22 @@ pub async fn serve<B: SystemdBus>(
     let admin = bind(config.admin.bind, "operator").await?;
     let api = bind(config.api.listen_address, "domain").await?;
 
+    // The relay publishes what the outbox holds, also the events of an earlier process.
+    let relay_stop = tokio_util::sync::CancellationToken::new();
+    let relay = config.bus.url.as_ref().map(|url| {
+        let relay = OutboxRelay::new(
+            database.clone(),
+            BusSettings {
+                url: url.clone(),
+                nkey_seed_path: config.bus.nkey_seed_path.clone(),
+            },
+        );
+        tokio::spawn(relay.run(relay_stop.clone()))
+    });
+    if relay.is_none() {
+        tracing::warn!("RATATOSKR__BUS__URL is not set; the events stay in the outbox");
+    }
+
     let state = ApiState::new(database.clone(), systemd)
         .with_key_file(config.secrets.key_file.clone())
         .with_credentials_dir(credentials_dir)
@@ -204,6 +222,10 @@ pub async fn serve<B: SystemdBus>(
     })
     .await
     .is_ok();
+    relay_stop.cancel();
+    if let Some(relay) = relay {
+        let _ = relay.await;
+    }
     tracing::info!(graceful = drained, "the process stopped");
     database.close().await;
     Ok(())

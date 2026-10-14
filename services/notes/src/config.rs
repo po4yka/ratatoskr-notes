@@ -42,12 +42,20 @@ pub struct NotesConfig {
     #[serde(default)]
     pub blobs: BlobsConfig,
 
+    /// The NATS connection of the outbox relay.
+    #[serde(default)]
+    pub bus: BusConfig,
+
     /// The connects of vault connections.
     #[serde(default)]
     pub connections: ConnectionsConfig,
 
     /// The `PostgreSQL` connection that holds the `notes` schema. Required.
     pub database: DatabaseConfig,
+
+    /// The files of the connections.
+    #[serde(default)]
+    pub files: FilesConfig,
 
     /// The custody of the Obsidian secrets of a `sync` connection.
     #[serde(default)]
@@ -105,6 +113,45 @@ impl Default for BlobsConfig {
 fn default_blob_root() -> PathBuf {
     PathBuf::from(crate::blobs::DEFAULT_ROOT)
 }
+
+/// `RATATOSKR__BUS__*`.
+#[derive(Debug, Clone, Default, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BusConfig {
+    /// The NATS server, for example `nats://127.0.0.1:4222`. Without it no relay runs, and the
+    /// events stay in the outbox: a developer machine without NATS.
+    #[serde(default)]
+    pub url: Option<String>,
+    /// The file that holds the nkey seed of the `NOTES` identity, `/etc/ratatoskr/notes.nkey` on
+    /// the host. Without it the relay connects without authentication.
+    #[serde(default)]
+    pub nkey_seed_path: Option<PathBuf>,
+}
+
+/// `RATATOSKR__FILES__*`.
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FilesConfig {
+    /// The largest file that is indexed, in bytes (workspace design D7). A larger file publishes
+    /// no event.
+    #[serde(default = "default_max_file_bytes")]
+    pub max_file_bytes: u64,
+}
+
+impl Default for FilesConfig {
+    fn default() -> Self {
+        Self {
+            max_file_bytes: default_max_file_bytes(),
+        }
+    }
+}
+
+const fn default_max_file_bytes() -> u64 {
+    ratatoskr_notes_index::paths::DEFAULT_MAX_FILE_BYTES
+}
+
+/// The largest size limit of a file that the configuration accepts: 1 GiB.
+const MAX_FILE_BYTES_LIMIT: u64 = 1024 * 1024 * 1024;
 
 /// `RATATOSKR__SECRETS__*`.
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -404,6 +451,37 @@ fn validate(config: &NotesConfig) -> Vec<Violation> {
             key: "connections.max_logins",
             env_var: "RATATOSKR__CONNECTIONS__MAX_LOGINS",
             rule: "must be 1..=16",
+        });
+    }
+    if !(1..=MAX_FILE_BYTES_LIMIT).contains(&config.files.max_file_bytes) {
+        found.push(Violation {
+            key: "files.max_file_bytes",
+            env_var: "RATATOSKR__FILES__MAX_FILE_BYTES",
+            rule: "must be 1..=1073741824",
+        });
+    }
+    if config
+        .bus
+        .url
+        .as_deref()
+        .is_some_and(|url| !(url.starts_with("nats://") || url.starts_with("tls://")))
+    {
+        found.push(Violation {
+            key: "bus.url",
+            env_var: "RATATOSKR__BUS__URL",
+            rule: "must start with nats:// or tls://",
+        });
+    }
+    if config
+        .bus
+        .nkey_seed_path
+        .as_deref()
+        .is_some_and(|path| !path.is_absolute())
+    {
+        found.push(Violation {
+            key: "bus.nkey_seed_path",
+            env_var: "RATATOSKR__BUS__NKEY_SEED_PATH",
+            rule: "must be an absolute path",
         });
     }
     if !(1..=60).contains(&config.shutdown.grace_seconds) {
