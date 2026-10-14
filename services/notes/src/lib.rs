@@ -18,10 +18,12 @@ pub mod config;
 pub mod events;
 pub mod files;
 mod login;
+pub mod operation;
 pub mod outbox;
 pub mod secrets;
 mod supervisor;
 pub mod systemd;
+mod tree_sync;
 pub mod watcher;
 
 use std::future::Future;
@@ -186,6 +188,7 @@ pub async fn serve<B: SystemdBus>(
 
     let state = ApiState::new(database.clone(), systemd)
         .with_blobs(blobs)
+        .with_max_file_bytes(config.files.max_file_bytes)
         .with_key_file(config.secrets.key_file.clone())
         .with_credentials_dir(credentials_dir)
         .with_max_logins(config.connections.max_logins);

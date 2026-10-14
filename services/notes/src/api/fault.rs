@@ -37,7 +37,7 @@ impl ApiFault {
         }
     }
 
-    const fn fields(&self) -> (&'static str, &'static str, bool) {
+    pub(super) const fn fields(&self) -> (&'static str, &'static str, bool) {
         match self {
             Self::Unauthenticated => (
                 "notes.request.unauthenticated",

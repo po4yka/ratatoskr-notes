@@ -6,7 +6,8 @@ use ratatoskr_identifiers::{
     MediaType, NotesConnectionId, NotesFileId, TenantRef, WireTimestamp,
 };
 use ratatoskr_notes_contracts::{
-    FileChangeKind, FileChanged, VaultChannel, VaultDisconnected, VaultDisplayName, VaultPath,
+    FileChangeKind, FileChanged, VaultChannel, VaultConnected, VaultDisconnected, VaultDisplayName,
+    VaultPath,
 };
 use uuid::Uuid;
 
@@ -28,6 +29,8 @@ pub struct EnvelopeBuildError(&'static str);
 impl EnvelopeBuildError {
     /// The envelope could not be serialized for the outbox.
     pub const SERIALIZE: Self = Self("serialization");
+    /// A report of the connect operation could not be built.
+    pub const STAGE: Self = Self("report");
 }
 
 /// The aggregate reference of a connection, `notes_connection:<uuid>`.
@@ -114,7 +117,7 @@ pub fn file_changed(
 }
 
 /// An envelope of this service with `payload`, owned by `owner_id`, that correlates to itself.
-fn envelope<P: EventPayload + serde::Serialize>(
+pub(crate) fn envelope<P: EventPayload + serde::Serialize>(
     event_id: Uuid,
     event_type: ratatoskr_event_envelope::EventType,
     aggregate_id: &str,
@@ -172,6 +175,36 @@ pub fn vault_disconnected(
     envelope(
         event_id,
         VaultDisconnected::event_type(),
+        &connection_aggregate(connection_id),
+        owner_id,
+        &payload,
+    )
+}
+
+/// `notes.vault.connected.v1` for one connection that became active.
+///
+/// # Errors
+///
+/// [`EnvelopeBuildError`] when a stored value does not satisfy the contract.
+pub fn vault_connected(
+    event_id: Uuid,
+    owner_id: Uuid,
+    connection_id: Uuid,
+    channel: &str,
+    vault_display_name: &str,
+) -> Result<EventEnvelope, EnvelopeBuildError> {
+    let channel: VaultChannel =
+        serde_json::from_value(serde_json::Value::String(channel.to_owned()))
+            .map_err(|_| EnvelopeBuildError("channel"))?;
+    let payload = VaultConnected {
+        connection_id: NotesConnectionId(connection_id),
+        channel,
+        vault_display_name: VaultDisplayName::parse(vault_display_name)
+            .map_err(|_| EnvelopeBuildError("vault_display_name"))?,
+    };
+    envelope(
+        event_id,
+        VaultConnected::event_type(),
         &connection_aggregate(connection_id),
         owner_id,
         &payload,

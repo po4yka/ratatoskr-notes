@@ -39,6 +39,10 @@ use crate::support::systemd::FakeSystemd;
 /// The claim header that Edge mints for the owner.
 pub(crate) const USER_HEADER: &str = "x-ratatoskr-user-id";
 
+/// The header that carries the operation id that Edge mints for a connect. The helpers send a
+/// fresh one with every request, as Edge does for a connect; other routes ignore it.
+pub(crate) const OPERATION_HEADER: &str = "x-ratatoskr-operation-id";
+
 /// One answer of the domain router: the status and the JSON body, `Value::Null` when empty.
 #[derive(Debug)]
 pub(crate) struct Answer {
@@ -57,7 +61,8 @@ pub(crate) async fn send(
     let mut request = Request::builder()
         .method(method)
         .uri(path)
-        .header(USER_HEADER, owner.to_string());
+        .header(USER_HEADER, owner.to_string())
+        .header(OPERATION_HEADER, Uuid::now_v7().to_string());
     let body = match body {
         Some(json) => {
             request = request.header("content-type", "application/json");
@@ -199,7 +204,9 @@ pub(crate) async fn send_tcp(
     let body = body.map(|json| json.to_string()).unwrap_or_default();
     let request = format!(
         "{method} {path} HTTP/1.1\r\nhost: {address}\r\n{USER_HEADER}: {owner}\r\n\
-         content-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+         {OPERATION_HEADER}: {}\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\
+         connection: close\r\n\r\n{body}",
+        Uuid::now_v7(),
         body.len()
     );
     stream
@@ -299,4 +306,56 @@ pub(crate) async fn run_service<T>(
     let _ = stop.send(());
     let ended = tokio::time::timeout(SERVICE_STOP_DEADLINE, serve).await;
     (output, matches!(ended, Ok(Ok(()))))
+}
+
+/// How long a test waits for the task of a connect, which runs after the `202`.
+pub(crate) const CONNECT_DEADLINE: Duration = Duration::from_mins(1);
+
+/// Wait until the task of the connect of `connection_id` ran its login: the login is recorded, or
+/// the connection is no longer `connecting`. Returns the state then.
+pub(crate) async fn login_ended(fixture: &TestDatabase, connection_id: Uuid) -> String {
+    let deadline = Instant::now() + CONNECT_DEADLINE;
+    loop {
+        let (state, logged_in): (String, bool) = sqlx::query_as(
+            "select state, logged_in_at is not null from notes.connections
+             where connection_id = $1",
+        )
+        .bind(connection_id)
+        .fetch_one(fixture.pool())
+        .await
+        .expect("the connection can be read");
+        if state != "connecting" || logged_in || Instant::now() >= deadline {
+            return state;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+/// The payload of the terminal report of the connect operation of `connection_id`, once there is
+/// one, or `Value::Null` at the deadline.
+pub(crate) async fn terminal_report(fixture: &TestDatabase, connection_id: Uuid) -> Value {
+    let deadline = Instant::now() + CONNECT_DEADLINE;
+    loop {
+        let found: Option<Value> = sqlx::query_scalar(
+            "select o.payload -> 'payload' from notes.outbox o
+             join notes.connections c
+               on o.payload -> 'payload' ->> 'operation_id' = c.operation_id::text
+             where c.connection_id = $1
+               and o.event_type = 'platform.operation.reported.v1'
+               and o.payload -> 'payload' ->> 'status'
+                   in ('succeeded', 'partially_succeeded', 'failed')
+             order by o.position limit 1",
+        )
+        .bind(connection_id)
+        .fetch_optional(fixture.pool())
+        .await
+        .expect("the outbox can be read");
+        if let Some(found) = found {
+            return found;
+        }
+        if Instant::now() >= deadline {
+            return Value::Null;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
 }

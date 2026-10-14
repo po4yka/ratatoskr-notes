@@ -28,7 +28,9 @@ use tokio::sync::{Notify, mpsc};
 use uuid::Uuid;
 
 use crate::support::systemd::{Call, FakeSystemd};
-use crate::support::{connect, connection_id, run_service, send, send_tcp};
+use crate::support::{
+    connect, connection_id, login_ended, run_service, send, send_tcp, terminal_report,
+};
 
 const OWNER_A: Uuid = Uuid::from_u128(0x0192_0000_0000_7000_8000_0000_0000_000a);
 const OWNER_B: Uuid = Uuid::from_u128(0x0192_0000_0000_7000_8000_0000_0000_000b);
@@ -132,6 +134,11 @@ async fn disconnect_removes_unit_tree_state_and_secrets() {
     let systemd = FakeSystemd::new();
     let router = router(&fixture, &systemd);
     let id = connection_id(&connect(&router, OWNER_A, "sync", REMOTE_VAULT_ID).await);
+    assert_eq!(
+        login_ended(&fixture, id).await,
+        "connecting",
+        "the login finished"
+    );
     let calls_of_connect = systemd.calls().len();
     let ob_of_connect = systemd.ob_invocations().len();
     let (tree, client_state) = leave_sync_state(&systemd, id);
@@ -218,69 +225,6 @@ async fn first_login_started(systemd: &FakeSystemd) -> Option<Uuid> {
     }
 }
 
-/// The state of a connection once it is no longer `connecting`, or `connecting` after [`SETTLE`].
-async fn settled_state(fixture: &TestDatabase, connection_id: Uuid) -> String {
-    let deadline = Instant::now() + SETTLE;
-    loop {
-        let state: String =
-            sqlx::query_scalar("select state from notes.connections where connection_id = $1")
-                .bind(connection_id)
-                .fetch_one(fixture.pool())
-                .await
-                .expect("the connection can be read");
-        if state != "connecting" || Instant::now() >= deadline {
-            return state;
-        }
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
-}
-
-#[tokio::test]
-async fn cancelled_connect_releases_the_vault() {
-    let fixture = TestDatabase::create().await.expect("a test database");
-    // The stub ob sleeps in each step, so the login unit still runs when the request is dropped.
-    let systemd = FakeSystemd::new().ob_sleeps();
-    let router = router(&fixture, &systemd);
-
-    let request = tokio::spawn({
-        let router = router.clone();
-        async move { connect(&router, OWNER_A, "sync", REMOTE_VAULT_ID).await }
-    });
-    let id = first_login_started(&systemd)
-        .await
-        .expect("the connect request starts the login unit");
-    // The client goes away: the request future is dropped while the login unit runs.
-    request.abort();
-    assert!(
-        request.await.is_err_and(|error| error.is_cancelled()),
-        "the request was dropped before it answered"
-    );
-
-    assert_eq!(
-        settled_state(&fixture, id).await,
-        "failed",
-        "a dropped connect request does not leave its connection connecting"
-    );
-    assert_login_stopped_then_cleaned_up(&systemd, id);
-    assert_eq!(secrets_of(&fixture, id).await, 0, "the ciphertext is gone");
-    assert!(
-        !systemd.credentials_root().join(id.to_string()).exists(),
-        "the credential files of the login are gone"
-    );
-    assert!(
-        holds_nothing(&systemd.client_dir(id)),
-        "no client state of the stopped login stays"
-    );
-
-    // The failed connection does not hold the vault key: the owner can connect the vault again.
-    connection_id(&connect(&router, OWNER_A, "sync", REMOTE_VAULT_ID).await);
-
-    fixture
-        .cleanup()
-        .await
-        .expect("the test database is dropped");
-}
-
 /// The service stopped the login unit of a connection after it started it, and ran the cleanup unit
 /// after the stop.
 fn assert_login_stopped_then_cleaned_up(systemd: &FakeSystemd, id: Uuid) {
@@ -330,13 +274,11 @@ async fn shutdown_during_login_fails_the_connection() {
     let state = state(&fixture, &systemd);
     let router = domain_router(state.clone());
 
-    let request = tokio::spawn({
-        let router = router.clone();
-        async move { connect(&router, OWNER_A, "sync", REMOTE_VAULT_ID).await }
-    });
+    let accepted = connection_id(&connect(&router, OWNER_A, "sync", REMOTE_VAULT_ID).await);
     let id = first_login_started(&systemd)
         .await
-        .expect("the connect request starts the login unit");
+        .expect("the connect starts the login unit");
+    assert_eq!(id, accepted);
 
     // The stop signal arrives while the login runs. The service fails the connect in the grace
     // window.
@@ -353,14 +295,9 @@ async fn shutdown_during_login_fails_the_connection() {
         holds_nothing(&systemd.client_dir(id)),
         "no client state of the stopped login stays"
     );
-    let answer = request.await.expect("the connect request answers");
-    assert_eq!(
-        answer.status,
-        StatusCode::SERVICE_UNAVAILABLE,
-        "{:?}",
-        answer.body
-    );
-    assert_eq!(answer.body["code"], "notes.service.unavailable");
+    let report = terminal_report(&fixture, id).await;
+    assert_eq!(report["status"], "failed", "{report:?}");
+    assert_eq!(report["error"]["code"], "notes.service.unavailable");
 
     // A connect that arrives after the stop signal starts no login.
     let late = connect(&router, OWNER_B, "sync", REMOTE_VAULT_ID).await;
@@ -397,6 +334,8 @@ async fn insert_interrupted_login(fixture: &TestDatabase) -> Uuid {
                 nonce: &nonce,
                 ciphertext: &ciphertext,
             }],
+            operation_id: Uuid::now_v7(),
+            device_id: None,
         })
         .await
         .expect("the interrupted connection is inserted");
@@ -411,6 +350,7 @@ async fn next_start_fails_an_interrupted_login() {
     // A `sync` connection whose login finished stays `connecting` until its first scan, and so
     // does a `plugin` connection. The start leaves both alone.
     let logged_in = connection_id(&connect(&router, OWNER_A, "sync", "remote-vault-0002").await);
+    assert_eq!(login_ended(&fixture, logged_in).await, "connecting");
     let plugin = connection_id(&connect(&router, OWNER_A, "plugin", "plugin-vault-0001").await);
 
     // What a stop that the grace window cut short leaves: a `sync` connection with its ciphertext
@@ -433,6 +373,9 @@ async fn next_start_fails_an_interrupted_login() {
         "the start stops the interrupted login and runs its cleanup unit, and nothing else"
     );
     assert_eq!(state_of(&fixture, interrupted).await, "failed");
+    let report = terminal_report(&fixture, interrupted).await;
+    assert_eq!(report["status"], "failed", "{report:?}");
+    assert_eq!(report["error"]["code"], "notes.service.unavailable");
     assert_eq!(
         secrets_of(&fixture, interrupted).await,
         0,
@@ -470,10 +413,7 @@ async fn connect_after_delete_starts_no_login() {
         }
     }));
 
-    let request = tokio::spawn({
-        let router = router.clone();
-        async move { connect(&router, OWNER_A, "sync", REMOTE_VAULT_ID).await }
-    });
+    let accepted = connection_id(&connect(&router, OWNER_A, "sync", REMOTE_VAULT_ID).await);
     let id = tokio::time::timeout(SETTLE, reached.recv())
         .await
         .expect("the connect inserts its connection")
@@ -490,15 +430,16 @@ async fn connect_after_delete_starts_no_login() {
     .await;
     assert_eq!(removed.status, StatusCode::NO_CONTENT, "{:?}", removed.body);
     release.notify_one();
-    let answer = request.await.expect("the connect request answers");
+    let report = terminal_report(&fixture, id).await;
 
+    assert_eq!(id, accepted);
     assert!(
         !login_started(&systemd, id),
         "no login unit starts for a removed connection: {:?}",
         systemd.calls()
     );
-    assert_eq!(answer.status, StatusCode::NOT_FOUND, "{:?}", answer.body);
-    assert_eq!(answer.body["code"], "notes.connection.not_found");
+    assert_eq!(report["status"], "failed", "{report:?}");
+    assert_eq!(report["error"]["code"], "notes.connection.not_found");
     assert_eq!(state_of(&fixture, id).await, "removed");
     assert_eq!(secrets_of(&fixture, id).await, 0, "the ciphertext is gone");
     assert!(
@@ -518,13 +459,11 @@ async fn logins_are_bounded() {
     let systemd = FakeSystemd::new().hold_logins();
     let router = domain_router(state(&fixture, &systemd).with_max_logins(1));
 
-    let first = tokio::spawn({
-        let router = router.clone();
-        async move { connect(&router, OWNER_A, "sync", REMOTE_VAULT_ID).await }
-    });
+    let accepted = connection_id(&connect(&router, OWNER_A, "sync", REMOTE_VAULT_ID).await);
     let first_id = first_login_started(&systemd)
         .await
         .expect("the first connect starts its login unit");
+    assert_eq!(first_id, accepted);
 
     // One login runs, and the limit is one: the next `sync` connect is refused at once.
     let extra = tokio::time::timeout(
@@ -555,13 +494,16 @@ async fn logins_are_bounded() {
     // A `plugin` connect runs no login, so the limit does not apply to it.
     connection_id(&connect(&router, OWNER_B, "plugin", "plugin-vault-0001").await);
 
-    // When the first login ends, its place is free again.
+    // When the first connect ends its login, its place is free again.
     systemd.release_logins();
-    assert_eq!(
-        connection_id(&first.await.expect("the first connect answers")),
-        first_id
-    );
-    connection_id(&connect(&router, OWNER_B, "sync", REMOTE_VAULT_ID).await);
+    assert_eq!(login_ended(&fixture, first_id).await, "connecting");
+    let deadline = Instant::now() + SETTLE;
+    let mut again = connect(&router, OWNER_B, "sync", REMOTE_VAULT_ID).await;
+    while again.status == StatusCode::SERVICE_UNAVAILABLE && Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        again = connect(&router, OWNER_B, "sync", REMOTE_VAULT_ID).await;
+    }
+    connection_id(&again);
 
     fixture
         .cleanup()
@@ -578,23 +520,25 @@ async fn serve_shuts_down_logins_on_stop() {
 
     let steps = async {
         let body = support::sync_body(REMOTE_VAULT_ID, support::MARKER_SECRETS);
-        let request = tokio::spawn(send_tcp(
+        let accepted = send_tcp(
             api,
             Method::POST,
             "/v1/notes/connections",
             OWNER_A,
             Some(body),
-        ));
+        )
+        .await;
         let id = first_login_started(&systemd).await;
         assert!(
             id.is_some(),
             "a connect to the listener of serve starts the login unit through the given bus: {:?}",
             systemd.calls()
         );
-        (id.expect("checked above"), request)
+        assert_eq!(id, Some(connection_id(&accepted)));
+        id.expect("checked above")
     };
     // The stop signal arrives while the login runs.
-    let ((id, request), stopped) = run_service(&fixture, &systemd, steps, api).await;
+    let (id, stopped) = run_service(&fixture, &systemd, steps, api).await;
 
     assert!(
         stopped,
@@ -607,14 +551,9 @@ async fn serve_shuts_down_logins_on_stop() {
     );
     assert_login_stopped_then_cleaned_up(&systemd, id);
     assert_eq!(secrets_of(&fixture, id).await, 0, "the ciphertext is gone");
-    let answer = request.await.expect("the connect request answers");
-    assert_eq!(
-        answer.status,
-        StatusCode::SERVICE_UNAVAILABLE,
-        "{:?}",
-        answer.body
-    );
-    assert_eq!(answer.body["code"], "notes.service.unavailable");
+    let report = terminal_report(&fixture, id).await;
+    assert_eq!(report["status"], "failed", "{report:?}");
+    assert_eq!(report["error"]["code"], "notes.service.unavailable");
 
     fixture
         .cleanup()
@@ -633,13 +572,21 @@ async fn serve_reconciles_before_it_accepts() {
     // the vault key until the start fails it, so the request is accepted only when the start
     // failed it before the listener accepted the request.
     let body = support::sync_body(REMOTE_VAULT_ID, support::MARKER_SECRETS);
-    let first = send_tcp(
-        api,
-        Method::POST,
-        "/v1/notes/connections",
-        OWNER_A,
-        Some(body),
-    );
+    let first = async {
+        let first = send_tcp(
+            api,
+            Method::POST,
+            "/v1/notes/connections",
+            OWNER_A,
+            Some(body),
+        )
+        .await;
+        if first.status == StatusCode::ACCEPTED {
+            // The login runs after the answer; the test stops the service after it.
+            login_ended(&fixture, connection_id(&first)).await;
+        }
+        first
+    };
     let (first, stopped) = run_service(&fixture, &systemd, first, api).await;
 
     assert_eq!(
@@ -681,13 +628,11 @@ async fn delete_during_login_answers_not_found() {
     let systemd = FakeSystemd::new().hold_logins();
     let router = router(&fixture, &systemd);
 
-    let request = tokio::spawn({
-        let router = router.clone();
-        async move { connect(&router, OWNER_A, "sync", REMOTE_VAULT_ID).await }
-    });
+    let accepted = connection_id(&connect(&router, OWNER_A, "sync", REMOTE_VAULT_ID).await);
     let id = first_login_started(&systemd)
         .await
-        .expect("the connect request starts the login unit");
+        .expect("the connect starts the login unit");
+    assert_eq!(id, accepted);
 
     // The owner removes the connection while its login runs.
     let removed = send(
@@ -700,14 +645,12 @@ async fn delete_during_login_answers_not_found() {
     .await;
     assert_eq!(removed.status, StatusCode::NO_CONTENT, "{:?}", removed.body);
 
-    let answer = request.await.expect("the connect request answers");
+    let report = terminal_report(&fixture, id).await;
     assert_eq!(
-        answer.status,
-        StatusCode::NOT_FOUND,
-        "the login that the disconnect stopped did not fail; its connection is gone: {:?}",
-        answer.body
+        report["error"]["code"], "notes.connection.not_found",
+        "the login that the disconnect stopped did not fail; its connection is gone: {report:?}"
     );
-    assert_eq!(answer.body["code"], "notes.connection.not_found");
+    assert_eq!(report["status"], "failed");
     assert_eq!(state_of(&fixture, id).await, "removed");
     assert_eq!(secrets_of(&fixture, id).await, 0, "the ciphertext is gone");
 

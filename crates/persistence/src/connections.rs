@@ -20,6 +20,10 @@ pub struct NewConnection<'a> {
     pub vault_display_name: &'a str,
     /// The encrypted secrets of a `sync` connection; empty for the other channels.
     pub secrets: &'a [NewSecret<'a>],
+    /// The connect operation that Edge minted.
+    pub operation_id: Uuid,
+    /// The device of a `plugin` or `cli` connection.
+    pub device_id: Option<Uuid>,
 }
 
 /// One encrypted secret of a connection. The service encrypts; this crate never sees plaintext.
@@ -73,8 +77,8 @@ impl Database {
             let inserted = sqlx::query(&format!(
                 "insert into notes.connections
                      (connection_id, owner_id, channel, vault_key, vault_display_name, state,
-                      created_at, updated_at)
-                 values ($1, $2, $3, $4, $5, 'connecting', now(), now())
+                      operation_id, device_id, created_at, updated_at)
+                 values ($1, $2, $3, $4, $5, 'connecting', $6, $7, now(), now())
                  on conflict (owner_id, vault_key) where {HOLDS_VAULT_KEY} do nothing"
             ))
             .bind(new.connection_id)
@@ -82,6 +86,8 @@ impl Database {
             .bind(new.channel)
             .bind(new.vault_key)
             .bind(new.vault_display_name)
+            .bind(new.operation_id)
+            .bind(new.device_id)
             .execute(&mut *transaction)
             .await
             .map_err(PersistenceError::Query)?;
@@ -140,6 +146,29 @@ pub struct ConnectionRecord {
     pub channel: String,
     /// The display name of the vault.
     pub vault_display_name: String,
+    /// `connecting`, `active` or `login_expired`.
+    pub state: String,
+    /// Whether the first login of a `sync` connection finished.
+    pub logged_in: bool,
+    /// The connect operation.
+    pub operation_id: Option<Uuid>,
+}
+
+/// The connect operation of one connection.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConnectOperation {
+    /// The connection.
+    pub connection_id: Uuid,
+    /// Its owner.
+    pub owner_id: Uuid,
+    /// The operation that Edge minted, when the connection has one.
+    pub operation_id: Option<Uuid>,
+    /// The wire word of its channel.
+    pub channel: String,
+    /// The display name of its vault.
+    pub vault_display_name: String,
+    /// Its state.
+    pub state: String,
 }
 
 /// One event for the outbox.
@@ -171,20 +200,28 @@ impl Database {
         owner_id: Uuid,
         connection_id: Uuid,
     ) -> Result<Option<ConnectionRecord>, PersistenceError> {
-        let row: Option<(Uuid, String, String)> = sqlx::query_as(&format!(
-            "select connection_id, channel, vault_display_name from notes.connections
-             where connection_id = $1 and owner_id = $2 and {HOLDS_VAULT_KEY}"
-        ))
-        .bind(connection_id)
-        .bind(owner_id)
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(PersistenceError::Query)?;
+        let row: Option<(Uuid, String, String, String, bool, Option<Uuid>)> =
+            sqlx::query_as(&format!(
+                "select connection_id, channel, vault_display_name, state,
+                        logged_in_at is not null, operation_id
+                 from notes.connections
+                 where connection_id = $1 and owner_id = $2 and {HOLDS_VAULT_KEY}"
+            ))
+            .bind(connection_id)
+            .bind(owner_id)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(PersistenceError::Query)?;
         Ok(row.map(
-            |(connection_id, channel, vault_display_name)| ConnectionRecord {
-                connection_id,
-                channel,
-                vault_display_name,
+            |(connection_id, channel, vault_display_name, state, logged_in, operation_id)| {
+                ConnectionRecord {
+                    connection_id,
+                    channel,
+                    vault_display_name,
+                    state,
+                    logged_in,
+                    operation_id,
+                }
             },
         ))
     }
@@ -306,11 +343,12 @@ impl Database {
         .map_err(PersistenceError::Query)
     }
 
-    /// Record that the first login of a `connecting` connection succeeded. The connection stays
-    /// `connecting` until its first scan.
+    /// Record that the first login of a connection succeeded. The connection stays `connecting`
+    /// until its first scan, which can end before this record: the record also takes an `active`
+    /// connection.
     ///
-    /// Returns `false` and changes nothing when the connection is not `connecting`, for example
-    /// because the owner removed it while the login ran.
+    /// Returns `false` and changes nothing when the connection is neither `connecting` nor
+    /// `active`, for example because the owner removed it while the login ran.
     ///
     /// # Errors
     ///
@@ -318,7 +356,7 @@ impl Database {
     pub async fn record_login(&self, connection_id: Uuid) -> Result<bool, PersistenceError> {
         let recorded = sqlx::query(
             "update notes.connections set logged_in_at = now(), updated_at = now()
-             where connection_id = $1 and state = 'connecting'",
+             where connection_id = $1 and state in ('connecting', 'active')",
         )
         .bind(connection_id)
         .execute(&self.pool)
@@ -333,15 +371,108 @@ impl Database {
     /// # Errors
     ///
     /// [`PersistenceError::Query`] when the statement fails.
-    pub async fn interrupted_logins(&self) -> Result<Vec<Uuid>, PersistenceError> {
-        sqlx::query_scalar(
-            "select connection_id from notes.connections
-             where channel = 'sync' and state = 'connecting' and logged_in_at is null
-             order by created_at",
+    pub async fn interrupted_logins(&self) -> Result<Vec<ConnectOperation>, PersistenceError> {
+        self.connect_operations(
+            "channel = 'sync' and state = 'connecting' and logged_in_at is null",
+            None,
         )
-        .fetch_all(&self.pool)
         .await
-        .map_err(PersistenceError::Query)
+    }
+
+    /// The connect operation of a connection, with its owner, channel, display name and state.
+    ///
+    /// # Errors
+    ///
+    /// [`PersistenceError::Query`] when the statement fails.
+    pub async fn connect_operation(
+        &self,
+        connection_id: Uuid,
+    ) -> Result<Option<ConnectOperation>, PersistenceError> {
+        Ok(self
+            .connect_operations("connection_id = $1", Some(connection_id))
+            .await?
+            .into_iter()
+            .next())
+    }
+
+    async fn connect_operations(
+        &self,
+        filter: &str,
+        connection_id: Option<Uuid>,
+    ) -> Result<Vec<ConnectOperation>, PersistenceError> {
+        let query = format!(
+            "select connection_id, owner_id, operation_id, channel, vault_display_name, state
+             from notes.connections where {filter}
+             order by created_at"
+        );
+        let mut query =
+            sqlx::query_as::<_, (Uuid, Uuid, Option<Uuid>, String, String, String)>(&query);
+        if let Some(connection_id) = connection_id {
+            query = query.bind(connection_id);
+        }
+        let rows = query
+            .fetch_all(&self.pool)
+            .await
+            .map_err(PersistenceError::Query)?;
+        Ok(rows
+            .into_iter()
+            .map(
+                |(connection_id, owner_id, operation_id, channel, vault_display_name, state)| {
+                    ConnectOperation {
+                        connection_id,
+                        owner_id,
+                        operation_id,
+                        channel,
+                        vault_display_name,
+                        state,
+                    }
+                },
+            )
+            .collect())
+    }
+
+    /// Write one event to the outbox.
+    ///
+    /// # Errors
+    ///
+    /// [`PersistenceError::Query`] when the statement fails.
+    pub async fn insert_event(&self, event: &OutboxEvent<'_>) -> Result<(), PersistenceError> {
+        let mut transaction = self.pool.begin().await.map_err(PersistenceError::Query)?;
+        insert_outbox(&mut transaction, event).await?;
+        transaction.commit().await.map_err(PersistenceError::Query)
+    }
+
+    /// Make a `connecting` connection `active` and write `events` to the outbox, in one
+    /// transaction. Returns `false` and changes nothing when the connection is not `connecting`.
+    ///
+    /// # Errors
+    ///
+    /// [`PersistenceError::Query`] when a statement fails; nothing is committed then.
+    pub async fn activate_connection(
+        &self,
+        connection_id: Uuid,
+        events: &[OutboxEvent<'_>],
+    ) -> Result<bool, PersistenceError> {
+        let mut transaction = self.pool.begin().await.map_err(PersistenceError::Query)?;
+        let activated = sqlx::query(
+            "update notes.connections set state = 'active', updated_at = now()
+             where connection_id = $1 and state = 'connecting'",
+        )
+        .bind(connection_id)
+        .execute(&mut *transaction)
+        .await
+        .map_err(PersistenceError::Query)?;
+        if activated.rows_affected() == 0 {
+            return Ok(false);
+        }
+        for event in events {
+            insert_outbox(&mut transaction, event).await?;
+        }
+        transaction
+            .commit()
+            .await
+            .map_err(PersistenceError::Query)?;
+        Ok(true)
     }
 }
 

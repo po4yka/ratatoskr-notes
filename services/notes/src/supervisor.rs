@@ -34,9 +34,11 @@ use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 use uuid::Uuid;
 
+use crate::operation::{self, Completion, Phase, Report};
 use crate::systemd::{
     JOURNAL_UNREADABLE, JobResult, JournalLine, SYNC_LOG_NAMESPACE, SystemdBus, UnitName,
 };
+use crate::tree_sync::Pipeline;
 
 /// The start of the line that `ob` 0.0.14 logs when the Sync server refuses its login token:
 /// `getServer()` logs `new Error("Failed to authenticate: " + msg)` with `console.error`, so the
@@ -116,6 +118,10 @@ pub(crate) struct Supervisor<B> {
     following: Arc<AtomicBool>,
     tasks: TaskTracker,
     stopping: CancellationToken,
+    /// The watcher and the recorder of each working tree.
+    pipeline: Pipeline,
+    /// The stop of the pipeline of each connection whose sync unit this process started.
+    pipelines: Arc<Mutex<HashMap<Uuid, CancellationToken>>>,
 }
 
 impl<B> Clone for Supervisor<B> {
@@ -127,13 +133,15 @@ impl<B> Clone for Supervisor<B> {
             following: Arc::clone(&self.following),
             tasks: self.tasks.clone(),
             stopping: self.stopping.clone(),
+            pipeline: self.pipeline.clone(),
+            pipelines: Arc::clone(&self.pipelines),
         }
     }
 }
 
 impl<B: SystemdBus> Supervisor<B> {
     /// A supervisor that reaches systemd through `systemd`.
-    pub(crate) fn new(database: Database, systemd: Arc<B>) -> Self {
+    pub(crate) fn new(database: Database, systemd: Arc<B>, pipeline: Pipeline) -> Self {
         Self {
             database,
             systemd,
@@ -141,13 +149,23 @@ impl<B: SystemdBus> Supervisor<B> {
             following: Arc::new(AtomicBool::new(false)),
             tasks: TaskTracker::new(),
             stopping: CancellationToken::new(),
+            pipeline,
+            pipelines: Arc::new(Mutex::new(HashMap::new())),
         }
+    }
+
+    /// Use `pipeline` for the working trees of the units that start from now on.
+    pub(crate) fn set_pipeline(&mut self, pipeline: Pipeline) {
+        self.pipeline = pipeline;
     }
 
     /// Start the sync unit of a connection, wait for the start job, and count the authentication
     /// failures of the unit. A unit that runs already continues to run. Returns whether the job
     /// finished; a failure is logged.
-    pub(crate) async fn start(&self, connection_id: Uuid) -> bool {
+    ///
+    /// When the unit runs, the pipeline of its working tree starts: the watcher feeds the recorder,
+    /// and, when `completion` is given, the first full scan completes the connect operation.
+    pub(crate) async fn start(&self, connection_id: Uuid, completion: Option<Completion>) -> bool {
         let unit = UnitName::sync(connection_id);
         // Before the start, so that no line of this start is lost.
         self.follow();
@@ -155,6 +173,21 @@ impl<B: SystemdBus> Supervisor<B> {
         match self.systemd.start_unit(&unit).await {
             Ok(JobResult::Done) => {
                 tracing::info!(%unit, "the sync unit runs");
+                let completion = match completion {
+                    Some(mut completion) => {
+                        completion.journal_readable = self.systemd.check_journal().await.is_ok();
+                        operation::report(
+                            &self.database,
+                            completion.owner_id,
+                            completion.operation_id,
+                            Report::Running(Phase::FirstSync),
+                        )
+                        .await;
+                        Some(completion)
+                    }
+                    None => None,
+                };
+                self.run_pipeline(connection_id, completion);
                 return true;
             }
             Ok(JobResult::NotDone(result)) => {
@@ -190,8 +223,29 @@ impl<B: SystemdBus> Supervisor<B> {
             }
         };
         for connection_id in connections {
-            self.start(connection_id).await;
+            let completion = match self.database.connect_operation(connection_id).await {
+                Ok(Some(operation)) => completion_of(&operation),
+                Ok(None) => None,
+                Err(error) => {
+                    tracing::error!(%error, %connection_id, "the connect operation of a connection could not be read");
+                    None
+                }
+            };
+            self.start(connection_id, completion).await;
         }
+    }
+
+    /// Start the pipeline of the working tree of `connection_id`, in place of one that runs.
+    fn run_pipeline(&self, connection_id: Uuid, completion: Option<Completion>) {
+        let stop = self.stopping.child_token();
+        if let Ok(mut pipelines) = self.pipelines.lock()
+            && let Some(previous) = pipelines.insert(connection_id, stop.clone())
+        {
+            previous.cancel();
+        }
+        let pipeline = self.pipeline.clone();
+        self.tasks
+            .spawn(async move { pipeline.run(connection_id, stop, completion).await });
     }
 
     /// Stop counting the failures of the unit of a connection. A disconnect calls it before it
@@ -199,6 +253,14 @@ impl<B: SystemdBus> Supervisor<B> {
     pub(crate) fn forget(&self, connection_id: Uuid) {
         if let Ok(mut watched) = self.watched.lock() {
             watched.remove(UnitName::sync(connection_id).as_str());
+        }
+        if let Some(stop) = self
+            .pipelines
+            .lock()
+            .ok()
+            .and_then(|mut pipelines| pipelines.remove(&connection_id))
+        {
+            stop.cancel();
         }
     }
 
@@ -296,6 +358,12 @@ impl<B: SystemdBus> Supervisor<B> {
     /// Mark the connection `login_expired`, then stop its unit. A connection that the owner
     /// removed meanwhile is left to the disconnect.
     async fn expire_login(&self, connection_id: Uuid) {
+        let operation = self
+            .database
+            .connect_operation(connection_id)
+            .await
+            .ok()
+            .flatten();
         match self.database.expire_login(connection_id).await {
             Ok(true) => {}
             Ok(false) => return,
@@ -305,6 +373,23 @@ impl<B: SystemdBus> Supervisor<B> {
             }
         }
         tracing::warn!(%connection_id, code = LOGIN_EXPIRED, "the Sync login of a connection expired; the owner must connect again");
+        self.forget(connection_id);
+        // A connect whose first scan did not end fails with the code of the expired login.
+        if let Some(operation) = operation.filter(|operation| operation.state == "connecting")
+            && let Some(operation_id) = operation.operation_id
+        {
+            operation::report(
+                &self.database,
+                operation.owner_id,
+                operation_id,
+                Report::Failed(
+                    LOGIN_EXPIRED,
+                    "The Obsidian login expired. Connect the vault again.",
+                    false,
+                ),
+            )
+            .await;
+        }
         let unit = UnitName::sync(connection_id);
         match self.systemd.stop_unit(&unit).await {
             Ok(JobResult::Done) => {}
@@ -316,6 +401,21 @@ impl<B: SystemdBus> Supervisor<B> {
             }
         }
     }
+}
+
+/// The completion of the connect operation of a connection that is still `connecting`.
+fn completion_of(operation: &ratatoskr_notes_persistence::ConnectOperation) -> Option<Completion> {
+    if operation.state != "connecting" {
+        return None;
+    }
+    Some(Completion {
+        connection_id: operation.connection_id,
+        owner_id: operation.owner_id,
+        operation_id: operation.operation_id?,
+        channel: operation.channel.clone(),
+        vault_display_name: operation.vault_display_name.clone(),
+        journal_readable: true,
+    })
 }
 
 #[cfg(test)]

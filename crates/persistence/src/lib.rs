@@ -23,7 +23,7 @@ use secrecy::{ExposeSecret as _, SecretString};
 use sqlx::postgres::{PgPool, PgPoolOptions};
 
 pub use crate::connections::{
-    ConnectionRecord, CreateOutcome, NewConnection, NewSecret, OutboxEvent,
+    ConnectOperation, ConnectionRecord, CreateOutcome, NewConnection, NewSecret, OutboxEvent,
 };
 pub use crate::files::{FileRow, FileTransaction, LockedConnection, NewRevision};
 pub use crate::outbox::PendingEvent;

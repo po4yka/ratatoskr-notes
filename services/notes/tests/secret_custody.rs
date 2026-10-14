@@ -40,7 +40,9 @@ use uuid::Uuid;
 use crate::support::cmdline::{CmdlineReader, own_uid};
 use crate::support::logs::CapturedLogs;
 use crate::support::systemd::{FakeSystemd, KEY_BYTES};
-use crate::support::{OBSIDIAN_EMAIL, SyncSecrets, connect_sync, connection_id, send};
+use crate::support::{
+    OBSIDIAN_EMAIL, SyncSecrets, connect_sync, connection_id, login_ended, send, terminal_report,
+};
 
 const OWNER: Uuid = Uuid::from_u128(0x0192_0000_0000_7000_8000_0000_0000_00c1);
 const REMOTE_VAULT_ID: &str = "remote-vault-0042";
@@ -141,6 +143,11 @@ async fn marker_secrets_appear_nowhere_in_notes() {
 
     let connected = connect_sync(&router, OWNER, REMOTE_VAULT_ID, SECRETS).await;
     let id = connection_id(&connected);
+    assert_eq!(
+        login_ended(&fixture, id).await,
+        "connecting",
+        "the login finished"
+    );
     assert_no_marker_in("the connect answer", &connected.body.to_string());
     assert_no_marker_in_tables(&fixture).await;
 
@@ -154,13 +161,26 @@ async fn marker_secrets_appear_nowhere_in_notes() {
     )
     .await;
     assert_eq!(removed.status, StatusCode::NO_CONTENT, "{:?}", removed.body);
-    let events: Vec<serde_json::Value> = sqlx::query_scalar("select payload from notes.outbox")
-        .fetch_all(fixture.pool())
-        .await
-        .expect("the outbox can be read");
-    assert_eq!(events.len(), 1, "the disconnect event is in the outbox");
-    for event in &events {
-        assert_no_marker_in("an event", &event.to_string());
+    let events: Vec<(String, serde_json::Value)> =
+        sqlx::query_as("select event_type, payload from notes.outbox")
+            .fetch_all(fixture.pool())
+            .await
+            .expect("the outbox can be read");
+    let types: Vec<&str> = events.iter().map(|(kind, _)| kind.as_str()).collect();
+    assert_eq!(
+        types
+            .iter()
+            .filter(|kind| **kind == "notes.vault.disconnected.v1")
+            .count(),
+        1,
+        "the disconnect event is in the outbox: {types:?}"
+    );
+    assert!(
+        types.contains(&"platform.operation.reported.v1"),
+        "the reports of the connect operation are in the outbox: {types:?}"
+    );
+    for (_, event) in &events {
+        assert_no_marker_in("an event or a report", &event.to_string());
     }
     assert_no_marker_in_tables(&fixture).await;
 
@@ -185,18 +205,13 @@ async fn wrong_e2e_password_fails_with_its_code() {
     let router = router(&fixture, &systemd);
 
     let answer = connect_sync(&router, OWNER, REMOTE_VAULT_ID, SECRETS).await;
+    let report = terminal_report(&fixture, connection_id(&answer)).await;
+    assert_eq!(report["status"], "failed", "{report:?}");
     assert_eq!(
-        answer.status,
-        StatusCode::UNPROCESSABLE_ENTITY,
-        "{:?}",
-        answer.body
+        report["error"]["code"], "notes.sync.e2e_password_wrong",
+        "{report:?}"
     );
-    assert_eq!(
-        answer.body["code"], "notes.sync.e2e_password_wrong",
-        "{:?}",
-        answer.body
-    );
-    assert_no_marker_in("the error envelope", &answer.body.to_string());
+    assert_no_marker_in("the report of the failure", &report.to_string());
 
     let active: i64 = sqlx::query_scalar(
         "select count(*) from notes.connections where owner_id = $1 and state = 'active'",
@@ -214,10 +229,10 @@ async fn wrong_e2e_password_fails_with_its_code() {
 
     // The failed connection does not hold the vault key: the owner can try again.
     let again = connect_sync(&router, OWNER, REMOTE_VAULT_ID, SECRETS).await;
+    let report = terminal_report(&fixture, connection_id(&again)).await;
     assert_eq!(
-        again.body["code"], "notes.sync.e2e_password_wrong",
-        "{:?}",
-        again.body
+        report["error"]["code"], "notes.sync.e2e_password_wrong",
+        "{report:?}"
     );
 
     fixture
@@ -337,6 +352,11 @@ async fn login_unit_gets_secrets_only_as_credentials() {
     let router = router(&fixture, &systemd);
 
     let id = connection_id(&connect_sync(&router, OWNER, REMOTE_VAULT_ID, SECRETS).await);
+    assert_eq!(
+        login_ended(&fixture, id).await,
+        "connecting",
+        "the login finished"
+    );
 
     // The service wrote one file for each value of the login, readable by its own user only.
     let snapshot = systemd
@@ -397,12 +417,8 @@ async fn login_unit_gets_secrets_only_as_credentials() {
         "the credential files of a login are deleted when the unit stops"
     );
     let failed = connect_sync(&refusing_router, OWNER, "remote-vault-0043", SECRETS).await;
-    assert_eq!(
-        failed.status,
-        StatusCode::UNPROCESSABLE_ENTITY,
-        "{:?}",
-        failed.body
-    );
+    let report = terminal_report(&fixture, connection_id(&failed)).await;
+    assert_eq!(report["status"], "failed", "{report:?}");
     let left: Vec<_> = std::fs::read_dir(refusing.credentials_root())
         .expect("the credentials root can be listed")
         .collect();
@@ -435,8 +451,9 @@ async fn no_secret_in_any_cmdline() {
     let router = router(&fixture, &systemd);
 
     let connected = connect_sync(&router, OWNER, REMOTE_VAULT_ID, SECRETS).await;
+    // The login runs after the answer.
+    login_ended(&fixture, connection_id(&connected)).await;
     let seen = reader.stop().await;
-    connection_id(&connected);
 
     assert_ne!(
         seen.reader_uid,
@@ -552,9 +569,10 @@ async fn each_login_failure_has_its_code() {
             Some(body),
         )
         .await;
-        assert_no_marker_in("the error envelope", &answer.body.to_string());
-        if answer.status != StatusCode::UNPROCESSABLE_ENTITY || answer.body["code"] != code {
-            wrong.push(format!("{code}: {} {}", answer.status, answer.body));
+        let report = terminal_report(&fixture, connection_id(&answer)).await;
+        assert_no_marker_in("the report of the failure", &report.to_string());
+        if report["status"] != "failed" || report["error"]["code"] != code {
+            wrong.push(format!("{code}: {} {report}", answer.status));
         }
     }
     assert!(

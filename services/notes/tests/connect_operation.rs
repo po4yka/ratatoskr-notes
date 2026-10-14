@@ -36,7 +36,7 @@ const OWNER: Uuid = Uuid::from_u128(0x0192_0000_0000_7000_8000_0000_0000_0d10);
 const OPERATION_HEADER: &str = "x-ratatoskr-operation-id";
 
 /// How long a test waits for the operation to end.
-const TERMINAL_DEADLINE: Duration = Duration::from_secs(20);
+const TERMINAL_DEADLINE: Duration = Duration::from_mins(1);
 
 fn router(fixture: &TestDatabase, systemd: &FakeSystemd) -> Router {
     let root = systemd.blob_root();

@@ -33,7 +33,7 @@ use std::time::{Duration, SystemTime};
 
 use rustix::fs::{AtFlags, Dir, FileType, OFlags};
 
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
@@ -75,6 +75,19 @@ pub fn watch(
     changes: mpsc::Sender<TreeChange>,
     stop: CancellationToken,
 ) -> JoinHandle<()> {
+    watch_reporting(tree, blobs, changes, stop, None)
+}
+
+/// [`watch`], and send `()` on `first_scan` once, when the first full read of the tree ended and
+/// each file that it found settled: each revision of that read is on `changes` before it.
+#[must_use]
+pub fn watch_reporting(
+    tree: PathBuf,
+    blobs: BlobStore,
+    changes: mpsc::Sender<TreeChange>,
+    stop: CancellationToken,
+    mut first_scan: Option<oneshot::Sender<()>>,
+) -> JoinHandle<()> {
     tokio::spawn(async move {
         let root = match beneath::open_root(&tree) {
             Ok(root) => Arc::new(root),
@@ -95,12 +108,23 @@ pub fn watch(
         // The first tick is at once: the read of the tree at the start.
         let mut rescan = tokio::time::interval(RESCAN_INTERVAL);
         rescan.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        let mut scanned = false;
         loop {
+            if scanned
+                && watcher.pending.is_empty()
+                && let Some(first_scan) = first_scan.take()
+            {
+                let _ = first_scan.send(());
+            }
             let next_due = watcher.next_due();
             let open = tokio::select! {
                 biased;
                 () = stop.cancelled() => return,
-                _ = rescan.tick() => watcher.scan(&mut events, PathBuf::new()).await,
+                _ = rescan.tick() => {
+                    let open = watcher.scan(&mut events, PathBuf::new()).await;
+                    scanned = true;
+                    open
+                }
                 notice = events.next() => match notice {
                     events::Notice::Path(path) => watcher.observe(path).await,
                     events::Notice::Directory(path) => watcher.scan(&mut events, path).await,

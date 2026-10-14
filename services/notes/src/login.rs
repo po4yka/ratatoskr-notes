@@ -5,8 +5,8 @@
 //! `notes.connection_secrets`, writes the values of the login to credential files, and starts
 //! `ratatoskr-notes-login@<id>.service`, which loads the files with `LoadCredential=` and runs
 //! `ob login` and then `ob sync-setup`. When the unit fails, its exit status names the step and
-//! the reason, and the service answers with one of four stable codes. No secret is in a log line,
-//! an error envelope or a `Debug` output: each one is a [`SecretString`].
+//! the reason, and the connect operation fails with one of four stable codes. No secret is in a
+//! log line, an error envelope or a `Debug` output: each one is a [`SecretString`].
 
 use std::fs::{DirBuilder, OpenOptions};
 use std::io::Write as _;

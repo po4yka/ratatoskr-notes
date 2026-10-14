@@ -105,6 +105,12 @@ impl FileRecorder {
         }
     }
 
+    /// The database that the recorder writes.
+    #[must_use]
+    pub fn database(&self) -> &Database {
+        &self.database
+    }
+
     /// Index no file larger than `max_file_bytes` instead of [`DEFAULT_MAX_FILE_BYTES`].
     #[must_use]
     pub const fn with_max_file_bytes(mut self, max_file_bytes: u64) -> Self {

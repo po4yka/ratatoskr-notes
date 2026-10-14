@@ -44,6 +44,12 @@ create table notes.connections (
     -- runs, and for the other channels. At start, the service fails each `sync` connection that is
     -- `connecting` with no value here: a stop of the service interrupted its login.
     logged_in_at       timestamptz,
+    -- The connect operation that Edge minted for this connection (workspace design D10). Notes
+    -- reports its phases and its end. Null only for a row that a test writes directly.
+    operation_id       uuid,
+    -- The device of a `plugin` or `cli` connection: the only one whose changes it takes
+    -- (workspace design D5). Null for `sync`.
+    device_id          uuid,
     -- The folders that the owner excluded, relative to the vault root. A file under one of them is
     -- not indexed and publishes no event (workspace design D7).
     excluded_folders   text[]      not null default '{}',
@@ -210,7 +216,8 @@ create table notes.outbox (
 
     -- A CLOSED list: a type that Notes does not produce yet cannot be inserted.
     constraint outbox_event_type_is_known
-        check (event_type in ('notes.vault.disconnected.v1', 'notes.file.changed.v1')),
+        check (event_type in ('notes.vault.connected.v1', 'notes.vault.disconnected.v1',
+                              'notes.file.changed.v1', 'platform.operation.reported.v1')),
     constraint outbox_aggregate_type_is_bounded
         check (length(aggregate_type) between 1 and 64)
 );

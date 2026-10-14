@@ -53,13 +53,19 @@ async fn connect_starts_one_unit_in_pull_only_mode() {
 
     // The first start of the service: the owner connects a remote vault through Sync.
     let api = free_address();
-    let connect = send_tcp(
-        api,
-        Method::POST,
-        "/v1/notes/connections",
-        OWNER,
-        Some(sync_body(REMOTE_VAULT_ID, support::MARKER_SECRETS)),
-    );
+    let connect = async {
+        let answer = send_tcp(
+            api,
+            Method::POST,
+            "/v1/notes/connections",
+            OWNER,
+            Some(sync_body(REMOTE_VAULT_ID, support::MARKER_SECRETS)),
+        )
+        .await;
+        // The login and the start of the sync unit run after the answer.
+        support::login_ended(&fixture, connection_id(&answer)).await;
+        answer
+    };
     let (answer, stopped) = run_service(&fixture, &systemd, connect, api).await;
     assert!(stopped, "serve stops without a failure");
     let id = connection_id(&answer);

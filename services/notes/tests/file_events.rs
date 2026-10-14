@@ -353,7 +353,13 @@ async fn outbox_relay_publishes_each_event_once_on_its_subject() {
     let published = relay.publish_pending().await.expect("a pass of the relay");
     let again = relay.publish_pending().await.expect("a second pass");
 
-    assert_eq!(published, 1, "the one event is published");
+    let rows: i64 = sqlx::query_scalar("select count(*) from notes.outbox")
+        .fetch_one(vault.fixture.pool())
+        .await
+        .expect("the outbox can be counted");
+    // The file event, and the report of the connect operation of the plugin connection.
+    assert_eq!(published, 2, "each event of the outbox is published");
+    assert_eq!(rows, 2, "the outbox holds the file event and one report");
     assert_eq!(again, 0, "a published event is not published again");
     let stored = vault.events().await;
     let event_id = stored[0]["event_id"]

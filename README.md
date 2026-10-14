@@ -6,9 +6,10 @@ file, and indexes each Markdown file. Knowledge reads the note bytes and the fil
 and analyse the notes.
 
 > **Status:** in development. The service starts, applies the `notes` schema, serves its operator
-> plane, connects and removes vaults, and runs the first Obsidian login of a `sync` connection. The
-> Sync supervisor, the index and the device channels are planned in the workspace change
-> `add-notes-vault-connections` (OBS-023), groups 6 to 8.
+> plane, connects and removes vaults with the connect operation, runs the Obsidian login and the
+> Sync supervisor of a `sync` connection, records each file revision with its event and its index,
+> relays its outbox to NATS, and serves the read routes. The device channels are planned in the
+> workspace change `add-notes-vault-connections` (OBS-023), group 8.
 
 > [!IMPORTANT]
 > **Ratatoskr is in development.** No database holds data that has to survive a schema change.
@@ -46,7 +47,11 @@ The design is in `ratatoskr-workspace`: ADR-0010, `docs/NOTES_AND_SITES.md`, and
 | Operator plane `/health/live`, `/health/ready`, `/metrics`, `/version` | `127.0.0.1:9471` (`RATATOSKR__ADMIN__BIND`) | The host only |
 | Database | schema `notes`, role `ratatoskr_notes`, database `ratatoskr` | This service only |
 
-The domain API serves `POST /v1/notes/connections` and `DELETE /v1/notes/connections/{id}`.
+The domain API serves `POST /v1/notes/connections` and `DELETE /v1/notes/connections/{id}`,
+`PUT /v1/notes/connections/{id}/excluded-folders`, and the read routes `GET /v1/notes/connections`,
+`GET /v1/notes/connections/{id}/files`, `GET /v1/notes/connections/{id}/files/{path}` (the bytes,
+also at `?revision=<sha256>`) and `GET /v1/notes/connections/{id}/index/{path}` (the index with its
+links and backlinks). Every route answers only for the owner in the claim of Edge.
 
 ## Connections
 
@@ -55,28 +60,35 @@ the claim that Edge mints. One vault of one owner has one connection that is not
 connection for the same vault key answers `409` with `notes.connection.vault_already_connected`,
 whatever its channel. Two owners can connect the same remote vault.
 
+Each connect is an operation of kind `notes.connection.connect` that Edge mints. Edge sends its id
+in `x-ratatoskr-operation-id`; a connect without it answers `400` `notes.request.invalid`. The
+connect answers `202` at once with the connection id, the channel, the state `connecting` and the
+operation (its id, its kind and the lane `ratatoskr-notes`). Notes is the only reporter of the
+operation: it writes each report as `platform.operation.reported.v1` to its outbox.
+
 A `sync` connection also needs `sync_login`: `email`, `password`, and the optional `mfa_code` and
-`e2e_password`. Its vault key is the remote vault id. The service runs the first login before it
-answers:
+`e2e_password`. Its vault key is the remote vault id. After the answer, a task runs the first
+login, starts the sync unit and watches the working tree, and reports the phases `login`, `setup`,
+`first_sync` and `indexing`. When the first full scan of the tree is indexed, one transaction makes
+the connection `active` and writes `notes.vault.connected.v1` and the report `succeeded`
+(`partially_succeeded` with the warning `notes.sync.journal_unreadable` when the service cannot
+read the journal of the sync units). A failed login reports `failed` with one of the stable codes
+`notes.sync.login_failed`, `notes.sync.mfa_required`, `notes.sync.e2e_password_wrong` or
+`notes.sync.vault_not_found`. The connection then becomes `failed`, keeps no ciphertext, and does
+not hold the vault key, so the owner can try again. An expired login before the first scan reports
+`notes.sync.login_expired`.
 
-- `202` with the state `connecting` when the login and the setup succeed and the sync unit of the
-  connection started;
-- `422` with one of the stable codes `notes.sync.login_failed`, `notes.sync.mfa_required`,
-  `notes.sync.e2e_password_wrong` or `notes.sync.vault_not_found` when they fail. The connection
-  then becomes `failed`, keeps no ciphertext, and does not hold the vault key, so the owner can try
-  again.
+A SIGTERM stops each login that runs, runs the cleanup unit and fails the connection, within
+`RATATOSKR__SHUTDOWN__GRACE_SECONDS`, and the operation fails with `notes.service.unavailable`.
+When the grace window ends first, the connection stays `connecting` with its ciphertext. The next
+start of the service then does these steps for it, and fails its operation, before it accepts a
+request. The start does not touch a connection whose login finished.
 
-When the client goes away while the login runs, the connect continues in its own task: it stops
-the login unit, runs the cleanup unit, and marks the connection `failed`, as after a failed login.
-A SIGTERM does the same for each login that runs, within `RATATOSKR__SHUTDOWN__GRACE_SECONDS`, and
-the connect request answers `503`. When the grace window ends first, the connection stays
-`connecting` with its ciphertext. The next start of the service then does these steps for it before
-it accepts a request. The start does not touch a connection whose login finished.
-
-When the owner removes the connection before its login starts, no login runs, and the connect
-answers `404` with `notes.connection.not_found`. At most `RATATOSKR__CONNECTIONS__MAX_LOGINS` logins
-run at the same time, 2 by default. A `sync` connect over that limit answers `503` with
-`notes.service.unavailable` and creates nothing, and the client can try again later.
+When the owner removes the connection before or while its login runs, the operation fails with
+`notes.connection.not_found`. At most `RATATOSKR__CONNECTIONS__MAX_LOGINS` logins run at the same
+time, 2 by default. A `sync` connect over that limit answers `503` with `notes.service.unavailable`
+and creates nothing, and the client can try again later. A `plugin` or `cli` connect reports
+`first_sync`; the first changes of its device complete it (group 8).
 
 `DELETE /v1/notes/connections/{id}` stops the sync unit and a login unit that still runs, runs the
 cleanup unit, and then, in one transaction, marks the connection removed, deletes its ciphertext,
@@ -181,7 +193,8 @@ one-time code and is never stored.
   tree beneath its root, the umask rule of the blob store, and the split trees and clients roots.
   The journal namespace and its ACL wait for a check on a real Debian 12 host.
 - [ ] The pull-only session of spike 3.3 and its replay test (tasks 6.5 and 6.6).
-- [ ] Index, file events and the read API (group 7).
+- [x] Index, file events and the read API (group 7), and the connect operation of workspace design
+  D10 (notes tasks 7.9 and 7.10).
 - [ ] Device channel routes (group 8).
 
 ## Development
