@@ -108,6 +108,9 @@ An unknown `RATATOSKR__` key stops the start with exit 78.
 `schema.sql` at the repository root is the whole schema. The binary embeds it and applies it to a
 database that has no `notes` schema. There are no migrations: a schema change edits `schema.sql`
 in place, and the next test database has it.
+A database made before the `logged_in_at` column of `notes.connections` does not get the column:
+drop its `notes` schema (`drop schema notes cascade`), and the next start of the service makes it
+again from `schema.sql` (AGENTS.md, Development status: no migrations).
 
 ## Deploy files
 

@@ -3,11 +3,12 @@
 //! Every route reads the owner from the claim that Edge mints, `x-ratatoskr-user-id`. Edge strips
 //! any client-supplied copy, and this listener is reachable only on loopback.
 
+use std::collections::HashMap;
 use std::fmt;
 use std::future::Future;
 use std::path::{Path as FsPath, PathBuf};
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use axum::extract::rejection::{JsonRejection, PathRejection};
 use axum::extract::{DefaultBodyLimit, Path, State};
@@ -20,7 +21,7 @@ use ratatoskr_identifiers::SafeMessage;
 use ratatoskr_notes_contracts::{VaultChannel, VaultDisplayName};
 use ratatoskr_notes_persistence::{CreateOutcome, Database, NewConnection, NewSecret, OutboxEvent};
 use secrecy::ExposeSecret as _;
-use tokio::sync::{OwnedSemaphorePermit, Semaphore, oneshot};
+use tokio::sync::{OwnedSemaphorePermit, Semaphore, oneshot, watch};
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 use uuid::Uuid;
@@ -62,6 +63,62 @@ impl fmt::Debug for BeforeLogin {
     }
 }
 
+/// The disconnects that run now in this process, by connection. The channel of each one closes
+/// when the disconnect ends.
+#[derive(Debug, Clone, Default)]
+struct Removals(Arc<Mutex<HashMap<Uuid, watch::Receiver<()>>>>);
+
+/// One disconnect that runs. Its drop removes it from [`Removals`] and closes its channel.
+struct Removal {
+    removals: Removals,
+    connection_id: Uuid,
+    ended: watch::Sender<()>,
+}
+
+impl Removals {
+    /// Record a disconnect of `connection_id` until the returned value is dropped.
+    fn begin(&self, connection_id: Uuid) -> Removal {
+        let (ended, receiver) = watch::channel(());
+        if let Ok(mut running) = self.0.lock() {
+            running.insert(connection_id, receiver);
+        }
+        Removal {
+            removals: self.clone(),
+            connection_id,
+            ended,
+        }
+    }
+
+    /// Wait until no disconnect of `connection_id` that runs now runs any more. Returns whether
+    /// one ran.
+    async fn wait(&self, connection_id: Uuid) -> bool {
+        let running = self
+            .0
+            .lock()
+            .ok()
+            .and_then(|running| running.get(&connection_id).cloned());
+        let Some(mut ended) = running else {
+            return false;
+        };
+        while ended.changed().await.is_ok() {}
+        true
+    }
+}
+
+impl Drop for Removal {
+    fn drop(&mut self) {
+        if let Ok(mut running) = self.removals.0.lock() {
+            // A later disconnect of the same connection holds its own entry.
+            if running
+                .get(&self.connection_id)
+                .is_some_and(|receiver| receiver.same_channel(&self.ended.subscribe()))
+            {
+                running.remove(&self.connection_id);
+            }
+        }
+    }
+}
+
 /// What the domain handlers share.
 #[derive(Debug)]
 pub struct ApiState<B> {
@@ -72,6 +129,7 @@ pub struct ApiState<B> {
     logins: Arc<Semaphore>,
     connects: TaskTracker,
     stopping: CancellationToken,
+    removals: Removals,
     before_login: Option<BeforeLogin>,
 }
 
@@ -85,6 +143,7 @@ impl<B> Clone for ApiState<B> {
             logins: Arc::clone(&self.logins),
             connects: self.connects.clone(),
             stopping: self.stopping.clone(),
+            removals: self.removals.clone(),
             before_login: self.before_login.clone(),
         }
     }
@@ -102,6 +161,7 @@ impl<B: SystemdBus> ApiState<B> {
             logins: Arc::new(Semaphore::new(DEFAULT_MAX_LOGINS)),
             connects: TaskTracker::new(),
             stopping: CancellationToken::new(),
+            removals: Removals::default(),
             before_login: None,
         }
     }
@@ -414,8 +474,10 @@ fn seal_secrets(
 /// Run the first login of a new `sync` connection, and record it when it succeeded.
 ///
 /// The owner can remove the connection between its insert and this step. The login then does not
-/// start, and the answer is `404`. When the owner removes it while the login runs, the login can
-/// write to `ob-home` after the cleanup of the disconnect, so the cleanup runs again.
+/// start, and the answer is `404`. When the owner removes it while the login runs, the disconnect
+/// stops the login unit; the connect waits for the end of the disconnect, and the answer is `404`
+/// when the connection is removed. When the login finished before the disconnect stopped it, the
+/// login can write to `ob-home` after the cleanup of the disconnect, so the cleanup runs again.
 ///
 /// When the login fails, or the request ends or the service stops while the login runs, the
 /// cleanup step stops the login unit, the cleanup unit removes what the login left in `ob-home`
@@ -443,7 +505,13 @@ async fn log_in<B: SystemdBus>(
                     ApiFault::Unavailable
                 }
             },
-            Err(fault) => fault,
+            Err(fault) => {
+                if removed_meanwhile(state, connection_id).await {
+                    tracing::info!(%connection_id, "the connection was removed while its login ran");
+                    return Err(ApiFault::NotFound);
+                }
+                fault
+            }
         },
         Ok(false) => {
             tracing::info!(%connection_id, "the connection was removed before its login started; no login runs");
@@ -467,6 +535,14 @@ async fn log_in<B: SystemdBus>(
         tracing::info!(%connection_id, "a connection failed at its first login");
     }
     Err(fault)
+}
+
+/// Whether a disconnect of the connection ran while its login ran, and removed it. A disconnect
+/// stops the login unit before it runs the cleanup unit, so the login ends before the disconnect
+/// does: the wait for the end of the disconnect comes first.
+async fn removed_meanwhile<B: SystemdBus>(state: &ApiState<B>, connection_id: Uuid) -> bool {
+    state.removals.wait(connection_id).await
+        && matches!(state.database.is_connecting(connection_id).await, Ok(false))
 }
 
 /// Write the credential files of the login, run the login unit, wait for it, and delete the files.
@@ -536,6 +612,8 @@ async fn remove_connection<B: SystemdBus>(
         })?
         .ok_or(ApiFault::NotFound)?;
 
+    // A connect whose login this disconnect stops waits for the end of the disconnect.
+    let _removal = state.removals.begin(connection_id);
     if connection.channel == "sync" {
         clean_up_sync_client(state.systemd.as_ref(), connection_id).await?;
     }

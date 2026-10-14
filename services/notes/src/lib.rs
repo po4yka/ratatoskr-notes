@@ -137,9 +137,6 @@ pub async fn serve<B: SystemdBus>(
     credentials_dir: PathBuf,
     shutdown: impl Future<Output = ()> + Send,
 ) -> Result<(), String> {
-    // Not connected yet: the next change uses the three values.
-    drop((systemd, credentials_dir));
-    drop(shutdown);
     let database = Database::connect(
         &config.database.url,
         config.database.max_connections,
@@ -158,8 +155,9 @@ pub async fn serve<B: SystemdBus>(
     let admin = bind(config.admin.bind, "operator").await?;
     let api = bind(config.api.listen_address, "domain").await?;
 
-    let state = ApiState::new(database.clone(), DbusSystemd::new())
+    let state = ApiState::new(database.clone(), systemd)
         .with_key_file(config.secrets.key_file.clone())
+        .with_credentials_dir(credentials_dir)
         .with_max_logins(config.connections.max_logins);
     // After the binds, so that a second process that cannot bind changes nothing, and before the
     // listeners accept, so that no connect of this process runs yet.
@@ -180,7 +178,7 @@ pub async fn serve<B: SystemdBus>(
         "startup complete"
     );
 
-    shutdown_signal().await;
+    shutdown.await;
     runtime.mark_stopping();
     tracing::info!("stop signal received; draining");
     let _ = stop_sender.send(true);
