@@ -75,6 +75,11 @@ pulldown-cmark = { version = "0.13.4", default-features = false }
 # The frontmatter. YAML 1.2 core schema, so `2024-01-01` stays a string, as in Obsidian.
 yaml-rust2 = { version = "0.13", default-features = false }
 
+# ---- the bus ----
+# The outbox relay publishes to JetStream under the NOTES identity, with its own inbox prefix
+# (workspace spec fleet-bus-topology). The version of the other services of the fleet.
+async-nats = "0.50.0"
+
 # ---- configuration ----
 figment = { version = "0.10", features = ["env"] }
 secrecy = { version = "0.10", features = ["serde"] }

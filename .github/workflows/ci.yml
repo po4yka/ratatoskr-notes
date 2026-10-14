@@ -50,6 +50,8 @@ jobs:
       # Where the suite creates and drops its disposable databases. Matches compose.yaml, so the
       # same command works on a laptop and here.
       NOTES_TEST_DATABASE_URL: postgres://notes:notes@127.0.0.1:5432/notes
+      # The JetStream server of the outbox relay test (tests/file_events.rs), started below.
+      NOTES_TEST_NATS_URL: nats://127.0.0.1:4222
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -61,6 +63,23 @@ jobs:
         run: rustup show           # rust-toolchain.toml is the only supported toolchain
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+
+      - name: Start disposable JetStream
+        run: |
+          # A service container cannot pass `-js`, so the broker is started as a step. The digest is
+          # `nats:2.15.0-alpine` as it stood on 2026-10-10, byte-identical to ratatoskr-claude/ci.yml.
+          docker run -d --name notes-ci-nats \
+            -p 127.0.0.1:4222:4222 \
+            nats@sha256:ac8f88a6494bffc2c2a5289a0ca61cb28a9145c11ba5677cf24265d07f46d8d4 \
+            -js
+          for attempt in $(seq 1 30); do
+            if bash -c 'exec 3<>/dev/tcp/127.0.0.1/4222'; then
+              exit 0
+            fi
+            sleep 1
+          done
+          docker logs notes-ci-nats
+          exit 1
 
       - run: cargo fetch --locked
 

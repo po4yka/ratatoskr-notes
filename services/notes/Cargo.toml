@@ -12,6 +12,8 @@ name = "ratatoskr-notes"
 path = "src/main.rs"
 
 [dependencies]
+ratatoskr-notes-index.workspace       = true
+async-nats.workspace                  = true
 ratatoskr-error-contracts.workspace   = true
 ratatoskr-event-envelope.workspace    = true
 ratatoskr-identifiers.workspace       = true

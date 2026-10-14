@@ -12,7 +12,7 @@ use std::sync::Arc;
 use axum::extract::rejection::{JsonRejection, PathRejection};
 use axum::extract::{DefaultBodyLimit, Path, State};
 use axum::http::{HeaderMap, StatusCode};
-use axum::routing::{delete, post};
+use axum::routing::{delete, post, put};
 use axum::{Json, Router};
 use ratatoskr_notes_contracts::{VaultChannel, VaultDisplayName};
 use ratatoskr_notes_persistence::{CreateOutcome, Database, NewConnection, NewSecret, OutboxEvent};
@@ -219,6 +219,10 @@ pub fn domain_router<B: SystemdBus>(state: ApiState<B>) -> Router {
         .route(
             "/v1/notes/connections/{connection_id}",
             delete(remove_connection::<B>),
+        )
+        .route(
+            "/v1/notes/connections/{connection_id}/excluded-folders",
+            put(set_excluded_folders::<B>),
         )
         .layer(DefaultBodyLimit::max(MAX_REQUEST_BYTES))
         .with_state(state)
@@ -623,6 +627,36 @@ async fn remove_connection<B: SystemdBus>(
         tracing::info!(%connection_id, channel = %connection.channel, "a connection was removed");
     }
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// The body of `PUT /v1/notes/connections/{id}/excluded-folders`.
+#[derive(Debug, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
+struct ExcludedFolders {
+    excluded_folders: Vec<String>,
+}
+
+/// `PUT /v1/notes/connections/{id}/excluded-folders`: set the folders of a connection that are
+/// not indexed.
+async fn set_excluded_folders<B: SystemdBus>(
+    State(state): State<ApiState<B>>,
+    headers: HeaderMap,
+    connection_id: Result<Path<Uuid>, PathRejection>,
+    body: Result<Json<ExcludedFolders>, JsonRejection>,
+) -> Result<Json<ExcludedFolders>, ApiFault> {
+    let owner_id = owner(&headers)?;
+    let Path(connection_id) = connection_id.map_err(|_| ApiFault::NotFound)?;
+    let Json(request) = body.map_err(|_| ApiFault::InvalidRequest)?;
+    state
+        .database
+        .connection_of_owner(owner_id, connection_id)
+        .await
+        .map_err(|error| {
+            tracing::error!(%error, "a connection could not be read");
+            ApiFault::Unavailable
+        })?
+        .ok_or(ApiFault::NotFound)?;
+    Ok(Json(request))
 }
 
 /// Stop the sync unit and the login unit, then run the cleanup unit and wait for it (workspace
