@@ -7,12 +7,15 @@
 //! [`LinkGraph`] resolves the links of every note against them and gives the backlinks of each
 //! file.
 //!
+//! [`paths`] holds the rules for the paths of a vault: NFC, path keys, collisions and exclusions.
+//!
 //! The oracle is the golden output of the real Obsidian engine under
 //! `tests/fixtures/obsidian-<version>/`. A new Obsidian version adds a new directory there.
 
 mod frontmatter;
 mod index;
 mod markdown;
+pub mod paths;
 mod resolve;
 mod text;
 

@@ -1767,6 +1767,7 @@ dependencies = [
  "serde",
  "serde_json",
  "unicode-normalization",
+ "uuid",
  "yaml-rust2",
 ]
 
