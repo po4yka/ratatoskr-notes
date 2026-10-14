@@ -642,8 +642,8 @@ impl SystemdBus for FakeSystemd {
         Ok(JobResult::Done)
     }
 
-    fn follow_journal(&self, unit: &UnitName) -> impl Stream<Item = JournalLine> + Send + 'static {
-        self.journals.follow(unit.as_str())
+    fn follow_journal(&self) -> impl Stream<Item = JournalLine> + Send + 'static {
+        self.journals.follow()
     }
 
     async fn check_journal(&self) -> Result<(), JournalUnreadable> {

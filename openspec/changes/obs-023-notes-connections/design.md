@@ -184,10 +184,15 @@ modes make the blob store independent of that umask.
 
 ### 12. An expired Sync login
 
-The supervisor reads the journal of each sync unit that it started, through `SystemdBus::follow_journal`.
-The production bus runs `journalctl --follow --lines=0 --output=json --output-fields=MESSAGE
---unit=<unit>` and reads the monotonic time and the message of each entry. It subscribes before it
-starts the unit, so no line of that start is lost. Only one line counts: a message that starts with
+The sync units log to the journal namespace `ratatoskr-notes-sync` (`LogNamespace=`, owner decision
+A of 2026-10-14). The supervisor follows that namespace through `SystemdBus::follow_journal`, with
+one follower for all units: each follower is one `journalctl` process, and the host has no spare
+memory for one process per connection. The production bus runs `journalctl
+--namespace=ratatoskr-notes-sync --follow --lines=0 --output=json
+--output-fields=MESSAGE,_SYSTEMD_UNIT` and reads the unit, the monotonic time and the message of
+each entry. `_SYSTEMD_UNIT` is a trusted field: journald sets it, and `ob` cannot. The supervisor
+counts the lines of a unit only after it started that unit, and starts the follower before the
+first start of a unit, so no line of that start is lost. Only one line counts: a message that starts with
 `Failed to authenticate:`, also after `Error: `. `ob` 0.0.14 throws
 `new Error("Failed to authenticate: " + msg)` when the Sync server refuses its token, and
 `getServer()` logs the error with `console.error`, so the journal line is
@@ -205,9 +210,16 @@ The line and the 5-minute rule are PROVISIONAL: they come from the code of `obsi
 0.0.14, not from an expired token. Spike 3.1 confirms them, and the deploy role pins the version,
 because a release can change the line.
 
-The service user needs read access to the system journal: the service unit of the deploy role
-must give it `SupplementaryGroups=systemd-journal`. When `journalctl` cannot run or ends, the
-service logs it, and an expired login is found at its next start.
+The service user needs read access to the namespace only, not to the system journal: the deploy
+role gives the group `ratatoskr-notes` an ACL on `/var/log/journal/<machine id>.ratatoskr-notes-sync`
+(DEVELOPMENT.md holds the tmpfiles.d entry). At start the supervisor runs `journalctl
+--namespace=ratatoskr-notes-sync --lines=0`, which exits 1 when it can open no file of the
+namespace, and logs `notes.sync.journal_unreadable` with the stderr of `journalctl`. The follower
+keeps its stderr too, and logs each line with the same code. When the follower ends, the supervisor
+logs the code and starts a new follower after 1 second, then after twice the last wait, up to 1
+minute; a follower that ran for 1 minute starts the wait at 1 second again. The run of failures of a
+unit stays across a new follower, but the lines between two followers are lost: `ob` repeats the
+line every 30 seconds, so a gap delays the expiry and does not hide it.
 
 ## Risks / Trade-offs
 
@@ -233,5 +245,6 @@ service logs it, and an expired login is found at its next start.
 - A reconnect of a `login_expired` connection is a new `POST`, and the connection still holds its
   vault key, so the answer is `409`. The owner removes the connection first. Group 6 keeps that
   rule: the supervisor starts no login, and no route reuses a connection.
-- The group `systemd-journal` lets the service read the whole system journal, not only the journal
-  of the sync units. No narrower grant exists in systemd 252 without a journal namespace per unit.
+- The journal namespace and its ACL are not checked on a real Debian 12 host yet (systemd 252).
+  The test double reads no journal file, so the check of a real host is the Molecule case of
+  workspace task 14.6 or a manual check on the host.

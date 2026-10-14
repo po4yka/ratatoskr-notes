@@ -3,8 +3,9 @@
 //! A stub `ob` of a sync unit logs lines under paused tokio time: [`Journals::log_auth_failures`]
 //! runs a paused runtime on its own thread, so that 30 seconds between two lines take no real time
 //! and the runtime of the test, which talks to a real database, keeps the real clock. Each line
-//! carries the monotonic time of the fake host, as journald gives it to a reader. A reader gets the
-//! lines that a unit logs after it started to read, as `journalctl --follow --lines=0` does. The
+//! carries the monotonic time of the fake host and its unit, as journald gives them to a reader of
+//! the namespace of the sync units. A reader gets the lines that the units log after it started to
+//! read, in order, as `journalctl --namespace=... --follow --lines=0` does. The
 //! fake records the time of the last line that a reader took when the service stops a unit.
 //! [`Journals::end_followers`] ends every reader that runs, as a stop of `journalctl` does, and the
 //! fake counts the readers that the service starts.
@@ -32,6 +33,10 @@ const RETRY: Duration = Duration::from_secs(30);
 /// One line of a journal: the monotonic time and the message.
 pub(crate) type Line = (Duration, String);
 
+/// The followers that a reader belongs to ended.
+#[derive(Debug)]
+struct Ended;
+
 /// The journals of the sync units. Clones share one record.
 #[derive(Debug, Clone)]
 pub(crate) struct Journals {
@@ -56,6 +61,8 @@ impl Default for Journals {
 struct State {
     /// The lines of each unit, in order.
     lines: HashMap<String, Vec<Line>>,
+    /// The lines of every unit, in order, with the unit.
+    all: Vec<(String, Line)>,
     /// The monotonic time of the last line, from [`BOOT_OFFSET`].
     clock: Duration,
     /// The time of the last line that a reader took, by unit.
@@ -101,50 +108,65 @@ impl Journals {
         let base = state.clock.max(BOOT_OFFSET);
         for offset in &offsets {
             let at = base + *offset;
-            let lines = state.lines.entry(unit.to_owned()).or_default();
-            lines.push((at, "Connecting...".to_owned()));
-            lines.push((at, "Error: Failed to authenticate: stub refusal".to_owned()));
+            for message in [
+                "Connecting...",
+                "Error: Failed to authenticate: stub refusal",
+            ] {
+                let line = (at, message.to_owned());
+                state
+                    .lines
+                    .entry(unit.to_owned())
+                    .or_default()
+                    .push(line.clone());
+                state.all.push((unit.to_owned(), line));
+            }
         }
         state.clock = base + offsets.last().copied().unwrap_or_default();
         drop(state);
         self.appended.send_replace(());
     }
 
-    /// The lines that `unit` logs from now on, as the service reads them. Each line that the stream
-    /// yields counts as taken.
-    pub(crate) fn follow(&self, unit: &str) -> impl Stream<Item = JournalLine> + Send + 'static {
+    /// The lines that the sync units log from now on, as the service reads them. Each line that
+    /// the stream yields counts as taken.
+    pub(crate) fn follow(&self) -> impl Stream<Item = JournalLine> + Send + 'static {
         let appended = self.appended.subscribe();
-        let next = self.lines_from(unit, 0).len();
-        let generation = self.generation();
+        let (next, generation) = {
+            let state = self.state.lock().expect("the journals");
+            (state.all.len(), state.generation)
+        };
         self.followed.send_modify(|followed| *followed += 1);
-        let reader = (self.clone(), unit.to_owned(), next, appended);
+        let reader = (self.clone(), next, appended);
         futures_util::stream::unfold(reader, move |reader| async move {
-            let (journals, unit, next, mut appended) = reader;
+            let (journals, next, mut appended) = reader;
             loop {
-                if journals.generation() != generation {
-                    return None;
-                }
-                if let Some((at, message)) = journals.lines_from(&unit, next).into_iter().next() {
+                if let Some((unit, (at, message))) = journals.line_at(next, generation).ok()? {
                     journals.mark_read(&unit, at);
                     let line = JournalLine {
+                        unit,
                         monotonic: at,
                         message,
                     };
-                    return Some((line, (journals, unit, next + 1, appended)));
+                    return Some((line, (journals, next + 1, appended)));
                 }
                 appended.changed().await.ok()?;
             }
         })
     }
 
+    /// The line at `index` of all units, or `None` when there is none yet. An error when the
+    /// followers of `generation` ended.
+    fn line_at(&self, index: usize, generation: u64) -> Result<Option<(String, Line)>, Ended> {
+        let state = self.state.lock().expect("the journals");
+        if state.generation != generation {
+            return Err(Ended);
+        }
+        Ok(state.all.get(index).cloned())
+    }
+
     /// Every follower that runs now ends, as when `journalctl` stops.
     pub(crate) fn end_followers(&self) {
         self.state.lock().expect("the journals").generation += 1;
         self.appended.send_replace(());
-    }
-
-    fn generation(&self) -> u64 {
-        self.state.lock().expect("the journals").generation
     }
 
     /// Wait until the service started `count` followers in all, for at most 10 seconds. Returns

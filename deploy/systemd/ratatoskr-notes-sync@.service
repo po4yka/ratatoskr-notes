@@ -8,8 +8,12 @@
 # and the device name ratatoskr-<id> in the Sync history. Notes never writes into a vault in this
 # phase (OBS-024 adds writes).
 #
-# ratatoskr-notes reads one line of this unit's journal, `Failed to authenticate:`, which ob 0.0.14
-# logs while its login token is refused. The version of obsidian-headless is pinned by the deploy
+# The unit logs to the journal namespace ratatoskr-notes-sync, not to the system journal (owner
+# decision A of 2026-10-14). ratatoskr-notes reads that namespace and no other journal; read it
+# with `journalctl --namespace=ratatoskr-notes-sync --unit=ratatoskr-notes-sync@<id>.service`.
+# PROVISIONAL: ratatoskr-notes reads one line of this journal, `Failed to authenticate:`, which ob
+# 0.0.14 logs while its login token is refused. The line comes from the code of ob, not from a real
+# expired token; spike 3.1 confirms it. The version of obsidian-headless is pinned by the deploy
 # role of ratatoskr-workspace, because a release can change the line.
 #
 # services/notes/tests/sync_supervisor.rs runs the ExecStartPre= and ExecStart= lines of this file
@@ -37,6 +41,10 @@ ExecStartPre=/usr/bin/ob sync-config --path /mnt/nvme/ratatoskr/notes/connection
 ExecStart=/usr/bin/ob sync --continuous --path /mnt/nvme/ratatoskr/notes/connections/%i/tree
 Restart=on-failure
 RestartSec=30
+# The journal namespace that ratatoskr-notes reads (SYNC_LOG_NAMESPACE in services/notes/src/systemd.rs).
+# systemd starts systemd-journald@ratatoskr-notes-sync.service for it. Check it on a real Debian 12
+# host (systemd 252): the deploy role gives the group ratatoskr-notes read access to its directory.
+LogNamespace=ratatoskr-notes-sync
 # ob stops cleanly on SIGTERM (spike 3.2). A disconnect waits for this stop, and Edge ends a request
 # after 300 seconds.
 TimeoutStopSec=30

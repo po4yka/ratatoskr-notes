@@ -133,9 +133,19 @@ again from `schema.sql` (AGENTS.md, Development status: no migrations).
 The host needs, before the first `sync` connect: the user `ratatoskr-notes-sync`; the directory
 `/mnt/nvme/ratatoskr/notes/connections` with that owner and mode 0700; `/run/ratatoskr-notes`
 owned by `ratatoskr-notes` (`RuntimeDirectory=` of the service unit); the key file; and `ob` at
-`/usr/bin/ob`. The service unit also needs `UMask=0027` for the blob root, and
-`SupplementaryGroups=systemd-journal`, because the service reads the journal of the sync units with
-`/usr/bin/journalctl`. The deploy role of `ratatoskr-workspace` installs the units and the polkit rule that
+`/usr/bin/ob`. The service unit also needs `UMask=0027` for the blob root. The service reads the
+journal namespace `ratatoskr-notes-sync` of the sync units with `/usr/bin/journalctl`, so the host
+needs this tmpfiles.d entry, which gives the group `ratatoskr-notes` read access to that namespace
+and to no other journal (`%m` is the machine id):
+
+```text
+d  /var/log/journal/%m.ratatoskr-notes-sync 2755 root systemd-journal - -
+A+ /var/log/journal/%m.ratatoskr-notes-sync - - - - group:ratatoskr-notes:r-x,d:group:ratatoskr-notes:r-x
+```
+
+The entry is not checked on a real Debian 12 host yet (systemd 252). Check there that
+`sudo -u ratatoskr-notes journalctl --namespace=ratatoskr-notes-sync --lines=0` exits 0 after a
+sync unit has run. The deploy role of `ratatoskr-workspace` installs the units and the polkit rule that
 lets `ratatoskr-notes` start and stop them.
 
 ## Workflow

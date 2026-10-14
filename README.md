@@ -100,12 +100,21 @@ The three units are in `deploy/systemd/`. None of them is enabled: only the serv
 The sync unit runs in pull-only mode, so Notes never writes into a vault.
 
 An expired or revoked Obsidian login does not stop `ob sync --continuous`: it logs
-`Error: Failed to authenticate: ...` and tries again. The service reads that one line from the
-journal of each sync unit, and no other. When the line repeats for 5 minutes, the connection
-becomes `login_expired` with the code `notes.sync.login_expired`, and the service stops the unit.
-It starts no login: the owner removes the connection and connects again. The line comes from
-`obsidian-headless` 0.0.14 and is provisional until spike 3.1 sees a real expired token. The
-service user must be a member of the group `systemd-journal` to read the journal.
+`Error: Failed to authenticate: ...` and tries again. The sync units log to the journal namespace
+`ratatoskr-notes-sync` (`LogNamespace=`), not to the system journal. The service follows that
+namespace with one `journalctl` process, sends each line to its connection by `_SYSTEMD_UNIT`, and
+reads that one line and no other. When the line repeats for 5 minutes, the connection becomes
+`login_expired` with the code `notes.sync.login_expired`, and the service stops the unit. It starts
+no login: the owner removes the connection and connects again. The line comes from
+`obsidian-headless` 0.0.14 and is provisional until spike 3.1 sees a real expired token.
+
+The service user is not in the group `systemd-journal`: it reads only the namespace of the sync
+units, through an ACL that the deploy role puts on the directory of the namespace. At start the
+service checks that it can read the namespace; when it cannot, it logs
+`notes.sync.journal_unreadable` with the reason that `journalctl` gives, and an expired login is
+not found. When the follower ends, the service starts a new one after 1 second, and doubles the
+wait up to 1 minute while the follower keeps ending. To read the journal of a sync unit, run
+`journalctl --namespace=ratatoskr-notes-sync --unit=ratatoskr-notes-sync@<id>.service`.
 
 ## Blob root and its read group
 

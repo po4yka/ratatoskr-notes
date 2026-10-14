@@ -7,14 +7,24 @@
 //! in pull-only mode at every start. A disconnect stops the unit (see `api::clean_up_sync_client`).
 //!
 //! An expired or revoked login does not stop `ob sync --continuous`: it logs the line
-//! [`AUTH_FAILURE`] and tries again. The supervisor reads that one line from the journal of each
-//! unit that it started, and no other: the other lines are dropped unread, and no file content is
-//! taken from the journal. When the line repeats for [`EXPIRY`], the supervisor marks the connection
+//! [`AUTH_FAILURE`] and tries again. The sync units log to the journal namespace
+//! [`SYNC_LOG_NAMESPACE`] (owner decision A of 2026-10-14). The supervisor follows that namespace
+//! with one follower for all units, and sends each line to its connection by the trusted field
+//! `_SYSTEMD_UNIT`. One follower, not one for each unit, because each follower is one `journalctl`
+//! process and the host has no spare memory. Only that one line counts, and only for a unit that
+//! this process started: the other lines are dropped unread, and no file content is taken from the
+//! journal. When the line repeats for [`EXPIRY`], the supervisor marks the connection
 //! `login_expired` (`notes.sync.login_expired`) and stops the unit, once. It starts no login: the
 //! owner connects again.
+//!
+//! At start the supervisor checks that it can read the namespace, and logs
+//! `notes.sync.journal_unreadable` with the reason of `journalctl` when it cannot. A follower that
+//! ends starts again after a backoff of [`FIRST_BACKOFF`] that doubles up to [`LAST_BACKOFF`], until
+//! the service stops. The run of failures of a unit stays across a new follower.
 
 use std::collections::HashMap;
-use std::pin::pin;
+use std::pin::Pin;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -24,7 +34,9 @@ use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 use uuid::Uuid;
 
-use crate::systemd::{JobResult, JournalLine, SystemdBus, UnitName};
+use crate::systemd::{
+    JOURNAL_UNREADABLE, JobResult, JournalLine, SYNC_LOG_NAMESPACE, SystemdBus, UnitName,
+};
 
 /// The start of the line that `ob` 0.0.14 logs when the Sync server refuses its login token:
 /// `getServer()` logs `new Error("Failed to authenticate: " + msg)` with `console.error`, so the
@@ -44,6 +56,13 @@ const LONGEST_PAUSE: Duration = Duration::from_mins(10);
 
 /// The stable code of an expired login.
 const LOGIN_EXPIRED: &str = "notes.sync.login_expired";
+
+/// The wait before the first new follower after a follower ended.
+const FIRST_BACKOFF: Duration = Duration::from_secs(1);
+
+/// The longest wait before a new follower. A follower that ran this long before it ended starts
+/// the next backoff at [`FIRST_BACKOFF`] again.
+const LAST_BACKOFF: Duration = Duration::from_mins(1);
 
 /// Whether a journal line is the authentication failure of `ob`.
 fn is_auth_failure(message: &str) -> bool {
@@ -76,13 +95,25 @@ impl AuthFailures {
     }
 }
 
-/// The supervisor of the sync units. Clones share one bus and one set of journal readers.
+/// A sync unit whose authentication failures count.
+#[derive(Debug)]
+struct Watched {
+    connection_id: Uuid,
+    failures: AuthFailures,
+}
+
+/// One follower of the journal namespace.
+type Follower = Pin<Box<dyn Stream<Item = JournalLine> + Send>>;
+
+/// The supervisor of the sync units. Clones share one bus, one follower and one set of units.
 #[derive(Debug)]
 pub(crate) struct Supervisor<B> {
     database: Database,
     systemd: Arc<B>,
-    /// The journal reader of each connection whose unit this process started.
-    readers: Arc<Mutex<HashMap<Uuid, CancellationToken>>>,
+    /// The units that this process started, by unit name.
+    watched: Arc<Mutex<HashMap<String, Watched>>>,
+    /// Whether the follower task runs.
+    following: Arc<AtomicBool>,
     tasks: TaskTracker,
     stopping: CancellationToken,
 }
@@ -92,7 +123,8 @@ impl<B> Clone for Supervisor<B> {
         Self {
             database: self.database.clone(),
             systemd: Arc::clone(&self.systemd),
-            readers: Arc::clone(&self.readers),
+            watched: Arc::clone(&self.watched),
+            following: Arc::clone(&self.following),
             tasks: self.tasks.clone(),
             stopping: self.stopping.clone(),
         }
@@ -105,40 +137,51 @@ impl<B: SystemdBus> Supervisor<B> {
         Self {
             database,
             systemd,
-            readers: Arc::new(Mutex::new(HashMap::new())),
+            watched: Arc::new(Mutex::new(HashMap::new())),
+            following: Arc::new(AtomicBool::new(false)),
             tasks: TaskTracker::new(),
             stopping: CancellationToken::new(),
         }
     }
 
-    /// Start the sync unit of a connection, wait for the start job, and read its journal for the
-    /// authentication failure. A unit that runs already continues to run. Returns whether the job
+    /// Start the sync unit of a connection, wait for the start job, and count the authentication
+    /// failures of the unit. A unit that runs already continues to run. Returns whether the job
     /// finished; a failure is logged.
     pub(crate) async fn start(&self, connection_id: Uuid) -> bool {
         let unit = UnitName::sync(connection_id);
         // Before the start, so that no line of this start is lost.
-        let journal = self.systemd.follow_journal(&unit);
+        self.follow();
+        self.watch(connection_id, &unit);
         match self.systemd.start_unit(&unit).await {
             Ok(JobResult::Done) => {
                 tracing::info!(%unit, "the sync unit runs");
-                self.read_journal(connection_id, journal);
-                true
+                return true;
             }
             Ok(JobResult::NotDone(result)) => {
                 tracing::error!(%unit, %result, "the sync unit did not start");
-                false
             }
             Err(error) => {
                 tracing::error!(%unit, %error, "the sync unit could not be started");
-                false
             }
         }
+        self.forget(connection_id);
+        false
     }
 
-    /// Start the sync unit of each `sync` connection whose first login finished and that is
-    /// `connecting` or `active`. The service calls it at start, before its listeners accept a
-    /// request. A failure is logged and the start continues.
+    /// Check that the journal namespace of the sync units can be read, then start the sync unit of
+    /// each `sync` connection whose first login finished and that is `connecting` or `active`. The
+    /// service calls it at start, before its listeners accept a request. A failure is logged and
+    /// the start continues.
     pub(crate) async fn resume(&self) {
+        if let Err(error) = self.systemd.check_journal().await {
+            tracing::error!(
+                code = JOURNAL_UNREADABLE,
+                namespace = SYNC_LOG_NAMESPACE,
+                %error,
+                "the service cannot read the journal of the sync units; an expired Sync login is not found"
+            );
+        }
+        self.follow();
         let connections = match self.database.sync_connections_to_run().await {
             Ok(connections) => connections,
             Err(error) => {
@@ -151,68 +194,103 @@ impl<B: SystemdBus> Supervisor<B> {
         }
     }
 
-    /// Stop reading the journal of a connection. A disconnect calls it before it stops the unit.
+    /// Stop counting the failures of the unit of a connection. A disconnect calls it before it
+    /// stops the unit.
     pub(crate) fn forget(&self, connection_id: Uuid) {
-        if let Some(reader) = self
-            .readers
-            .lock()
-            .ok()
-            .and_then(|mut readers| readers.remove(&connection_id))
-        {
-            reader.cancel();
+        if let Ok(mut watched) = self.watched.lock() {
+            watched.remove(UnitName::sync(connection_id).as_str());
         }
     }
 
-    /// Stop every journal reader and wait until each one ended. The units continue to run.
+    /// Stop the follower and wait until it ended. The units continue to run.
     pub(crate) async fn shut_down(&self) {
         self.stopping.cancel();
         self.tasks.close();
         self.tasks.wait().await;
     }
 
-    /// Read the journal of the unit of a connection in a task of its own.
-    fn read_journal(
-        &self,
-        connection_id: Uuid,
-        journal: impl Stream<Item = JournalLine> + Send + 'static,
-    ) {
-        let stop = self.stopping.child_token();
-        if let Ok(mut readers) = self.readers.lock()
-            && let Some(earlier) = readers.insert(connection_id, stop.clone())
-        {
-            earlier.cancel();
+    /// Count the failures of `unit` from now on, from an empty run.
+    fn watch(&self, connection_id: Uuid, unit: &UnitName) {
+        if let Ok(mut watched) = self.watched.lock() {
+            watched.insert(
+                unit.as_str().to_owned(),
+                Watched {
+                    connection_id,
+                    failures: AuthFailures::default(),
+                },
+            );
         }
-        let supervisor = self.clone();
-        self.tasks.spawn(async move {
-            supervisor.watch_login(connection_id, journal, stop).await;
-        });
     }
 
-    /// Count the authentication failures of a unit until they last [`EXPIRY`], then expire the
-    /// login. Every other line is dropped unread.
-    async fn watch_login(
-        &self,
-        connection_id: Uuid,
-        journal: impl Stream<Item = JournalLine>,
-        stop: CancellationToken,
-    ) {
-        let mut journal = pin!(journal);
-        let mut failures = AuthFailures::default();
+    /// Start the follower task, unless it runs. The first follower starts before this returns.
+    fn follow(&self) {
+        if self.following.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        let journal: Follower = Box::pin(self.systemd.follow_journal());
+        let supervisor = self.clone();
+        self.tasks
+            .spawn(async move { supervisor.keep_following(journal).await });
+    }
+
+    /// Read each follower until it ends, then start a new one after the backoff, until the service
+    /// stops.
+    async fn keep_following(&self, mut journal: Follower) {
+        let mut backoff = FIRST_BACKOFF;
+        loop {
+            let began = tokio::time::Instant::now();
+            if !self.read(journal).await {
+                return;
+            }
+            if began.elapsed() >= LAST_BACKOFF {
+                backoff = FIRST_BACKOFF;
+            }
+            tracing::error!(
+                code = JOURNAL_UNREADABLE,
+                namespace = SYNC_LOG_NAMESPACE,
+                backoff_seconds = backoff.as_secs(),
+                "the journal follower of the sync units ended; a new one starts after the backoff"
+            );
+            tokio::select! {
+                biased;
+                () = self.stopping.cancelled() => return,
+                () = tokio::time::sleep(backoff) => {}
+            }
+            backoff = backoff.saturating_mul(2).min(LAST_BACKOFF);
+            journal = Box::pin(self.systemd.follow_journal());
+        }
+    }
+
+    /// Count the authentication failures of each watched unit until the follower ends, and expire
+    /// a login whose failures lasted [`EXPIRY`]. Returns `false` when the service stops.
+    async fn read(&self, mut journal: Follower) -> bool {
         loop {
             let line = tokio::select! {
                 biased;
-                () = stop.cancelled() => return,
+                () = self.stopping.cancelled() => return false,
                 line = journal.next() => line,
             };
             let Some(line) = line else {
-                tracing::warn!(%connection_id, "the journal of a sync unit ended; an expired login is found at the next start of the service");
-                return;
+                return true;
             };
-            if is_auth_failure(&line.message) && failures.observe(line.monotonic) {
+            if !is_auth_failure(&line.message) {
+                continue;
+            }
+            if let Some(connection_id) = self.count_failure(&line) {
                 self.expire_login(connection_id).await;
-                return;
             }
         }
+    }
+
+    /// Count one failure line of a watched unit. Returns the connection when its login expired;
+    /// the unit is then no longer watched.
+    fn count_failure(&self, line: &JournalLine) -> Option<Uuid> {
+        let mut watched = self.watched.lock().ok()?;
+        let unit = watched.get_mut(&line.unit)?;
+        if !unit.failures.observe(line.monotonic) {
+            return None;
+        }
+        watched.remove(&line.unit).map(|unit| unit.connection_id)
     }
 
     /// Mark the connection `login_expired`, then stop its unit. A connection that the owner
