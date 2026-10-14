@@ -2,12 +2,18 @@
 //!
 //! The connect request carries the Obsidian email, the account password, an optional MFA code and
 //! an optional end-to-end password. The service seals the two passwords into
-//! `notes.connection_secrets` and starts `ratatoskr-notes-login@<id>.service`, which runs
+//! `notes.connection_secrets`, writes the values of the login to credential files, and starts
+//! `ratatoskr-notes-login@<id>.service`, which loads the files with `LoadCredential=` and runs
 //! `ob login` and then `ob sync-setup`. When the unit fails, its exit status names the step and
 //! the reason, and the service answers with one of four stable codes. No secret is in a log line,
 //! an error envelope or a `Debug` output: each one is a [`SecretString`].
 
-use secrecy::{ExposeSecret as _, SecretString};
+use std::fs::{DirBuilder, OpenOptions};
+use std::io::Write as _;
+use std::os::unix::fs::{DirBuilderExt as _, OpenOptionsExt as _};
+use std::path::{Path, PathBuf};
+
+use secrecy::{ExposeSecret, SecretString};
 use uuid::Uuid;
 
 use crate::systemd::{BusError, JobResult, SystemdBus, UnitName};
@@ -135,7 +141,65 @@ impl LoginFailure {
     }
 }
 
-/// Start the login unit of a connection and wait for it.
+/// The credential files of one login: `<root>/<connection id>/`, mode 0700, with one file of mode
+/// 0600 for each value. The login unit names the same files in its `LoadCredential=` lines. The
+/// directory is deleted when this value is dropped, so also when the request is cancelled.
+#[derive(Debug)]
+pub(crate) struct CredentialFiles {
+    directory: PathBuf,
+}
+
+impl CredentialFiles {
+    /// Writes the five files that the login unit loads. `mfa` and `e2e` are empty when the owner
+    /// gave no value, because systemd fails the start of a unit whose credential file is missing.
+    ///
+    /// # Errors
+    ///
+    /// The I/O error when a directory or a file cannot be created or written. What was written is
+    /// deleted.
+    pub(crate) fn write(
+        root: &Path,
+        connection_id: Uuid,
+        vault_id: &str,
+        sync_login: &SyncLogin,
+    ) -> std::io::Result<Self> {
+        DirBuilder::new().recursive(true).mode(0o700).create(root)?;
+        let directory = root.join(connection_id.to_string());
+        DirBuilder::new().mode(0o700).create(&directory)?;
+        let files = Self { directory };
+        for (name, value) in [
+            ("email", sync_login.email.as_str()),
+            ("password", sync_login.password.expose_secret()),
+            ("mfa", exposed_or_empty(sync_login.mfa_code.as_ref())),
+            ("vault", vault_id),
+            ("e2e", exposed_or_empty(sync_login.e2e_password.as_ref())),
+        ] {
+            OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .open(files.directory.join(name))?
+                .write_all(value.as_bytes())?;
+        }
+        Ok(files)
+    }
+}
+
+/// The value of an optional secret, or the empty string.
+fn exposed_or_empty(secret: Option<&SecretString>) -> &str {
+    secret.map_or("", ExposeSecret::expose_secret)
+}
+
+impl Drop for CredentialFiles {
+    fn drop(&mut self) {
+        if let Err(error) = std::fs::remove_dir_all(&self.directory) {
+            tracing::error!(%error, directory = %self.directory.display(), "the credential files of a login could not be deleted");
+        }
+    }
+}
+
+/// Start the login unit of a connection and wait for it. The [`CredentialFiles`] of the login must
+/// exist while it runs.
 ///
 /// Returns `None` when the login and the setup succeeded, and the failure when the unit failed.
 ///

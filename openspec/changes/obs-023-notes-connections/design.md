@@ -103,8 +103,14 @@ The flow is:
 2. seal the account password and the end-to-end password with XChaCha20-Poly1305 under a fresh
    random 24-byte nonce, with the associated data `ratatoskr-notes:<connection id>:<kind>`;
 3. insert the connection and its ciphertext in one transaction;
-4. start `ratatoskr-notes-login@<id>.service` and wait for it;
-5. answer `202` when the unit succeeds. When it fails, run the cleanup unit, mark the connection
+4. write the credential files of the login under `/run/ratatoskr-notes/credentials/<id>/`
+   (directory 0700, each file 0600, owner `ratatoskr-notes`): `email`, `password`, `mfa`, `vault`
+   and `e2e`. `mfa` and `e2e` are empty when the owner gave no value, because systemd 252 fails the
+   start of a unit whose `LoadCredential=` file is missing;
+5. start `ratatoskr-notes-login@<id>.service` and wait for it, then delete the credential files,
+   whatever the result. A guard deletes them when it is dropped, so a cancelled request deletes
+   them too;
+6. answer `202` when the unit succeeds. When it fails, run the cleanup unit, mark the connection
    `failed` and delete its ciphertext in one transaction, and answer `422` with the code that the
    exit status of the unit names.
 
@@ -114,6 +120,12 @@ The flow is:
 | 12: `ob sync-setup` exited 2 | `notes.sync.e2e_password_wrong` |
 | 13: `ob sync-setup` exited 3 | `notes.sync.vault_not_found` |
 | 10, any other status, or no status | `notes.sync.login_failed` |
+
+The login unit runs as `ratatoskr-notes-sync` and loads the five files with `LoadCredential=`.
+Each value reaches `ob` from `$CREDENTIALS_DIRECTORY`: the two passwords on standard input, one
+for each step, and the email, the vault id and the MFA code in argv, which the workspace spec
+allows. The unit writes `$` as `$$` in its commands, so that `sh` and not systemd expands the
+variables, and the fake systemd bus of the tests runs these same lines.
 
 The request waits for the login, as a disconnect waits for the cleanup. The workspace design D10
 makes the connect an operation that reports its phases. That report needs the supervisor and the
@@ -133,6 +145,16 @@ login fails, the connection stays `connecting` with its ciphertext, the answer i
   `ob login` asks for it on standard input, which is already at its end, and the process ends
   without a token. The unit reports that as `notes.sync.mfa_required`. Spike 3.1 and the Molecule
   case of task 14.6 confirm it on the host.
+- The service creates `/run/ratatoskr-notes/credentials` with mode 0700 when it is missing, but
+  only root can create `/run/ratatoskr-notes`. The service unit that ships with group 6 needs
+  `RuntimeDirectory=ratatoskr-notes`.
+- The login unit may write the whole connections root, `/mnt/nvme/ratatoskr/notes/connections`,
+  because the directory of a new connection does not exist when the unit starts, and a
+  `ReadWritePaths=` entry must exist. Every directory there belongs to `ratatoskr-notes-sync`. The
+  deploy role must create the root with that owner and mode 0700, and must add the login unit to
+  `ratatoskr_template_units` (workspace task 14.7).
+- `no_secret_in_any_cmdline` runs on Linux only. A run on macOS ignores it, so the Linux CI job is
+  the check.
 - A reconnect of a `login_expired` connection is a new `POST`, and the connection still holds its
   vault key, so the answer is `409`. The owner removes the connection first. The supervisor change
   (group 6) decides whether a reconnect reuses the connection.

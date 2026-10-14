@@ -1,0 +1,78 @@
+# Runs the first Obsidian login of one `sync` connection: `ob login`, then `ob sync-setup`. The
+# instance name is the connection id. ratatoskr-notes writes the credential files under
+# /run/ratatoskr-notes/credentials/<id>/ (mode 0700, each file 0600), starts this unit through the
+# systemd D-Bus API, waits for it, and deletes the files whatever the result (workspace change
+# add-notes-vault-connections, design D4).
+#
+# The passwords reach ob only on standard input, from $CREDENTIALS_DIRECTORY. No password is in
+# the command line of a process. Only the email, the remote vault id and the one-time MFA code are
+# in the argv of ob.
+#
+# The exit status names the failure. services/notes/src/login.rs reads it as ExecMainStatus:
+#   10  ob login failed, or ob sync-setup failed for another reason: notes.sync.login_failed
+#   11  ob login ended without a token, because the account needs an MFA code: notes.sync.mfa_required
+#   12  ob sync-setup refused the end-to-end password (ob exit 2): notes.sync.e2e_password_wrong
+#   13  ob sync-setup found no remote vault with this id (ob exit 3): notes.sync.vault_not_found
+#
+# services/notes/tests/secret_custody.rs runs the ExecStart= lines of this file through the fake
+# systemd bus, with the host paths moved into a temporary directory and `ob` replaced by a stub.
+# Keep each command on one line, write `$$` for every shell `$`, and use no backslash.
+[Unit]
+Description=Ratatoskr notes: first Obsidian login of connection %i
+Documentation=https://github.com/po4yka/ratatoskr-notes
+
+[Service]
+Type=oneshot
+# The owner of ob-home and of the working tree, which this unit creates and the sync unit and the
+# cleanup unit use.
+User=ratatoskr-notes-sync
+Group=ratatoskr-notes-sync
+UMask=0077
+# ob keeps its state under $XDG_CONFIG_HOME/obsidian-headless on Linux (spike 3.2).
+Environment=HOME=/mnt/nvme/ratatoskr/notes/connections/%i/ob-home
+Environment=XDG_CONFIG_HOME=/mnt/nvme/ratatoskr/notes/connections/%i/ob-home
+# systemd reads these files as root and gives them to the unit in $CREDENTIALS_DIRECTORY, readable
+# by the unit user only. A missing file fails the start: the service always writes all five, and
+# `mfa` and `e2e` are empty when the owner gave no value.
+LoadCredential=email:/run/ratatoskr-notes/credentials/%i/email
+LoadCredential=password:/run/ratatoskr-notes/credentials/%i/password
+LoadCredential=mfa:/run/ratatoskr-notes/credentials/%i/mfa
+LoadCredential=vault:/run/ratatoskr-notes/credentials/%i/vault
+LoadCredential=e2e:/run/ratatoskr-notes/credentials/%i/e2e
+# Step 1. ob login reads the whole of standard input as the password. When the account needs an MFA
+# code and none was given, ob asks for it on standard input, which has ended, and stops without a
+# token.
+ExecStart=/bin/sh -c 'set -- --email "$$(cat "$$CREDENTIALS_DIRECTORY/email")"; mfa="$$(cat "$$CREDENTIALS_DIRECTORY/mfa")"; if [ -n "$$mfa" ]; then set -- "$$@" --mfa "$$mfa"; fi; /usr/bin/ob login "$$@" < "$$CREDENTIALS_DIRECTORY/password" || exit 10; test -s "$$XDG_CONFIG_HOME/obsidian-headless/auth_token" || exit 11'
+# Step 2. ob sync-setup reads the whole of standard input as the end-to-end password. A vault with
+# managed encryption needs none, and ob then does not read it.
+ExecStart=/bin/sh -c '/usr/bin/ob sync-setup --vault "$$(cat "$$CREDENTIALS_DIRECTORY/vault")" --path /mnt/nvme/ratatoskr/notes/connections/%i/tree --device-name ratatoskr-%i < "$$CREDENTIALS_DIRECTORY/e2e"; status=$$?; case $$status in 0) exit 0 ;; 2) exit 12 ;; 3) exit 13 ;; *) exit 10 ;; esac'
+# The owner's connect request waits for this unit, and Edge ends a request after 300 seconds. This
+# unit and, after a failure, the cleanup unit must finish well inside that budget.
+TimeoutStartSec=120
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+ProtectKernelLogs=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+RestrictNamespaces=yes
+RestrictRealtime=yes
+CapabilityBoundingSet=
+# ob is Node.js: no MemoryDenyWriteExecute=, because the JIT needs writable and executable pages.
+# ob reaches https://api.obsidian.md over TCP.
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+SystemCallFilter=@system-service
+SystemCallArchitectures=native
+# The directory of this connection does not exist before its first login, and a ReadWritePaths=
+# entry must exist when the unit starts, so the unit may write the connections root. Every
+# directory under it belongs to ratatoskr-notes-sync. ob creates ob-home and the tree.
+ReadWritePaths=/mnt/nvme/ratatoskr/notes/connections

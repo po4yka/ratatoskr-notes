@@ -20,7 +20,7 @@ use secrecy::ExposeSecret as _;
 use uuid::Uuid;
 
 use crate::events;
-use crate::login::{self, LoginFailure, SyncLogin};
+use crate::login::{self, CredentialFiles, LoginFailure, SyncLogin};
 use crate::secrets::{Sealed, SecretKind, SecretsKey};
 use crate::systemd::{JobResult, SystemdBus, UnitName};
 
@@ -188,8 +188,8 @@ async fn create_connection<B: SystemdBus>(
     }
     tracing::info!(%connection_id, channel, "a connection was created");
 
-    if sync_login.is_some() {
-        log_in(&state, connection_id).await?;
+    if let Some(sync_login) = &sync_login {
+        log_in(&state, connection_id, &request.vault_key, sync_login).await?;
     }
     Ok((
         StatusCode::ACCEPTED,
@@ -228,17 +228,39 @@ fn seal_secrets(
         .collect()
 }
 
-/// Run the login unit of a new `sync` connection and wait for it.
+/// Write the credential files of a new `sync` connection, run its login unit, wait for it, and
+/// delete the files.
 ///
 /// When the login fails, the cleanup unit removes what it left in `ob-home` (a token, when only
 /// the setup step failed), and the connection becomes `failed`. When the cleanup fails, the
 /// connection stays `connecting` with its ciphertext, and the owner removes it with a disconnect.
-async fn log_in<B: SystemdBus>(state: &ApiState<B>, connection_id: Uuid) -> Result<(), ApiFault> {
-    let fault = match login::run(state.systemd.as_ref(), connection_id).await {
-        Ok(None) => return Ok(()),
-        Ok(Some(failure)) => ApiFault::Login(failure),
+async fn log_in<B: SystemdBus>(
+    state: &ApiState<B>,
+    connection_id: Uuid,
+    vault_id: &str,
+    sync_login: &SyncLogin,
+) -> Result<(), ApiFault> {
+    let fault = match CredentialFiles::write(
+        &state.credentials_dir,
+        connection_id,
+        vault_id,
+        sync_login,
+    ) {
+        Ok(credentials) => {
+            let outcome = login::run(state.systemd.as_ref(), connection_id).await;
+            // The files are deleted whatever the result of the unit.
+            drop(credentials);
+            match outcome {
+                Ok(None) => return Ok(()),
+                Ok(Some(failure)) => ApiFault::Login(failure),
+                Err(error) => {
+                    tracing::error!(%error, %connection_id, "the login unit could not run");
+                    ApiFault::Unavailable
+                }
+            }
+        }
         Err(error) => {
-            tracing::error!(%error, %connection_id, "the login unit could not run");
+            tracing::error!(%error, %connection_id, "the credential files of a login could not be written");
             ApiFault::Unavailable
         }
     };

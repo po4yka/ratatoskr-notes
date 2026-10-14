@@ -121,6 +121,7 @@ async fn disconnect_removes_unit_tree_state_and_secrets() {
     let router = router(&fixture, &systemd);
     let id = connection_id(&connect(&router, OWNER_A, "sync", REMOTE_VAULT_ID).await);
     let calls_of_connect = systemd.calls().len();
+    let ob_of_connect = systemd.ob_invocations().len();
     let (tree, ob_home) = leave_sync_state(&systemd, id);
     assert_eq!(
         secrets_of(&fixture, id).await,
@@ -147,8 +148,8 @@ async fn disconnect_removes_unit_tree_state_and_secrets() {
         ]
     );
     assert_eq!(
-        systemd.ob_invocations(),
-        vec![format!("sync-unlink --path {}", tree.display())]
+        systemd.ob_invocations()[ob_of_connect..],
+        [format!("sync-unlink --path {}", tree.display())]
     );
     assert!(!tree.exists(), "the working tree is gone");
     assert!(!ob_home.exists(), "the client state is gone");

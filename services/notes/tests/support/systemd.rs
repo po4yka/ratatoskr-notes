@@ -1,9 +1,10 @@
 //! A fake systemd bus that records each call and runs the shipped template units.
 //!
-//! When the service starts `ratatoskr-notes-cleanup@<id>.service`, the fake reads the shipped
-//! template `deploy/systemd/ratatoskr-notes-cleanup@.service` and runs its `ExecStartPre=` and
-//! `ExecStart=` lines, as systemd would, with `%i` replaced, the host paths moved into a temporary
-//! directory, and `/usr/bin/ob` replaced by a stub. The test therefore checks the shipped unit.
+//! When the service starts `ratatoskr-notes-login@<id>.service` or
+//! `ratatoskr-notes-cleanup@<id>.service`, the fake reads the shipped template under
+//! `deploy/systemd/` and runs its `ExecStartPre=` and `ExecStart=` lines, as systemd would, with
+//! `%i` replaced, the host paths moved into a temporary directory, and `/usr/bin/ob` replaced by a
+//! stub. The test therefore checks the shipped unit.
 //! The fake reads `Environment=` and `EnvironmentFile=`, and copies each `LoadCredential=` file
 //! into a fresh directory that it names in `$CREDENTIALS_DIRECTORY` and removes after the run.
 //!
@@ -15,9 +16,8 @@
 //! writes: the secrets key file and the credentials root. The output of each unit command goes to
 //! a journal that a test can search.
 //!
-//! The login unit does not ship yet (workspace task 5.9). Until it does, the fake answers a start
-//! of `ratatoskr-notes-login@<id>.service` itself: `done`, or `failed` with the exit status that
-//! the unit gives for a refused end-to-end password.
+//! Before it runs the login unit, the fake records the credentials directory of the connection
+//! that the service wrote, so that a test can check the modes and the contents.
 
 #![allow(
     clippy::expect_used,
@@ -40,9 +40,6 @@ const HOST_CREDENTIALS_ROOT: &str = "/run/ratatoskr-notes/credentials";
 
 /// Where the shipped units find `ob` on the host.
 const HOST_OB: &str = "/usr/bin/ob";
-
-/// The exit status of the login unit when `ob sync-setup` refuses the end-to-end password.
-const EXIT_E2E_PASSWORD_WRONG: i32 = 12;
 
 /// The bytes of the test key file: 32 bytes, as `/etc/ratatoskr/notes-secrets.key` holds them.
 pub(crate) const KEY_BYTES: [u8; 32] = *b"test-key-of-32-bytes-for-notes!!";
@@ -99,7 +96,6 @@ pub(crate) struct FakeSystemd {
     snapshots: Arc<Mutex<Vec<(String, CredentialSnapshot)>>>,
     journal: Arc<Mutex<String>>,
     directory: Arc<tempfile::TempDir>,
-    refuse_e2e_password: bool,
 }
 
 impl FakeSystemd {
@@ -126,14 +122,12 @@ impl FakeSystemd {
             snapshots: Arc::new(Mutex::new(Vec::new())),
             journal: Arc::new(Mutex::new(String::new())),
             directory: Arc::new(directory),
-            refuse_e2e_password: false,
         }
     }
 
     /// The fake Obsidian account refuses the end-to-end password that the owner gives.
-    pub(crate) fn refuse_e2e_password(mut self) -> Self {
+    pub(crate) fn refuse_e2e_password(self) -> Self {
         self.flag("refuse-e2e");
-        self.refuse_e2e_password = true;
         self
     }
 
@@ -439,11 +433,9 @@ impl SystemdBus for FakeSystemd {
         self.record(Call::Start(unit.as_str().to_owned()));
         if let Some(instance) = instance_of(unit, "ratatoskr-notes-login@.service") {
             self.take_snapshot(instance);
-            if self.refuse_e2e_password {
-                self.record_exit_status(unit.as_str(), EXIT_E2E_PASSWORD_WRONG);
-                return Ok(JobResult::NotDone("failed".to_owned()));
-            }
-            return Ok(JobResult::Done);
+            return self
+                .run_template("ratatoskr-notes-login@.service", instance)
+                .await;
         }
         match instance_of(unit, "ratatoskr-notes-cleanup@.service") {
             Some(instance) => {
