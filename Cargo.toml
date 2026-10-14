@@ -67,6 +67,8 @@ inotify = { version = "0.11", default-features = false, features = ["stream"] }
 # ---- the index of a note (workspace design D8) ----
 # Paths and link text are compared and published in Unicode NFC.
 unicode-normalization = { version = "0.1.25", default-features = false, features = ["std"] }
+# Unicode default case folding, for the path key of a file (workspace design D7).
+caseless = "0.2.2"
 # CommonMark, to find the code, the HTML comments, the math and the Markdown links of a note. The
 # Obsidian extensions (wikilinks, embeds, tags, block ids, comments) are read beside it.
 pulldown-cmark = { version = "0.13.4", default-features = false }

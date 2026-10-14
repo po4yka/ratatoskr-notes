@@ -9,6 +9,14 @@ use std::collections::{BTreeMap, HashMap};
 
 use uuid::Uuid;
 
+use crate::text::nfc;
+
+/// The folder of the vault configuration.
+const OBSIDIAN_FOLDER: &str = ".obsidian";
+
+/// The folder of the vault trash.
+const TRASH_FOLDER: &str = ".trash";
+
 /// The condition of a connection that holds two paths with one path key.
 pub const PATH_COLLISION: &str = "notes.file.path_collision";
 
@@ -49,22 +57,40 @@ pub enum Exclusion {
 impl PathRules {
     /// Why `path` with `length` bytes is not indexed, or `None` when it is.
     #[must_use]
+    ///
+    /// `path` is the NFC path. An excluded folder matches with the comparison of path keys, so
+    /// the case of its name does not matter.
     pub fn exclusion(&self, path: &str, length: u64) -> Option<Exclusion> {
-        let _ = (path, length, &self.excluded_folders, self.max_file_bytes);
-        None
+        match path.split('/').next() {
+            Some(OBSIDIAN_FOLDER) => return Some(Exclusion::ObsidianConfig),
+            Some(TRASH_FOLDER) => return Some(Exclusion::Trash),
+            _ => {}
+        }
+        let key = path_key(path);
+        let excluded = self.excluded_folders.iter().any(|folder| {
+            let folder = path_key(folder.trim_matches('/'));
+            !folder.is_empty()
+                && key
+                    .strip_prefix(&folder)
+                    .is_some_and(|rest| rest.starts_with('/'))
+        });
+        if excluded {
+            return Some(Exclusion::ExcludedFolder);
+        }
+        (length > self.max_file_bytes).then_some(Exclusion::TooLarge)
     }
 }
 
 /// `path` in Unicode NFC.
 #[must_use]
 pub fn nfc_path(path: &str) -> String {
-    path.to_owned()
+    nfc(path)
 }
 
 /// The path key of `path`: the NFC path folded with Unicode default case folding.
 #[must_use]
 pub fn path_key(path: &str) -> String {
-    path.to_owned()
+    caseless::default_case_fold_str(&nfc(path))
 }
 
 /// What a change of a file does, given the current file with the same path key.
@@ -97,9 +123,19 @@ pub struct Current<'a> {
 /// What a change of `path` with `revision` does, given `current`, the file with the same path
 /// key.
 #[must_use]
+///
+/// A deleted file is created again, also under a path that differs only in case. A present file
+/// under another path is a collision. Equal bytes change nothing.
 pub fn admit(current: Option<Current<'_>>, path: &str, revision: &str) -> Admission {
-    let _ = (current, path, revision);
-    Admission::Unchanged
+    match current {
+        None => Admission::Created,
+        Some(Current { revision: None, .. }) => Admission::Recreated,
+        Some(current) if current.path != path => Admission::Collision {
+            existing_path: current.path.to_owned(),
+        },
+        Some(current) if current.revision == Some(revision) => Admission::Unchanged,
+        Some(_) => Admission::Updated,
+    }
 }
 
 /// One collision of a connection.
@@ -162,8 +198,55 @@ impl PathTable {
         length: u64,
         rules: &PathRules,
     ) -> Observation {
-        let _ = (raw_path, revision, length, rules, &mut self.files);
-        Observation::Unchanged
+        let path = nfc_path(raw_path);
+        if let Some(exclusion) = rules.exclusion(&path, length) {
+            return Observation::Excluded(exclusion);
+        }
+        let key = path_key(&path);
+        let current = self.files.get(&key).map(|known| Current {
+            path: &known.path,
+            revision: known.revision.as_deref(),
+        });
+        match admit(current, &path, revision) {
+            Admission::Unchanged => Observation::Unchanged,
+            Admission::Collision { existing_path } => {
+                let collision = PathCollision {
+                    path: path.clone(),
+                    existing_path,
+                };
+                self.collisions.insert(path, collision.clone());
+                Observation::Collision(collision)
+            }
+            admission => {
+                let known = self.files.entry(key).or_insert_with(|| Known {
+                    file_id: Uuid::now_v7(),
+                    path: path.clone(),
+                    revision: None,
+                });
+                known.path.clone_from(&path);
+                known.revision = Some(revision.to_owned());
+                Observation::Published {
+                    file_id: known.file_id,
+                    path,
+                    admission,
+                }
+            }
+        }
+    }
+
+    /// Observe that `raw_path` left the vault. Returns the id of the file when a published file
+    /// was deleted. A path that was a collision is no longer one.
+    pub fn remove(&mut self, raw_path: &str) -> Option<Uuid> {
+        let path = nfc_path(raw_path);
+        if self.collisions.remove(&path).is_some() {
+            return None;
+        }
+        let known = self.files.get_mut(&path_key(&path))?;
+        if known.path != path || known.revision.is_none() {
+            return None;
+        }
+        known.revision = None;
+        Some(known.file_id)
     }
 
     /// The conditions of the connection: one [`PATH_COLLISION`] with both paths per collision.
