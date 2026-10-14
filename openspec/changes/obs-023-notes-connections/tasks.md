@@ -123,3 +123,8 @@ file, and a batch or a manifest that names one could never be committed.
 
 - [x] 8.17 RED: `services/notes/tests/device_channel.rs::empty_file_needs_no_upload` asserts that an upload of 0 bytes is refused with `400`, that a batch with a `created` change of 0 bytes is committed without an upload, and that a manifest with two empty files names no needed hash and records both. Confirm that it fails by assertion, because the batch answers `notes.channel.bytes_missing`.
 - [x] 8.18 GREEN: put the blob of no bytes in the blob store when a batch or a manifest names its SHA-256. Verify 8.17.
+
+## 8 (continued). Review follow-ups of group 8 (workspace tasks 8.19 to 8.24)
+
+- [x] 8.19 RED: `services/notes/tests/device_channel.rs::foreign_bytes_are_missing_for_another_connection` asserts that the device of owner A that names the SHA-256 of a file of owner B's connection gets `notes.channel.bytes_missing` for a batch and the hash in `needed_sha256` for a manifest, with nothing recorded, and that owner A reads no bytes of owner B through the read routes; that owner B may name its own hash again; and that owner A may name the hash after it uploaded the same bytes through its own upload session. Confirm that it fails by assertion, because a batch may name any hash that the blob store holds.
+- [ ] 8.20 GREEN: record each finished upload in `notes.connection_blobs` (`schema.sql` in place), and let a batch or a manifest name only a hash that its connection uploaded, a revision of a file of its connection, or the blob of no bytes; any other hash is missing. Verify 8.19 and every test of `device_channel.rs`.

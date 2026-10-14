@@ -421,15 +421,26 @@ async fn second_device_for_one_connection_is_refused() {
 impl Channel {
     /// A JSON request from the plugin of [`OWNER`] to a route of `connection_id`.
     async fn device_call(&self, connection_id: Uuid, route: &str, body: Value) -> Answer {
+        self.device_call_as(OWNER, connection_id, route, body).await
+    }
+
+    /// A JSON request from the plugin of `owner` to a route of `connection_id`.
+    async fn device_call_as(
+        &self,
+        owner: Uuid,
+        connection_id: Uuid,
+        route: &str,
+        body: Value,
+    ) -> Answer {
         let claims = [
-            (DEVICE_ID_HEADER, device_of(OWNER).to_string()),
+            (DEVICE_ID_HEADER, device_of(owner).to_string()),
             (DEVICE_KIND_HEADER, "obsidian_plugin".to_owned()),
         ];
         send_with(
             &self.router,
             Method::POST,
             &format!("/v1/notes/connections/{connection_id}/{route}"),
-            OWNER,
+            owner,
             &claims,
             Some(body),
         )
@@ -439,6 +450,7 @@ impl Channel {
     /// `PUT .../blobs/{token}/chunks/{index}` with the raw bytes of one chunk.
     async fn put_chunk(
         &self,
+        owner: Uuid,
         connection_id: Uuid,
         token: &str,
         index: u32,
@@ -449,8 +461,8 @@ impl Channel {
             .uri(format!(
                 "/v1/notes/connections/{connection_id}/blobs/{token}/chunks/{index}"
             ))
-            .header(USER_HEADER, OWNER.to_string())
-            .header(DEVICE_ID_HEADER, device_of(OWNER).to_string())
+            .header(USER_HEADER, owner.to_string())
+            .header(DEVICE_ID_HEADER, device_of(owner).to_string())
             .header(DEVICE_KIND_HEADER, "obsidian_plugin")
             .header("content-type", "application/octet-stream")
             .body(Body::from(bytes.to_vec()))
@@ -477,8 +489,20 @@ impl Channel {
     /// Upload `bytes` under the declared SHA-256 `declared` through the transfer routes, in one
     /// chunk. Returns the answers of the open, the chunk and the finalize.
     async fn upload(&self, connection_id: Uuid, declared: &str, bytes: &[u8]) -> [Answer; 3] {
+        self.upload_as(OWNER, connection_id, declared, bytes).await
+    }
+
+    /// [`Self::upload`] from the plugin of `owner`.
+    async fn upload_as(
+        &self,
+        owner: Uuid,
+        connection_id: Uuid,
+        declared: &str,
+        bytes: &[u8],
+    ) -> [Answer; 3] {
         let opened = self
-            .device_call(
+            .device_call_as(
+                owner,
                 connection_id,
                 "blobs",
                 json!({
@@ -493,9 +517,10 @@ impl Channel {
             .as_str()
             .unwrap_or("rst_00000000000000000000000000")
             .to_owned();
-        let chunk = self.put_chunk(connection_id, &token, 0, bytes).await;
+        let chunk = self.put_chunk(owner, connection_id, &token, 0, bytes).await;
         let finalized = self
-            .device_call(
+            .device_call_as(
+                owner,
                 connection_id,
                 &format!("blobs/{token}/finalize"),
                 json!({ "resumption_token": token }),
@@ -803,6 +828,128 @@ async fn empty_file_needs_no_upload() {
         .collect();
     assert_eq!(paths, ["Empty.md", "Blank.canvas"]);
     assert_eq!(changes[0]["blob"]["length_bytes"], 0);
+
+    channel.cleanup().await;
+}
+
+impl Channel {
+    /// `GET /v1/notes/connections/{id}/files/{path}` for `owner`: the status and the bytes.
+    async fn read_file(
+        &self,
+        owner: Uuid,
+        connection_id: Uuid,
+        path: &str,
+    ) -> (StatusCode, Vec<u8>) {
+        let request = Request::builder()
+            .method(Method::GET)
+            .uri(format!(
+                "/v1/notes/connections/{connection_id}/files/{path}"
+            ))
+            .header(USER_HEADER, owner.to_string())
+            .body(Body::empty())
+            .expect("a request");
+        let response = self
+            .router
+            .clone()
+            .oneshot(request)
+            .await
+            .expect("the router answers");
+        let status = response.status();
+        let body = response
+            .into_body()
+            .collect()
+            .await
+            .expect("a body")
+            .to_bytes();
+        (status, body.to_vec())
+    }
+}
+
+#[tokio::test]
+async fn foreign_bytes_are_missing_for_another_connection() {
+    let channel = Channel::new().await;
+    let secret = b"the private note of the other owner\n";
+    let theirs = channel
+        .plugin_connection(OTHER_OWNER, "vault-key-theirs")
+        .await;
+    let mine = channel.plugin_connection(OWNER, "vault-key-mine").await;
+    let [_, _, uploaded] = channel
+        .upload_as(OTHER_OWNER, theirs, &sha256(secret), secret)
+        .await;
+    let committed = channel
+        .batch(
+            OTHER_OWNER,
+            theirs,
+            vec![change(1, "created", "Secret.md", secret)],
+        )
+        .await;
+
+    // Owner A knows the hash of the file of owner B, but not its bytes.
+    let named = channel
+        .batch(OWNER, mine, vec![change(1, "created", "Stolen.md", secret)])
+        .await;
+    let manifest = channel
+        .device_call(
+            mine,
+            "manifest",
+            json!({ "entries": [entry("Stolen.md", secret)] }),
+        )
+        .await;
+    let read = channel.read_file(OWNER, mine, "Stolen.md").await;
+    // Owner B may name its own hash again.
+    let again = channel
+        .batch(
+            OTHER_OWNER,
+            theirs,
+            vec![change(2, "created", "Copy.md", secret)],
+        )
+        .await;
+    // Owner A uploads the same bytes itself, and may then name them.
+    let [_, _, own_upload] = channel.upload(mine, &sha256(secret), secret).await;
+    let after_upload = channel
+        .batch(OWNER, mine, vec![change(1, "created", "Mine.md", secret)])
+        .await;
+
+    assert_eq!(uploaded.body["outcome"], "stored", "{:?}", uploaded.body);
+    assert_eq!(committed.status, StatusCode::OK, "{:?}", committed.body);
+    assert_eq!(named.status, StatusCode::CONFLICT, "{:?}", named.body);
+    assert_eq!(named.body["code"], "notes.channel.bytes_missing");
+    assert_eq!(named.body["missing_sha256"], json!([sha256(secret)]));
+    assert_eq!(manifest.status, StatusCode::OK, "{:?}", manifest.body);
+    assert_eq!(
+        manifest.body["needed_sha256"],
+        json!([sha256(secret)]),
+        "the manifest asks for the bytes as well"
+    );
+    assert_eq!(
+        read.0,
+        StatusCode::NOT_FOUND,
+        "owner A reads no bytes of owner B"
+    );
+    assert_ne!(read.1, secret.to_vec());
+    assert_eq!(again.status, StatusCode::OK, "{:?}", again.body);
+    assert_eq!(
+        own_upload.body["outcome"], "stored",
+        "{:?}",
+        own_upload.body
+    );
+    assert_eq!(
+        after_upload.status,
+        StatusCode::OK,
+        "{:?}",
+        after_upload.body
+    );
+    let paths: Vec<String> = channel
+        .changes(mine)
+        .await
+        .iter()
+        .map(|change| change["path"].as_str().unwrap_or_default().to_owned())
+        .collect();
+    assert_eq!(
+        paths,
+        ["Mine.md"],
+        "only the bytes that owner A uploaded are recorded"
+    );
 
     channel.cleanup().await;
 }
