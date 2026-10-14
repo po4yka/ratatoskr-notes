@@ -22,6 +22,7 @@ use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 use uuid::Uuid;
 
+use crate::blobs::BlobStore;
 use crate::events;
 use crate::files::{self, ExcludedFoldersSet};
 use crate::login::{self, CredentialFiles, SyncLogin};
@@ -80,6 +81,7 @@ pub struct ApiState<B> {
     stopping: CancellationToken,
     removals: Removals,
     before_login: Option<BeforeLogin>,
+    blobs: BlobStore,
 }
 
 impl<B> Clone for ApiState<B> {
@@ -95,6 +97,7 @@ impl<B> Clone for ApiState<B> {
             stopping: self.stopping.clone(),
             removals: self.removals.clone(),
             before_login: self.before_login.clone(),
+            blobs: self.blobs.clone(),
         }
     }
 }
@@ -115,7 +118,16 @@ impl<B: SystemdBus> ApiState<B> {
             stopping: CancellationToken::new(),
             removals: Removals::default(),
             before_login: None,
+            blobs: BlobStore::new(crate::blobs::DEFAULT_ROOT),
         }
+    }
+
+    /// Read the bytes of the files from `blobs` instead of the store at
+    /// [`crate::blobs::DEFAULT_ROOT`].
+    #[must_use]
+    pub fn with_blobs(mut self, blobs: BlobStore) -> Self {
+        self.blobs = blobs;
+        self
     }
 
     /// Let at most `max_logins` first logins run at the same time instead of
