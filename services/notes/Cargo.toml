@@ -32,6 +32,7 @@ uuid.workspace                        = true
 zbus.workspace                        = true
 
 [dev-dependencies]
+chacha20poly1305.workspace            = true
 ratatoskr-notes-persistence = { workspace = true, features = ["test-support"] }
 tempfile.workspace          = true
 http-body-util.workspace    = true

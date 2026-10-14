@@ -3,6 +3,7 @@
 //! Every route reads the owner from the claim that Edge mints, `x-ratatoskr-user-id`. Edge strips
 //! any client-supplied copy, and this listener is reachable only on loopback.
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use axum::extract::rejection::{JsonRejection, PathRejection};
@@ -29,11 +30,15 @@ const MAX_REQUEST_BYTES: usize = 16 * 1024;
 /// The longest vault key, in characters.
 const MAX_VAULT_KEY_CHARS: usize = 255;
 
+/// Where the host keeps the key that encrypts the Obsidian secrets (workspace design D4).
+pub const DEFAULT_KEY_FILE: &str = "/etc/ratatoskr/notes-secrets.key";
+
 /// What the domain handlers share.
 #[derive(Debug)]
 pub struct ApiState<B> {
     database: Database,
     systemd: Arc<B>,
+    key_file: PathBuf,
 }
 
 impl<B> Clone for ApiState<B> {
@@ -41,6 +46,7 @@ impl<B> Clone for ApiState<B> {
         Self {
             database: self.database.clone(),
             systemd: Arc::clone(&self.systemd),
+            key_file: self.key_file.clone(),
         }
     }
 }
@@ -52,7 +58,15 @@ impl<B: SystemdBus> ApiState<B> {
         Self {
             database,
             systemd: Arc::new(systemd),
+            key_file: PathBuf::from(DEFAULT_KEY_FILE),
         }
+    }
+
+    /// Read the secrets key from `path` instead of [`DEFAULT_KEY_FILE`].
+    #[must_use]
+    pub fn with_key_file(mut self, path: impl Into<PathBuf>) -> Self {
+        self.key_file = path.into();
+        self
     }
 }
 

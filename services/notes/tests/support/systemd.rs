@@ -4,6 +4,9 @@
 //! template `deploy/systemd/ratatoskr-notes-cleanup@.service` and runs its `ExecStart=` lines with
 //! `%i` replaced, the connections root moved into a temporary directory, and `/usr/bin/ob`
 //! replaced by a stub that records its arguments. The test therefore checks the shipped unit.
+//!
+//! The temporary directory of the fake also stands for the host files that the service reads: the
+//! secrets key file. The output of each unit command goes to a journal that a test can search.
 
 #![allow(
     clippy::expect_used,
@@ -24,6 +27,9 @@ const HOST_CONNECTIONS_ROOT: &str = "/mnt/nvme/ratatoskr/notes/connections";
 /// Where the shipped units find `ob` on the host.
 const HOST_OB: &str = "/usr/bin/ob";
 
+/// The bytes of the test key file: 32 bytes, as `/etc/ratatoskr/notes-secrets.key` holds them.
+pub(crate) const KEY_BYTES: [u8; 32] = *b"test-key-of-32-bytes-for-notes!!";
+
 /// One call that the service made.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Call {
@@ -35,7 +41,9 @@ pub(crate) enum Call {
 #[derive(Debug, Clone)]
 pub(crate) struct FakeSystemd {
     calls: Arc<Mutex<Vec<Call>>>,
+    journal: Arc<Mutex<String>>,
     directory: Arc<tempfile::TempDir>,
+    refuse_e2e_password: bool,
 }
 
 impl FakeSystemd {
@@ -55,10 +63,33 @@ impl FakeSystemd {
             .expect("the stub ob is executable");
         std::fs::create_dir(directory.path().join("connections"))
             .expect("the connections root is created");
+        let key_file = directory.path().join("notes-secrets.key");
+        std::fs::write(&key_file, KEY_BYTES).expect("the key file is written");
+        std::fs::set_permissions(&key_file, std::fs::Permissions::from_mode(0o400))
+            .expect("the key file is mode 0400");
         Self {
             calls: Arc::new(Mutex::new(Vec::new())),
+            journal: Arc::new(Mutex::new(String::new())),
             directory: Arc::new(directory),
+            refuse_e2e_password: false,
         }
+    }
+
+    /// The fake Obsidian account refuses the end-to-end password that the owner gives.
+    pub(crate) fn refuse_e2e_password(mut self) -> Self {
+        self.refuse_e2e_password = true;
+        self
+    }
+
+    /// The test's stand-in for `/etc/ratatoskr/notes-secrets.key`.
+    pub(crate) fn key_file(&self) -> PathBuf {
+        self.directory.path().join("notes-secrets.key")
+    }
+
+    /// Everything that the commands of the units wrote to stdout and stderr, as the journal of
+    /// the units would hold it.
+    pub(crate) fn journal(&self) -> String {
+        self.journal.lock().expect("the journal").clone()
     }
 
     /// The test's stand-in for `/mnt/nvme/ratatoskr/notes/connections/<id>`.
@@ -118,15 +149,20 @@ impl FakeSystemd {
             };
             let words: Vec<String> = command.split_whitespace().map(resolve).collect();
             let (program, arguments) = words.split_first().expect("a command");
-            let status = tokio::process::Command::new(program)
+            let output = tokio::process::Command::new(program)
                 .args(arguments)
                 .env_clear()
                 .env("PATH", "/usr/bin:/bin")
                 .envs(environment.iter().map(|(key, value)| (key, value)))
-                .status()
+                .output()
                 .await
                 .map_err(|error| BusError::Refused(error.into()))?;
-            if !status.success() && !ignore_failure {
+            {
+                let mut journal = self.journal.lock().expect("the journal");
+                journal.push_str(&String::from_utf8_lossy(&output.stdout));
+                journal.push_str(&String::from_utf8_lossy(&output.stderr));
+            }
+            if !output.status.success() && !ignore_failure {
                 return Ok(JobResult::NotDone("failed".to_owned()));
             }
         }

@@ -7,6 +7,7 @@
     reason = "test scaffolding; not every test binary uses every helper"
 )]
 
+pub(crate) mod logs;
 pub(crate) mod systemd;
 
 use axum::Router;
@@ -77,6 +78,46 @@ pub(crate) async fn connect(
         "channel": channel,
         "vault_key": vault_key,
         "vault_display_name": "Personal",
+    });
+    send(
+        router,
+        Method::POST,
+        "/v1/notes/connections",
+        owner,
+        Some(body),
+    )
+    .await
+}
+
+/// The Obsidian secrets that a `sync` connect request carries. Tests use marker values only.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct SyncSecrets<'a> {
+    pub(crate) password: &'a str,
+    pub(crate) mfa_code: &'a str,
+    pub(crate) e2e_password: &'a str,
+}
+
+/// The account email of every `sync` connect request. The email is not a secret (workspace
+/// design D4).
+pub(crate) const OBSIDIAN_EMAIL: &str = "owner@example.test";
+
+/// `POST /v1/notes/connections` for a `sync` connection with its Obsidian login.
+pub(crate) async fn connect_sync(
+    router: &Router,
+    owner: Uuid,
+    vault_key: &str,
+    secrets: SyncSecrets<'_>,
+) -> Answer {
+    let body = serde_json::json!({
+        "channel": "sync",
+        "vault_key": vault_key,
+        "vault_display_name": "Personal",
+        "sync_login": {
+            "email": OBSIDIAN_EMAIL,
+            "password": secrets.password,
+            "mfa_code": secrets.mfa_code,
+            "e2e_password": secrets.e2e_password,
+        },
     });
     send(
         router,

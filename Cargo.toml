@@ -44,6 +44,11 @@ axum  = { version = "0.8", default-features = false, features = ["http1", "json"
 zbus         = { version = "5", default-features = false, features = ["tokio"] }
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
 
+# ---- secret custody ----
+# XChaCha20-Poly1305 for the Obsidian passwords at rest (workspace design D4). RustCrypto, pure
+# Rust; the nonce comes from the operating system through `getrandom`.
+chacha20poly1305 = { version = "0.11", default-features = false, features = ["alloc", "getrandom", "zeroize"] }
+
 # ---- configuration ----
 figment = { version = "0.10", features = ["env"] }
 secrecy = { version = "0.10", features = ["serde"] }
