@@ -3,34 +3,36 @@
 //! Every route reads the owner from the claim that Edge mints, `x-ratatoskr-user-id`. Edge strips
 //! any client-supplied copy, and this listener is reachable only on loopback.
 
-use std::collections::HashMap;
 use std::fmt;
 use std::future::Future;
 use std::path::{Path as FsPath, PathBuf};
 use std::pin::Pin;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use axum::extract::rejection::{JsonRejection, PathRejection};
 use axum::extract::{DefaultBodyLimit, Path, State};
 use axum::http::{HeaderMap, StatusCode};
-use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, post};
 use axum::{Json, Router};
-use ratatoskr_error_contracts::{ErrorCode, ErrorEnvelope};
-use ratatoskr_identifiers::SafeMessage;
 use ratatoskr_notes_contracts::{VaultChannel, VaultDisplayName};
 use ratatoskr_notes_persistence::{CreateOutcome, Database, NewConnection, NewSecret, OutboxEvent};
 use secrecy::ExposeSecret as _;
-use tokio::sync::{OwnedSemaphorePermit, Semaphore, oneshot, watch};
+use tokio::sync::{OwnedSemaphorePermit, Semaphore, oneshot};
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 use uuid::Uuid;
 
 use crate::events;
-use crate::login::{self, CredentialFiles, LoginFailure, SyncLogin};
+use crate::login::{self, CredentialFiles, SyncLogin};
 use crate::secrets::{Sealed, SecretKind, SecretsKey};
 use crate::supervisor::Supervisor;
+
+mod fault;
+mod removals;
+
 use crate::systemd::{JobResult, SystemdBus, UnitName};
+use fault::ApiFault;
+use removals::Removals;
 
 /// The owner claim that Edge mints.
 const USER_HEADER: &str = "x-ratatoskr-user-id";
@@ -61,62 +63,6 @@ struct BeforeLogin(Arc<dyn Fn(Uuid) -> Pause + Send + Sync>);
 impl fmt::Debug for BeforeLogin {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str("BeforeLogin")
-    }
-}
-
-/// The disconnects that run now in this process, by connection. The channel of each one closes
-/// when the disconnect ends.
-#[derive(Debug, Clone, Default)]
-struct Removals(Arc<Mutex<HashMap<Uuid, watch::Receiver<()>>>>);
-
-/// One disconnect that runs. Its drop removes it from [`Removals`] and closes its channel.
-struct Removal {
-    removals: Removals,
-    connection_id: Uuid,
-    ended: watch::Sender<()>,
-}
-
-impl Removals {
-    /// Record a disconnect of `connection_id` until the returned value is dropped.
-    fn begin(&self, connection_id: Uuid) -> Removal {
-        let (ended, receiver) = watch::channel(());
-        if let Ok(mut running) = self.0.lock() {
-            running.insert(connection_id, receiver);
-        }
-        Removal {
-            removals: self.clone(),
-            connection_id,
-            ended,
-        }
-    }
-
-    /// Wait until no disconnect of `connection_id` that runs now runs any more. Returns whether
-    /// one ran.
-    async fn wait(&self, connection_id: Uuid) -> bool {
-        let running = self
-            .0
-            .lock()
-            .ok()
-            .and_then(|running| running.get(&connection_id).cloned());
-        let Some(mut ended) = running else {
-            return false;
-        };
-        while ended.changed().await.is_ok() {}
-        true
-    }
-}
-
-impl Drop for Removal {
-    fn drop(&mut self) {
-        if let Ok(mut running) = self.removals.0.lock() {
-            // A later disconnect of the same connection holds its own entry.
-            if running
-                .get(&self.connection_id)
-                .is_some_and(|receiver| receiver.same_channel(&self.ended.subscribe()))
-            {
-                running.remove(&self.connection_id);
-            }
-        }
     }
 }
 
@@ -735,92 +681,4 @@ const fn channel_word(channel: VaultChannel) -> Option<&'static str> {
 fn valid_vault_key(key: &str) -> bool {
     let length = key.chars().count();
     (1..=MAX_VAULT_KEY_CHARS).contains(&length) && !key.chars().any(char::is_control)
-}
-
-/// Every failure a domain route answers with. Each one renders as the contract error envelope.
-#[derive(Debug)]
-enum ApiFault {
-    Unauthenticated,
-    InvalidRequest,
-    VaultAlreadyConnected {
-        connection_id: Uuid,
-        channel: String,
-    },
-    NotFound,
-    Login(LoginFailure),
-    CleanupFailed,
-    Unavailable,
-}
-
-impl ApiFault {
-    const fn status(&self) -> StatusCode {
-        match self {
-            Self::Unauthenticated => StatusCode::UNAUTHORIZED,
-            Self::InvalidRequest => StatusCode::BAD_REQUEST,
-            Self::VaultAlreadyConnected { .. } => StatusCode::CONFLICT,
-            Self::NotFound => StatusCode::NOT_FOUND,
-            Self::Login(_) => StatusCode::UNPROCESSABLE_ENTITY,
-            Self::CleanupFailed | Self::Unavailable => StatusCode::SERVICE_UNAVAILABLE,
-        }
-    }
-
-    const fn fields(&self) -> (&'static str, &'static str, bool) {
-        match self {
-            Self::Unauthenticated => (
-                "notes.request.unauthenticated",
-                "Authentication is required.",
-                false,
-            ),
-            Self::InvalidRequest => ("notes.request.invalid", "The request is invalid.", false),
-            Self::VaultAlreadyConnected { .. } => (
-                "notes.connection.vault_already_connected",
-                "This vault already has a connection. Remove it before you connect the vault \
-                 through another channel.",
-                false,
-            ),
-            Self::NotFound => (
-                "notes.connection.not_found",
-                "The connection does not exist.",
-                false,
-            ),
-            Self::Login(failure) => {
-                let (code, message) = failure.fields();
-                (code, message, false)
-            }
-            Self::CleanupFailed => (
-                "notes.connection.cleanup_failed",
-                "The connection could not be removed now. Repeat the request later.",
-                true,
-            ),
-            Self::Unavailable => (
-                "notes.service.unavailable",
-                "The notes service is temporarily unavailable.",
-                true,
-            ),
-        }
-    }
-}
-
-impl IntoResponse for ApiFault {
-    fn into_response(self) -> Response {
-        let (code, message, retryable) = self.fields();
-        let (Ok(code), Ok(message)) = (ErrorCode::parse(code), SafeMessage::parse(message)) else {
-            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
-        };
-        let mut envelope = ErrorEnvelope::new(code, message, retryable);
-        if let Self::VaultAlreadyConnected {
-            connection_id,
-            channel,
-        } = &self
-        {
-            envelope.extensions.insert(
-                "connection_id",
-                serde_json::Value::String(connection_id.to_string()),
-            );
-            envelope
-                .extensions
-                .insert("channel", serde_json::Value::String(channel.clone()));
-        }
-        (self.status(), Json(envelope)).into_response()
-    }
 }
