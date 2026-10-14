@@ -1,7 +1,8 @@
 //! The encryption of the Obsidian passwords at rest (workspace design D4).
 //!
 //! The key is 32 random bytes in one file, `/etc/ratatoskr/notes-secrets.key`, mode 0400, owner
-//! `ratatoskr-notes`. Each password is sealed with XChaCha20-Poly1305 under a fresh random 24-byte
+//! `ratatoskr-notes`. The service refuses a key file that is a symbolic link, is open to other users
+//! or has another owner. Each password is sealed with XChaCha20-Poly1305 under a fresh random 24-byte
 //! nonce. The associated data is `ratatoskr-notes:<connection id>:<secret kind>`, so a ciphertext
 //! opens only in the row that it was written to. The MFA code is never sealed and never stored.
 
@@ -59,6 +60,15 @@ pub enum KeyError {
     /// The group or other users can read or write the file.
     #[error("the secrets key file is open to other users; it must be mode 0400 or 0600")]
     TooOpen,
+    /// The path names a symbolic link. The service does not follow it.
+    #[error("the secrets key file is a symbolic link; it must be a regular file")]
+    SymbolicLink,
+    /// The path names a directory, a device or a FIFO.
+    #[error("the secrets key file is not a regular file")]
+    NotAFile,
+    /// Another user than the effective user of the service owns the file.
+    #[error("the secrets key file has another owner than the user of the service")]
+    OtherOwner,
 }
 
 /// A secret could not be sealed.
@@ -80,24 +90,52 @@ impl fmt::Debug for SecretsKey {
 impl SecretsKey {
     /// Read the key file.
     ///
+    /// The file is opened once, without following a symbolic link, and the type, the mode and the
+    /// owner are read from the open file, so a file that is replaced between the check and the
+    /// read cannot pass.
+    ///
     /// # Errors
     ///
-    /// [`KeyError`] when the file cannot be read, does not hold exactly 32 bytes, or is open to
-    /// the group or other users.
+    /// [`KeyError`] when the file is a symbolic link or not a regular file, cannot be read, is
+    /// open to the group or other users, has another owner than the effective user of the
+    /// service, or does not hold exactly 32 bytes.
     pub fn load(path: &Path) -> Result<Self, KeyError> {
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt as _;
-            let mode = std::fs::metadata(path)
-                .map_err(KeyError::Unreadable)?
-                .permissions()
-                .mode();
-            if mode & 0o077 != 0 {
-                return Err(KeyError::TooOpen);
+        use std::io::Read as _;
+        use std::os::unix::fs::MetadataExt as _;
+
+        use rustix::fs::{Mode, OFlags};
+
+        // O_NONBLOCK: the open of a FIFO does not wait for a writer, and the type check below
+        // refuses it.
+        let file = rustix::fs::open(
+            path,
+            OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC | OFlags::NONBLOCK,
+            Mode::empty(),
+        )
+        .map(std::fs::File::from)
+        .map_err(|errno| {
+            if errno == rustix::io::Errno::LOOP {
+                KeyError::SymbolicLink
+            } else {
+                KeyError::Unreadable(errno.into())
             }
+        })?;
+        let metadata = file.metadata().map_err(KeyError::Unreadable)?;
+        if !metadata.is_file() {
+            return Err(KeyError::NotAFile);
         }
-        let bytes =
-            secrecy::zeroize::Zeroizing::new(std::fs::read(path).map_err(KeyError::Unreadable)?);
+        if metadata.mode() & 0o077 != 0 {
+            return Err(KeyError::TooOpen);
+        }
+        if metadata.uid() != rustix::process::geteuid().as_raw() {
+            return Err(KeyError::OtherOwner);
+        }
+        // One byte more than a key, so that a longer file is refused. The capacity is the whole
+        // read, so the vector never moves the key bytes to a new allocation.
+        let mut bytes = secrecy::zeroize::Zeroizing::new(Vec::with_capacity(KEY_BYTES + 1));
+        file.take(u64::try_from(KEY_BYTES + 1).unwrap_or(u64::MAX))
+            .read_to_end(&mut bytes)
+            .map_err(KeyError::Unreadable)?;
         if bytes.len() != KEY_BYTES {
             return Err(KeyError::WrongLength);
         }

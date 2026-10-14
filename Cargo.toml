@@ -48,6 +48,9 @@ futures-util = { version = "0.3", default-features = false, features = ["std"] }
 # XChaCha20-Poly1305 for the Obsidian passwords at rest (workspace design D4). RustCrypto, pure
 # Rust; the nonce comes from the operating system through `getrandom`.
 chacha20poly1305 = { version = "0.11", default-features = false, features = ["alloc", "getrandom", "zeroize"] }
+# The key file is opened with O_NOFOLLOW, and its owner is compared with the effective uid of the
+# service. rustix makes both calls without `unsafe`; zbus already depends on the same version.
+rustix = { version = "1.1", default-features = false, features = ["std", "fs", "process"] }
 
 # ---- configuration ----
 figment = { version = "0.10", features = ["env"] }

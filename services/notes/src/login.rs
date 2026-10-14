@@ -59,11 +59,13 @@ pub(crate) struct SyncLogin {
 
 impl SyncLogin {
     /// Whether every field has a form that the login unit can take safely: no control character,
-    /// no whitespace or quote in the email and the MFA code, and bounded lengths.
+    /// no whitespace or quote in the email and the MFA code, bounded lengths, and no leading `-`
+    /// in the email and the MFA code, which `ob` gets in its argv and could read as an option.
     pub(crate) fn is_valid(&self) -> bool {
         let email = &self.email;
         let email_valid = (3..=MAX_EMAIL_CHARS).contains(&email.chars().count())
             && email.contains('@')
+            && !email.starts_with('-')
             && email.chars().all(|c| {
                 !c.is_control() && !c.is_whitespace() && !matches!(c, '"' | '\'' | '\\' | '$' | '`')
             });
@@ -75,6 +77,7 @@ impl SyncLogin {
         let mfa_valid = self.mfa_code.as_ref().is_none_or(|code| {
             let value = code.expose_secret();
             (1..=MAX_MFA_CHARS).contains(&value.len())
+                && !value.starts_with('-')
                 && value.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
         });
         email_valid
@@ -85,9 +88,10 @@ impl SyncLogin {
 }
 
 /// Whether a vault key can name a remote vault for `ob sync-setup --vault`: the remote vault id,
-/// ASCII letters, digits, `-` and `_`.
+/// ASCII letters, digits, `-` and `_`, and no leading `-`, which `ob` could read as an option.
 pub(crate) fn valid_remote_vault_id(key: &str) -> bool {
     !key.is_empty()
+        && !key.starts_with('-')
         && key
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_'))

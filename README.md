@@ -92,14 +92,17 @@ one-time code and is never stored.
 
 - **At rest:** each password is sealed with XChaCha20-Poly1305 under the key in
   `/etc/ratatoskr/notes-secrets.key` (32 bytes, mode 0400, owner `ratatoskr-notes`), with a random
-  nonce and the connection id and the kind as associated data. `notes.connection_secrets` holds
+  nonce and the connection id and the kind as associated data. The service opens the key file
+  without following a symbolic link, and refuses it when it is open to other users or has another
+  owner. `notes.connection_secrets` holds
   only the ciphertext. A failed login or a disconnect deletes it.
 - **To the login:** the service writes the email, the two passwords, the MFA code and the vault id
   to files in `/run/ratatoskr-notes/credentials/<id>/` (directory 0700, files 0600), starts the
   login unit, and deletes the files when the unit stops, whatever its result. The unit loads them
   with `LoadCredential=`. `ob` reads each password on standard input from
   `$CREDENTIALS_DIRECTORY`. No password is in the command line of a process. Only the email, the
-  vault id and the MFA code are in the arguments of `ob`.
+  vault id and the MFA code are in the arguments of `ob`, and the service refuses each of them
+  when it starts with `-`, so that `ob` cannot read it as an option.
 - **In output:** no secret is in a log line, an event, an error envelope or the journal of a unit.
   Each secret is a `SecretString`, and a refused request body is not logged.
 
