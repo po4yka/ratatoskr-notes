@@ -1,11 +1,11 @@
 # Removes the Obsidian Sync client of one removed connection: the Sync configuration that
-# `ob sync-setup` wrote, the working tree, and the client state (`ob-home`). The instance name is the
+# `ob sync-setup` wrote, the working tree, and the client state. The instance name is the
 # connection id. ratatoskr-notes starts it through the systemd D-Bus API when the owner removes a
 # `sync` connection, after it has stopped ratatoskr-notes-sync@<id>.service, and waits for it to
 # finish (workspace change add-notes-vault-connections, design D3).
 #
 # services/notes/tests/connections.rs runs the ExecStart= lines of this file through the fake
-# systemd bus, with the connections root and `ob` moved into a temporary directory. Keep each
+# systemd bus, with the trees root, the clients root and `ob` moved into a temporary directory. Keep each
 # command on one line, without quotes or shell syntax.
 [Unit]
 Description=Ratatoskr notes: remove the Sync client of connection %i
@@ -14,17 +14,18 @@ After=ratatoskr-notes-sync@%i.service
 
 [Service]
 Type=oneshot
-# The owner of the working tree and of ob-home, which the login unit and the sync unit write.
+# The owner of the working tree and of the client state, which the login unit and the sync unit
+# write.
 User=ratatoskr-notes-sync
 Group=ratatoskr-notes-sync
 UMask=0077
 # ob keeps its state under $XDG_CONFIG_HOME/obsidian-headless on Linux (spike 3.2).
-Environment=HOME=/mnt/nvme/ratatoskr/notes/connections/%i/ob-home
-Environment=XDG_CONFIG_HOME=/mnt/nvme/ratatoskr/notes/connections/%i/ob-home
+Environment=HOME=/mnt/nvme/ratatoskr/notes/clients/%i
+Environment=XDG_CONFIG_HOME=/mnt/nvme/ratatoskr/notes/clients/%i
 # A connection whose setup never finished has no Sync configuration, and ob then exits 3. The
 # leading `-` lets the unit continue, because the next line removes the state anyway.
-ExecStart=-/usr/bin/ob sync-unlink --path /mnt/nvme/ratatoskr/notes/connections/%i/tree
-ExecStart=/bin/rm -rf -- /mnt/nvme/ratatoskr/notes/connections/%i/tree /mnt/nvme/ratatoskr/notes/connections/%i/ob-home
+ExecStart=-/usr/bin/ob sync-unlink --path /mnt/nvme/ratatoskr/notes/trees/%i
+ExecStart=/bin/rm -rf -- /mnt/nvme/ratatoskr/notes/trees/%i /mnt/nvme/ratatoskr/notes/clients/%i
 # The owner's disconnect request waits for this unit, and Edge ends a request after 300 seconds.
 # The sync unit's stop and this unit together must finish well inside that budget.
 TimeoutStartSec=120
@@ -50,7 +51,8 @@ CapabilityBoundingSet=
 RestrictAddressFamilies=AF_UNIX
 SystemCallFilter=@system-service
 SystemCallArchitectures=native
-# The leading `-` accepts a connection whose login never created the directory.
-ReadWritePaths=-/mnt/nvme/ratatoskr/notes/connections/%i
+# The removal of the tree and of the client state removes an entry of each root, so the unit may
+# write the two roots, which always exist. It removes only the entries of its own connection.
+ReadWritePaths=/mnt/nvme/ratatoskr/notes/trees /mnt/nvme/ratatoskr/notes/clients
 # Only ob sync-unlink could reach the network, and it only edits local files.
 PrivateNetwork=yes

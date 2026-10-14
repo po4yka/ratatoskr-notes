@@ -37,6 +37,6 @@
 |---|---|
 | Database | schema `notes`, role `ratatoskr_notes`, database `ratatoskr` |
 | Note file bytes | `/mnt/nvme/ratatoskr/blobs/ratatoskr-notes/sha256/<2 hex>/<rest>` |
-| Sync working tree | `/mnt/nvme/ratatoskr/notes/connections/<id>/tree` |
-| Headless client state | `/mnt/nvme/ratatoskr/notes/connections/<id>/ob-home`, mode 0700, owner `ratatoskr-notes-sync` |
+| Sync working tree | `/mnt/nvme/ratatoskr/notes/trees/<id>`, mode 2750, owner `ratatoskr-notes-sync`, group `ratatoskr-notes-trees` |
+| Headless client state | `/mnt/nvme/ratatoskr/notes/clients/<id>`, mode 0700, owner `ratatoskr-notes-sync` |
 | Obsidian secrets key | `/etc/ratatoskr/notes-secrets.key` |

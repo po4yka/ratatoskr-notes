@@ -96,24 +96,25 @@ async fn two_owners_may_connect_one_remote_vault() {
 }
 
 /// Writes what a finished login and a running sync leave on the host (workspace design D3): the
-/// working tree with a note, and `ob-home` with the token and the vault configuration.
+/// working tree with a note, and the client state with the token and the vault configuration.
 fn leave_sync_state(
     systemd: &FakeSystemd,
     connection_id: Uuid,
 ) -> (std::path::PathBuf, std::path::PathBuf) {
-    let tree = systemd.connection_dir(connection_id).join("tree");
-    let ob_home = systemd.connection_dir(connection_id).join("ob-home");
-    let state = ob_home.join("obsidian-headless");
+    let tree = systemd.tree_dir(connection_id);
+    let client_state = systemd.client_dir(connection_id);
+    let state = client_state.join("obsidian-headless");
     std::fs::create_dir_all(tree.join("Daily")).expect("the tree is created");
     std::fs::write(tree.join("Daily/2026-10-13.md"), "# A note\n").expect("a note is written");
-    std::fs::create_dir_all(state.join("sync").join(REMOTE_VAULT_ID)).expect("ob-home is created");
+    std::fs::create_dir_all(state.join("sync").join(REMOTE_VAULT_ID))
+        .expect("the client state is created");
     std::fs::write(state.join("auth_token"), "FAKE-TOKEN-MARKER").expect("a token is written");
     std::fs::write(
         state.join("sync").join(REMOTE_VAULT_ID).join("config.json"),
         r#"{"encryptionKey":"FAKE-KEY-MARKER"}"#,
     )
     .expect("a vault configuration is written");
-    (tree, ob_home)
+    (tree, client_state)
 }
 
 /// The number of stored secrets of a connection.
@@ -133,7 +134,7 @@ async fn disconnect_removes_unit_tree_state_and_secrets() {
     let id = connection_id(&connect(&router, OWNER_A, "sync", REMOTE_VAULT_ID).await);
     let calls_of_connect = systemd.calls().len();
     let ob_of_connect = systemd.ob_invocations().len();
-    let (tree, ob_home) = leave_sync_state(&systemd, id);
+    let (tree, client_state) = leave_sync_state(&systemd, id);
     assert_eq!(
         secrets_of(&fixture, id).await,
         2,
@@ -165,7 +166,7 @@ async fn disconnect_removes_unit_tree_state_and_secrets() {
         [format!("sync-unlink --path {}", tree.display())]
     );
     assert!(!tree.exists(), "the working tree is gone");
-    assert!(!ob_home.exists(), "the client state is gone");
+    assert!(!client_state.exists(), "the client state is gone");
 
     assert_eq!(secrets_of(&fixture, id).await, 0, "the ciphertext is gone");
 
@@ -267,7 +268,7 @@ async fn cancelled_connect_releases_the_vault() {
         "the credential files of the login are gone"
     );
     assert!(
-        holds_nothing(&systemd.connection_dir(id).join("ob-home")),
+        holds_nothing(&systemd.client_dir(id)),
         "no client state of the stopped login stays"
     );
 
@@ -349,7 +350,7 @@ async fn shutdown_during_login_fails_the_connection() {
     assert_login_stopped_then_cleaned_up(&systemd, id);
     assert_eq!(secrets_of(&fixture, id).await, 0, "the ciphertext is gone");
     assert!(
-        holds_nothing(&systemd.connection_dir(id).join("ob-home")),
+        holds_nothing(&systemd.client_dir(id)),
         "no client state of the stopped login stays"
     );
     let answer = request.await.expect("the connect request answers");
@@ -415,7 +416,7 @@ async fn next_start_fails_an_interrupted_login() {
     // What a stop that the grace window cut short leaves: a `sync` connection with its ciphertext
     // whose login never finished, and what the login wrote on the host.
     let interrupted = insert_interrupted_login(&fixture).await;
-    let (tree, ob_home) = leave_sync_state(&systemd, interrupted);
+    let (tree, client_state) = leave_sync_state(&systemd, interrupted);
     let calls_before = systemd.calls().len();
 
     // The next start of the service.
@@ -438,7 +439,7 @@ async fn next_start_fails_an_interrupted_login() {
         "the ciphertext is gone"
     );
     assert!(!tree.exists(), "the working tree is gone");
-    assert!(!ob_home.exists(), "the client state is gone");
+    assert!(!client_state.exists(), "the client state is gone");
 
     assert_eq!(state_of(&fixture, logged_in).await, "connecting");
     assert_eq!(secrets_of(&fixture, logged_in).await, 2);

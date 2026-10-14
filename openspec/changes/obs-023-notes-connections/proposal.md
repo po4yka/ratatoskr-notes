@@ -31,6 +31,12 @@ the part of them that belongs to group 5 of the workspace task list, and does no
   working tree with its settle window and rescan; and the blob store, whose blobs only the read
   group `ratatoskr-notes-blobs` can read. Workspace tasks 6.5 and 6.6 wait for the pull-only
   session that spike 3.3 records.
+- Review follow-ups of group 6 (workspace tasks 6.11 to 6.18) and the owner decisions of
+  2026-10-14: the sync units log to the journal namespace `ratatoskr-notes-sync`, which the service
+  checks at start and follows with one follower that starts again after a backoff; the watcher reads
+  a working tree only beneath its root and never through a symbolic link; the blob store refuses a
+  umask stricter than 0027; and the working trees and the client states move to the split roots
+  `/mnt/nvme/ratatoskr/notes/trees/<id>` and `/mnt/nvme/ratatoskr/notes/clients/<id>`.
 
 ## Capabilities
 

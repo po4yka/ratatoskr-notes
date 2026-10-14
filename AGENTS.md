@@ -123,7 +123,7 @@ You may assume:
 
 - exactly one `ratatoskr-notes` process, started by systemd on that host;
 - one PostgreSQL cluster (major 17) and one NATS server, shared with other tenants on the box;
-- a path under `/mnt/nvme` is durable storage: the blob root `/mnt/nvme/ratatoskr/blobs/ratatoskr-notes` and the working trees and client state under `/mnt/nvme/ratatoskr/notes/connections/<id>/`;
+- a path under `/mnt/nvme` is durable storage: the blob root `/mnt/nvme/ratatoskr/blobs/ratatoskr-notes` and the working trees under `/mnt/nvme/ratatoskr/notes/trees/<id>` and the client state under `/mnt/nvme/ratatoskr/notes/clients/<id>`;
 - the operator is one person with `ssh`, not a pipeline with an API.
 
 Stop assuming:

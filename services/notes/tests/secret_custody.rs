@@ -377,7 +377,7 @@ async fn login_unit_gets_secrets_only_as_credentials() {
         directives
             .iter()
             .any(|(key, value)| key == "User" && value == "ratatoskr-notes-sync"),
-        "the login unit runs as the owner of ob-home"
+        "the login unit runs as the owner of the client state"
     );
     assert!(
         !unit.contains("--password"),

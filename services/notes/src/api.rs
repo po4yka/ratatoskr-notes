@@ -436,14 +436,14 @@ fn seal_secrets(
 /// start, and the answer is `404`. When the owner removes it while the login runs, the disconnect
 /// stops the login unit; the connect waits for the end of the disconnect, and the answer is `404`
 /// when the connection is removed. When the login finished before the disconnect stopped it, the
-/// login can write to `ob-home` after the cleanup of the disconnect, so the cleanup runs again.
+/// login can write to the client state after the cleanup of the disconnect, so the cleanup runs again.
 ///
 /// After the login, the sync unit of the connection starts before the login is recorded, so the
 /// cleanup that runs again after a disconnect also stops the sync unit. A sync unit that does not
 /// start fails the connect as a failed login does, with `503`.
 ///
 /// When the login fails, or the request ends or the service stops while the login runs, the
-/// cleanup step stops the login unit, the cleanup unit removes what the login left in `ob-home`
+/// cleanup step stops the login unit, the cleanup unit removes what the login left in the client state
 /// (a token, when only the setup step failed), and the connection becomes `failed`. When the
 /// cleanup fails, the connection stays `connecting` with its ciphertext, and the owner removes it
 /// with a disconnect, or the next start of the service fails it.
@@ -627,7 +627,7 @@ async fn remove_connection<B: SystemdBus>(
 
 /// Stop the sync unit and the login unit, then run the cleanup unit and wait for it (workspace
 /// design D3). The stop of a unit that does not run does nothing. The login unit is stopped so
-/// that it cannot write to `ob-home` after the cleanup unit removed it.
+/// that it cannot write to the client state after the cleanup unit removed it.
 async fn clean_up_sync_client<B: SystemdBus>(
     systemd: &B,
     connection_id: Uuid,

@@ -45,14 +45,12 @@ use tokio::sync::{Notify, watch};
 
 use futures_util::Stream;
 use ratatoskr_notes::systemd::{
-    BusError, JobResult, JournalLine, JournalUnreadable, SystemdBus, UnitName,
+    BusError, CLIENTS_ROOT, JobResult, JournalLine, JournalUnreadable, SystemdBus, TREES_ROOT,
+    UnitName,
 };
 use uuid::Uuid;
 
 use crate::support::journal::Journals;
-
-/// Where the shipped units keep the per-connection directories on the host.
-const HOST_CONNECTIONS_ROOT: &str = "/mnt/nvme/ratatoskr/notes/connections";
 
 /// Where the service writes the credential files of a login on the host.
 const HOST_CREDENTIALS_ROOT: &str = "/run/ratatoskr-notes/credentials";
@@ -153,7 +151,7 @@ impl FakeSystemd {
         .expect("the stub ob is written");
         std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755))
             .expect("the stub ob is executable");
-        for root in ["connections", "credentials", "unit-credentials"] {
+        for root in ["trees", "clients", "credentials", "unit-credentials"] {
             std::fs::create_dir(directory.path().join(root)).expect("a host root is created");
         }
         let key_file = directory.path().join("notes-secrets.key");
@@ -238,9 +236,20 @@ impl FakeSystemd {
         self.directory.path().join("credentials")
     }
 
-    /// The test's stand-in for `/mnt/nvme/ratatoskr/notes/connections/<id>`.
-    pub(crate) fn connection_dir(&self, connection_id: Uuid) -> PathBuf {
-        self.connections_root().join(connection_id.to_string())
+    /// The test's stand-in for `/mnt/nvme/ratatoskr/notes/trees/<id>`, the working tree.
+    pub(crate) fn tree_dir(&self, connection_id: Uuid) -> PathBuf {
+        self.directory
+            .path()
+            .join("trees")
+            .join(connection_id.to_string())
+    }
+
+    /// The test's stand-in for `/mnt/nvme/ratatoskr/notes/clients/<id>`, the client state.
+    pub(crate) fn client_dir(&self, connection_id: Uuid) -> PathBuf {
+        self.directory
+            .path()
+            .join("clients")
+            .join(connection_id.to_string())
     }
 
     /// Every call, in order.
@@ -294,10 +303,6 @@ impl FakeSystemd {
             .iter()
             .find(|(name, _)| *name == instance)
             .map(|(_, snapshot)| snapshot.clone())
-    }
-
-    fn connections_root(&self) -> PathBuf {
-        self.directory.path().join("connections")
     }
 
     fn record(&self, call: Call) {
@@ -454,8 +459,12 @@ impl FakeSystemd {
     fn resolve(&self, raw: &str, instance: &str) -> String {
         raw.replace("%i", instance)
             .replace(
-                HOST_CONNECTIONS_ROOT,
-                &self.connections_root().display().to_string(),
+                TREES_ROOT,
+                &self.directory.path().join("trees").display().to_string(),
+            )
+            .replace(
+                CLIENTS_ROOT,
+                &self.directory.path().join("clients").display().to_string(),
             )
             .replace(
                 HOST_CREDENTIALS_ROOT,

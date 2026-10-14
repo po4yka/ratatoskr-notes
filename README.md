@@ -87,14 +87,21 @@ owner can send the request again.
 
 The service starts and stops the units through the systemd D-Bus API as the user
 `ratatoskr-notes`. The instance name of each unit is the connection id. Each unit runs `ob` as
-`ratatoskr-notes-sync`, which owns the client state (`ob-home`) and the working tree under
-`/mnt/nvme/ratatoskr/notes/connections/<id>/`.
+`ratatoskr-notes-sync`, which owns the working tree `/mnt/nvme/ratatoskr/notes/trees/<id>` and
+the client state `/mnt/nvme/ratatoskr/notes/clients/<id>` (owner decision B of 2026-10-14).
+
+- The trees root has the group `ratatoskr-notes-trees`, whose only member is `ratatoskr-notes`, and
+  mode 2750. The sync and login units run with `UMask=0027`, so each file of a tree gets that group
+  from the setgid bit and mode 0640 (2750 for a directory). The service reads the tree through that
+  group, and no other user can.
+- The client state holds the Sync token and the end-to-end key in plain text. The clients root is
+  mode 0700, and the login unit creates the client state of a connection with mode 0700.
 
 | Unit | Type | Started | Does |
 |---|---|---|---|
 | `ratatoskr-notes-login@.service` | oneshot | at the connect of a `sync` connection | `ob login`, then `ob sync-setup`. The exit status names the failure: 10 login failed, 11 MFA code needed, 12 end-to-end password wrong, 13 no such remote vault. |
 | `ratatoskr-notes-sync@.service` | long-running | by the Sync supervisor, after the first login and at each start of the service | `ob sync-config --mode pull-only --configs ""` with the device name `ratatoskr-<id>`, then `ob sync --continuous`. It is stopped at a disconnect. `MemoryMax=512M` is provisional until spike 3.1 measures it. |
-| `ratatoskr-notes-cleanup@.service` | oneshot | at a disconnect, and after a failed login | `ob sync-unlink`, then removes the working tree and `ob-home`. |
+| `ratatoskr-notes-cleanup@.service` | oneshot | at a disconnect, and after a failed login | `ob sync-unlink`, then removes the working tree and the client state. |
 
 The three units are in `deploy/systemd/`. None of them is enabled: only the service starts them.
 The sync unit runs in pull-only mode, so Notes never writes into a vault.
@@ -169,6 +176,10 @@ one-time code and is never stored.
 - [x] Sync supervisor, the sync unit, the watcher of the working tree and the blob root with its
   read group (group 6, tasks 6.1 to 6.4 and 6.7 to 6.10). `MemoryMax=` of the sync unit and the
   line of an expired login are provisional until spike 3.1.
+- [x] Review follow-ups of group 6 and the owner decisions of 2026-10-14 (tasks 6.11 to 6.18): the
+  journal namespace of the sync units with one follower that starts again, the reads of a working
+  tree beneath its root, the umask rule of the blob store, and the split trees and clients roots.
+  The journal namespace and its ACL wait for a check on a real Debian 12 host.
 - [ ] The pull-only session of spike 3.3 and its replay test (tasks 6.5 and 6.6).
 - [ ] Index, file events and the read API (group 7).
 - [ ] Device channel routes (group 8).

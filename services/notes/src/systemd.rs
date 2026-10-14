@@ -8,7 +8,7 @@
 
 use std::fmt;
 use std::future::Future;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
 
@@ -57,21 +57,27 @@ impl fmt::Display for UnitName {
     }
 }
 
+/// The root of the working trees on the host (owner decision B of 2026-10-14). The deploy role
+/// creates it with the owner `ratatoskr-notes-sync`, the group `ratatoskr-notes-trees`, whose only
+/// member is `ratatoskr-notes`, and mode 2750, so the service can read each tree.
+pub const TREES_ROOT: &str = "/mnt/nvme/ratatoskr/notes/trees";
+
+/// The root of the client states on the host (owner decision B of 2026-10-14). The deploy role
+/// creates it with the owner `ratatoskr-notes-sync` and mode 0700: it holds the Sync token and the
+/// end-to-end key in plain text.
+pub const CLIENTS_ROOT: &str = "/mnt/nvme/ratatoskr/notes/clients";
+
 /// The working tree of a `sync` connection on the host, which `ob` writes and the watcher reads.
 #[must_use]
 pub fn tree_dir(connection_id: Uuid) -> PathBuf {
-    PathBuf::from(format!(
-        "/mnt/nvme/ratatoskr/notes/connections/{connection_id}/tree"
-    ))
+    Path::new(TREES_ROOT).join(connection_id.to_string())
 }
 
-/// The client state of a `sync` connection on the host (`ob-home`: the Sync token and the vault
-/// configuration of `ob`).
+/// The client state of a `sync` connection on the host (the Sync token and the vault configuration
+/// of `ob`, mode 0700).
 #[must_use]
 pub fn client_dir(connection_id: Uuid) -> PathBuf {
-    PathBuf::from(format!(
-        "/mnt/nvme/ratatoskr/notes/connections/{connection_id}/ob-home"
-    ))
+    Path::new(CLIENTS_ROOT).join(connection_id.to_string())
 }
 
 /// The result of one systemd job, as the `JobRemoved` signal reports it.

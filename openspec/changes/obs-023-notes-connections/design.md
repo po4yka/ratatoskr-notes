@@ -69,15 +69,23 @@ disconnect fails there. A stop of a unit that systemd does not know (`NoSuchUnit
 
 The test double records each call. When it is asked to start the cleanup unit, it runs the
 `ExecStart=` lines of the shipped `deploy/systemd/ratatoskr-notes-cleanup@.service`, with `%i`
-replaced, the connections root moved into a temporary directory, and `ob` replaced by a stub that
+replaced, the trees root and the clients root moved into a temporary directory, and `ob` replaced by a stub that
 records its arguments. The test therefore checks the shipped unit, not a copy of its behaviour.
 
 ### 6. The cleanup unit
 
-The unit runs as `ratatoskr-notes-sync`, the owner of the working tree and of `ob-home`, with
-`XDG_CONFIG_HOME` set to `ob-home` as in design D3. It runs `ob sync-unlink --path <tree>` with
+The unit runs as `ratatoskr-notes-sync`, the owner of the working tree and of the client state,
+with `XDG_CONFIG_HOME` set to the client state as in design D3. Owner decision B of 2026-10-14 puts
+the working tree at `/mnt/nvme/ratatoskr/notes/trees/<id>` (group `ratatoskr-notes-trees`, whose
+only member is `ratatoskr-notes`, mode 2750) and the client state at
+`/mnt/nvme/ratatoskr/notes/clients/<id>` (mode 0700); `systemd::tree_dir` and `systemd::client_dir`
+build these paths, and `tests/unit_files.rs` compares them with the units. The sync and login units
+run with `UMask=0027`, so each file of a tree gets the group of the setgid trees root and mode 0640,
+and the service reads the tree through that group. The login unit sets the umask 0077 for
+`ob login`, which creates the client state. It runs `ob sync-unlink --path <tree>` with
 the `-` prefix, because a connection whose setup never finished has no Sync configuration and `ob`
-then exits 3. It then deletes the working tree and `ob-home` with `rm -rf`. The `ob` path is
+then exits 3. It then deletes the working tree and the client state with `rm -rf`, so it may write
+the two roots. The `ob` path is
 `/usr/bin/ob`, where a global `npm` install puts it on Debian; workspace task 14.7 pins the
 package and confirms the path.
 
@@ -137,7 +145,7 @@ login fails, the connection stays `connecting` with its ciphertext, the answer i
 ### 9. The Sync supervisor and the sync unit
 
 `deploy/systemd/ratatoskr-notes-sync@.service` runs `ob sync --continuous --path <tree>` as
-`ratatoskr-notes-sync`, with `HOME` and `XDG_CONFIG_HOME` set to `ob-home`, as the login unit does.
+`ratatoskr-notes-sync`, with `HOME` and `XDG_CONFIG_HOME` set to the client state, as the login unit does.
 Its `ExecStartPre=` runs `ob sync-config --path <tree> --mode pull-only --configs "" --device-name
 ratatoskr-<id>`, so each start of the unit sets pull-only mode, no configuration sync and the device
 name again. The supervisor does not run `ob` itself. `Restart=on-failure` with `RestartSec=30` and
@@ -246,11 +254,16 @@ line every 30 seconds, so a gap delays the expiry and does not hide it.
 - The service creates `/run/ratatoskr-notes/credentials` with mode 0700 when it is missing, but
   only root can create `/run/ratatoskr-notes`. The service unit that ships with group 6 needs
   `RuntimeDirectory=ratatoskr-notes`.
-- The login unit may write the whole connections root, `/mnt/nvme/ratatoskr/notes/connections`,
-  because the directory of a new connection does not exist when the unit starts, and a
-  `ReadWritePaths=` entry must exist. Every directory there belongs to `ratatoskr-notes-sync`. The
-  deploy role must create the root with that owner and mode 0700, and must add the login unit to
-  `ratatoskr_template_units` (workspace task 14.7).
+- The login unit and the cleanup unit may write the two roots, `/mnt/nvme/ratatoskr/notes/trees`
+  and `/mnt/nvme/ratatoskr/notes/clients`, because the directories of a new connection do not exist
+  when the login unit starts, a `ReadWritePaths=` entry must exist, and a removal removes an entry
+  of each root. Every directory there belongs to `ratatoskr-notes-sync`. The deploy role must create
+  the trees root with that owner, the group `ratatoskr-notes-trees` and mode 2750, and the clients
+  root with that owner and mode 0700, and must add the three units to `ratatoskr_template_units`
+  (workspace task 14.7).
+- The setgid bit and the group of a tree come from the trees root, and the mode of each file from
+  `UMask=0027`. A file that `ob` makes with an explicit mode that is stricter than 0640 is not
+  readable by the service; the watcher then skips it and logs nothing about its name.
 - `no_secret_in_any_cmdline` runs on Linux only. A run on macOS ignores it, so the Linux CI job is
   the check.
 - A reconnect of a `login_expired` connection is a new `POST`, and the connection still holds its

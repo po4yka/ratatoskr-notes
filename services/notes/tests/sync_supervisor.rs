@@ -74,11 +74,7 @@ async fn connect_starts_one_unit_in_pull_only_mode() {
     assert!(stopped, "serve stops without a failure");
     assert_eq!(answer.status, StatusCode::NOT_FOUND, "{:?}", answer.body);
 
-    let tree = systemd
-        .connection_dir(id)
-        .join("tree")
-        .display()
-        .to_string();
+    let tree = systemd.tree_dir(id).display().to_string();
     let device_name = format!("ratatoskr-{id}");
     let configure: Vec<String> = [
         "sync-config",
