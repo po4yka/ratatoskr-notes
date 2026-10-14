@@ -221,12 +221,17 @@ async fn unreadable_journal_is_reported_at_start() {
     assert!(stopped, "serve stops without a failure");
     assert_eq!(answer.status, StatusCode::NOT_FOUND, "{:?}", answer.body);
 
+    // The buffer holds the lines of every test of this binary, and a follower that ends in
+    // another test logs the same code without a reason. So the line is any line with both.
     let text = logs.text();
-    let reported = text
+    let reported: Vec<&str> = text
         .lines()
-        .find(|line| line.contains("notes.sync.journal_unreadable"));
+        .filter(|line| line.contains("notes.sync.journal_unreadable"))
+        .collect();
     assert!(
-        reported.is_some_and(|line| line.contains(UNREADABLE_JOURNAL)),
+        reported
+            .iter()
+            .any(|line| line.contains(UNREADABLE_JOURNAL)),
         "the start of the service reports the code notes.sync.journal_unreadable with the reason \
          of journalctl: {reported:?}"
     );
