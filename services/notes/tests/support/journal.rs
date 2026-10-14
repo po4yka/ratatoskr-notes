@@ -6,6 +6,8 @@
 //! carries the monotonic time of the fake host, as journald gives it to a reader. A reader gets the
 //! lines that a unit logs after it started to read, as `journalctl --follow --lines=0` does. The
 //! fake records the time of the last line that a reader took when the service stops a unit.
+//! [`Journals::end_followers`] ends every reader that runs, as a stop of `journalctl` does, and the
+//! fake counts the readers that the service starts.
 
 #![allow(
     clippy::expect_used,
@@ -34,8 +36,10 @@ pub(crate) type Line = (Duration, String);
 #[derive(Debug, Clone)]
 pub(crate) struct Journals {
     state: Arc<Mutex<State>>,
-    /// Changes when a line is added, so that a reader waits without a sleep.
+    /// Changes when a line is added or the followers end, so that a reader waits without a sleep.
     appended: Arc<watch::Sender<()>>,
+    /// The number of followers that the service started.
+    followed: Arc<watch::Sender<usize>>,
 }
 
 impl Default for Journals {
@@ -43,6 +47,7 @@ impl Default for Journals {
         Self {
             state: Arc::new(Mutex::new(State::default())),
             appended: Arc::new(watch::Sender::new(())),
+            followed: Arc::new(watch::Sender::new(0)),
         }
     }
 }
@@ -57,6 +62,9 @@ struct State {
     last_read: HashMap<String, Duration>,
     /// The time of the last line that a reader took at each stop of a unit.
     read_at_stop: HashMap<String, Vec<Option<Duration>>>,
+    /// Goes up when the followers end, as when `journalctl` stops. A follower ends when it differs
+    /// from the value at its start.
+    generation: u64,
 }
 
 /// The times from its start at which the stub `ob` logs, in `duration` of paused time.
@@ -107,10 +115,15 @@ impl Journals {
     pub(crate) fn follow(&self, unit: &str) -> impl Stream<Item = JournalLine> + Send + 'static {
         let appended = self.appended.subscribe();
         let next = self.lines_from(unit, 0).len();
+        let generation = self.generation();
+        self.followed.send_modify(|followed| *followed += 1);
         let reader = (self.clone(), unit.to_owned(), next, appended);
-        futures_util::stream::unfold(reader, |reader| async move {
+        futures_util::stream::unfold(reader, move |reader| async move {
             let (journals, unit, next, mut appended) = reader;
             loop {
+                if journals.generation() != generation {
+                    return None;
+                }
                 if let Some((at, message)) = journals.lines_from(&unit, next).into_iter().next() {
                     journals.mark_read(&unit, at);
                     let line = JournalLine {
@@ -122,6 +135,28 @@ impl Journals {
                 appended.changed().await.ok()?;
             }
         })
+    }
+
+    /// Every follower that runs now ends, as when `journalctl` stops.
+    pub(crate) fn end_followers(&self) {
+        self.state.lock().expect("the journals").generation += 1;
+        self.appended.send_replace(());
+    }
+
+    fn generation(&self) -> u64 {
+        self.state.lock().expect("the journals").generation
+    }
+
+    /// Wait until the service started `count` followers in all, for at most 10 seconds. Returns
+    /// whether it did.
+    pub(crate) async fn wait_for_followers(&self, count: usize) -> bool {
+        let mut followed = self.followed.subscribe();
+        tokio::time::timeout(
+            Duration::from_secs(10),
+            followed.wait_for(|followed| *followed >= count),
+        )
+        .await
+        .is_ok_and(|waited| waited.is_ok())
     }
 
     /// The lines of `unit` from index `from` on.

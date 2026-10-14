@@ -44,7 +44,9 @@ use std::sync::{Arc, Mutex};
 use tokio::sync::{Notify, watch};
 
 use futures_util::Stream;
-use ratatoskr_notes::systemd::{BusError, JobResult, JournalLine, SystemdBus, UnitName};
+use ratatoskr_notes::systemd::{
+    BusError, JobResult, JournalLine, JournalUnreadable, SystemdBus, UnitName,
+};
 use uuid::Uuid;
 
 use crate::support::journal::Journals;
@@ -90,6 +92,11 @@ sync-setup)
 esac
 exit 0
 "#;
+
+/// What `journalctl` of systemd 252 writes to stderr, and exits 1, when the user can open no file
+/// of the journal.
+pub(crate) const UNREADABLE_JOURNAL: &str =
+    "No journal files were opened due to insufficient permissions.";
 
 /// The login units that run now, by unit name.
 type Running = Arc<Mutex<HashMap<String, (Arc<Notify>, watch::Receiver<()>)>>>;
@@ -200,6 +207,13 @@ impl FakeSystemd {
     /// The fake Obsidian account has no remote vault: `ob sync-setup` exits 3.
     pub(crate) fn find_no_vault(self) -> Self {
         self.flag("no-vault");
+        self
+    }
+
+    /// The service cannot read the journal of the sync units, as a user without read access to
+    /// the journal namespace cannot.
+    pub(crate) fn unreadable_journal(self) -> Self {
+        self.flag("unreadable-journal");
         self
     }
 
@@ -630,6 +644,13 @@ impl SystemdBus for FakeSystemd {
 
     fn follow_journal(&self, unit: &UnitName) -> impl Stream<Item = JournalLine> + Send + 'static {
         self.journals.follow(unit.as_str())
+    }
+
+    async fn check_journal(&self) -> Result<(), JournalUnreadable> {
+        if self.directory.path().join("unreadable-journal").exists() {
+            return Err(JournalUnreadable(UNREADABLE_JOURNAL.to_owned()));
+        }
+        Ok(())
     }
 
     async fn exit_status(&self, unit: &UnitName) -> Result<Option<i32>, BusError> {

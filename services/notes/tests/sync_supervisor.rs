@@ -1,12 +1,14 @@
 //! The Sync supervisor (workspace spec `notes-vault-connections`, requirements "The host is a named
 //! Sync device in pull-only mode" and "An expired Sync login stops the connection and waits for the
-//! owner", workspace design D3).
+//! owner", workspace design D3, review items M1 and M2 of group 6).
 //!
 //! The tests run the real `serve()` with the fake systemd bus and the compose database. The fake
 //! runs the `ExecStartPre=` and `ExecStart=` lines of the shipped
 //! `deploy/systemd/ratatoskr-notes-sync@.service` with a stub `ob` that records its arguments, so
 //! the tests check the shipped unit. The stub `ob` of a sync unit logs to a fake journal under
-//! paused time (`support/journal.rs`).
+//! paused time (`support/journal.rs`). The fake can also end the journal follower, as a stop of
+//! `journalctl` does, and refuse the journal to the service, as journald refuses a user without
+//! read access to the namespace of the sync units (owner decision A of 2026-10-14).
 
 #![allow(
     clippy::expect_used,
@@ -23,7 +25,7 @@ use ratatoskr_notes_persistence::test_support::TestDatabase;
 use uuid::Uuid;
 
 use crate::support::logs::CapturedLogs;
-use crate::support::systemd::{Call, FakeSystemd};
+use crate::support::systemd::{Call, FakeSystemd, UNREADABLE_JOURNAL};
 use crate::support::{connection_id, free_address, run_service, send_tcp, sync_body};
 
 const OWNER: Uuid = Uuid::from_u128(0x0192_0000_0000_7000_8000_0000_0000_00d1);
@@ -198,6 +200,88 @@ async fn auth_failure_stops_the_unit_and_waits_for_the_owner() {
             .contains(&Call::Start(format!("ratatoskr-notes-login@{id}.service"))),
         "no login starts: the owner connects again: {:?}",
         systemd.calls()
+    );
+    assert!(
+        logs.text().contains("notes.sync.login_expired"),
+        "the service reports the code notes.sync.login_expired"
+    );
+
+    fixture
+        .cleanup()
+        .await
+        .expect("the test database is dropped");
+}
+
+#[tokio::test]
+async fn unreadable_journal_is_reported_at_start() {
+    let logs = CapturedLogs::install();
+    let fixture = TestDatabase::create().await.expect("a test database");
+    let systemd = FakeSystemd::new().unreadable_journal();
+
+    let api = free_address();
+    let unknown = format!("/v1/notes/connections/{}", Uuid::nil());
+    let request = send_tcp(api, Method::DELETE, &unknown, OWNER, None);
+    let (answer, stopped) = run_service(&fixture, &systemd, request, api).await;
+    assert!(stopped, "serve stops without a failure");
+    assert_eq!(answer.status, StatusCode::NOT_FOUND, "{:?}", answer.body);
+
+    let text = logs.text();
+    let reported = text
+        .lines()
+        .find(|line| line.contains("notes.sync.journal_unreadable"));
+    assert!(
+        reported.is_some_and(|line| line.contains(UNREADABLE_JOURNAL)),
+        "the start of the service reports the code notes.sync.journal_unreadable with the reason \
+         of journalctl: {reported:?}"
+    );
+
+    fixture
+        .cleanup()
+        .await
+        .expect("the test database is dropped");
+}
+
+#[tokio::test]
+async fn ended_follower_is_started_again() {
+    let logs = CapturedLogs::install();
+    let fixture = TestDatabase::create().await.expect("a test database");
+    let systemd = FakeSystemd::new();
+    let id = insert_active_connection(&fixture).await;
+    let unit = format!("ratatoskr-notes-sync@{id}.service");
+
+    let api = free_address();
+    let unknown = format!("/v1/notes/connections/{}", Uuid::nil());
+    let steps = async {
+        let answer = send_tcp(api, Method::DELETE, &unknown, OWNER, None).await;
+        assert_eq!(answer.status, StatusCode::NOT_FOUND, "{:?}", answer.body);
+        let journals = systemd.journals();
+        let first = journals.wait_for_followers(1).await;
+        // journalctl stops, for example because journald restarted.
+        journals.end_followers();
+        let again = journals.wait_for_followers(2).await;
+        // After that, the login of the account expires.
+        journals.log_auth_failures(&unit, Duration::from_mins(10));
+        let unit_stopped = systemd.wait_for_stop(&unit).await;
+        (first, again, unit_stopped)
+    };
+    let ((first, again, unit_stopped), stopped) = run_service(&fixture, &systemd, steps, api).await;
+    assert!(stopped, "serve stops without a failure");
+
+    assert!(first, "the service follows the journal of the sync units");
+    assert!(
+        again,
+        "the service follows the journal again after the follower ended"
+    );
+    assert!(
+        unit_stopped,
+        "an authentication failure for 5 minutes after that stops the unit: {:?}",
+        systemd.calls()
+    );
+    assert_eq!(state_of(&fixture, id).await, "login_expired");
+    assert_eq!(
+        systemd.journals().read_at_stops(&unit),
+        [Some(Duration::from_mins(5))],
+        "the unit is stopped once, at the first failure 5 minutes after the first one"
     );
     assert!(
         logs.text().contains("notes.sync.login_expired"),

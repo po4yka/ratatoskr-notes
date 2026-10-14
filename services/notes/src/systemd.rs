@@ -86,6 +86,11 @@ pub struct JournalLine {
     pub message: String,
 }
 
+/// The journal of the sync units cannot be read. The text is the reason that `journalctl` gives.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("the journal of the sync units cannot be read: {0}")]
+pub struct JournalUnreadable(pub String);
+
 /// The systemd calls that Notes makes. A start or a stop waits until the job is finished.
 pub trait SystemdBus: Send + Sync + 'static {
     /// Start a unit and wait for the job. For a oneshot unit the job ends when the unit's
@@ -112,6 +117,11 @@ pub trait SystemdBus: Send + Sync + 'static {
     /// The lines that the journal of a unit receives from now on, in order. The stream ends when
     /// the journal cannot be read any more. A failure is logged.
     fn follow_journal(&self, unit: &UnitName) -> impl Stream<Item = JournalLine> + Send + 'static;
+
+    /// Whether the service can read the journal of the sync units.
+    fn check_journal(&self) -> impl Future<Output = Result<(), JournalUnreadable>> + Send {
+        async { Ok(()) }
+    }
 }
 
 /// The well-known name, object and interface of the systemd manager.
