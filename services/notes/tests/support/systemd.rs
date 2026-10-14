@@ -46,6 +46,8 @@ use tokio::sync::{Notify, watch};
 use ratatoskr_notes::systemd::{BusError, JobResult, SystemdBus, UnitName};
 use uuid::Uuid;
 
+use crate::support::journal::Journals;
+
 /// Where the shipped units keep the per-connection directories on the host.
 const HOST_CONNECTIONS_ROOT: &str = "/mnt/nvme/ratatoskr/notes/connections";
 
@@ -126,6 +128,10 @@ pub(crate) struct FakeSystemd {
     /// The login units that run now: the signal that stops each one, and the channel whose close
     /// tells that it ended.
     running: Running,
+    /// The number of calls, so that a test can wait for one.
+    calls_made: Arc<watch::Sender<usize>>,
+    /// The journals of the sync units.
+    journals: Journals,
 }
 
 impl FakeSystemd {
@@ -154,6 +160,8 @@ impl FakeSystemd {
             directory: Arc::new(directory),
             logins_held: Arc::new(watch::Sender::new(false)),
             running: Arc::new(Mutex::new(HashMap::new())),
+            calls_made: Arc::new(watch::Sender::new(0)),
+            journals: Journals::default(),
         }
     }
 
@@ -279,6 +287,27 @@ impl FakeSystemd {
 
     fn record(&self, call: Call) {
         self.calls.lock().expect("the call record").push(call);
+        self.calls_made.send_modify(|made| *made += 1);
+    }
+
+    /// Wait until the service stops `unit`, for at most 10 seconds. Returns whether it did.
+    pub(crate) async fn wait_for_stop(&self, unit: &str) -> bool {
+        let stop = Call::Stop(unit.to_owned());
+        let mut made = self.calls_made.subscribe();
+        tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            while !self.calls().contains(&stop) {
+                if made.changed().await.is_err() {
+                    return;
+                }
+            }
+        })
+        .await
+        .is_ok()
+    }
+
+    /// The journals of the sync units.
+    pub(crate) fn journals(&self) -> &Journals {
+        &self.journals
     }
 
     fn record_exit_status(&self, unit: &str, status: i32) {
@@ -582,6 +611,7 @@ impl SystemdBus for FakeSystemd {
     }
 
     async fn stop_unit(&self, unit: &UnitName) -> Result<JobResult, BusError> {
+        self.journals.record_stop(unit.as_str());
         self.record(Call::Stop(unit.as_str().to_owned()));
         let running = self
             .running

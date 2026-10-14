@@ -1,10 +1,12 @@
-//! The Sync supervisor (workspace spec `notes-vault-connections`, requirement "The host is a named
-//! Sync device in pull-only mode", workspace design D3).
+//! The Sync supervisor (workspace spec `notes-vault-connections`, requirements "The host is a named
+//! Sync device in pull-only mode" and "An expired Sync login stops the connection and waits for the
+//! owner", workspace design D3).
 //!
 //! The tests run the real `serve()` with the fake systemd bus and the compose database. The fake
 //! runs the `ExecStartPre=` and `ExecStart=` lines of the shipped
 //! `deploy/systemd/ratatoskr-notes-sync@.service` with a stub `ob` that records its arguments, so
-//! the tests check the shipped unit.
+//! the tests check the shipped unit. The stub `ob` of a sync unit logs to a fake journal under
+//! paused time (`support/journal.rs`).
 
 #![allow(
     clippy::expect_used,
@@ -14,10 +16,13 @@
 
 mod support;
 
+use std::time::Duration;
+
 use axum::http::{Method, StatusCode};
 use ratatoskr_notes_persistence::test_support::TestDatabase;
 use uuid::Uuid;
 
+use crate::support::logs::CapturedLogs;
 use crate::support::systemd::{Call, FakeSystemd};
 use crate::support::{connection_id, free_address, run_service, send_tcp, sync_body};
 
@@ -114,6 +119,89 @@ async fn connect_starts_one_unit_in_pull_only_mode() {
         sync_calls(&systemd.ob_arguments()[ob_of_first_start.len()..]),
         [configure, sync],
         "each start of the unit sets pull-only mode again"
+    );
+
+    fixture
+        .cleanup()
+        .await
+        .expect("the test database is dropped");
+}
+
+/// Inserts a `sync` connection whose login finished and whose first scan was indexed.
+async fn insert_active_connection(fixture: &TestDatabase) -> Uuid {
+    let id = Uuid::now_v7();
+    sqlx::query(
+        "insert into notes.connections
+             (connection_id, owner_id, channel, vault_key, vault_display_name, state,
+              logged_in_at, created_at, updated_at)
+         values ($1, $2, 'sync', $3, 'Personal', 'active', now(), now(), now())",
+    )
+    .bind(id)
+    .bind(OWNER)
+    .bind(REMOTE_VAULT_ID)
+    .execute(fixture.pool())
+    .await
+    .expect("an active connection is inserted");
+    id
+}
+
+async fn state_of(fixture: &TestDatabase, connection_id: Uuid) -> String {
+    sqlx::query_scalar("select state from notes.connections where connection_id = $1")
+        .bind(connection_id)
+        .fetch_one(fixture.pool())
+        .await
+        .expect("the connection can be read")
+}
+
+#[tokio::test]
+async fn auth_failure_stops_the_unit_and_waits_for_the_owner() {
+    let logs = CapturedLogs::install();
+    let fixture = TestDatabase::create().await.expect("a test database");
+    let systemd = FakeSystemd::new();
+    let id = insert_active_connection(&fixture).await;
+    let unit = format!("ratatoskr-notes-sync@{id}.service");
+
+    let api = free_address();
+    let unknown = format!("/v1/notes/connections/{}", Uuid::nil());
+    let steps = async {
+        // The start of the service starts the unit before its listener answers.
+        let answer = send_tcp(api, Method::DELETE, &unknown, OWNER, None).await;
+        assert_eq!(answer.status, StatusCode::NOT_FOUND, "{:?}", answer.body);
+        // The login of the account expired: the stub ob logs the failure every 30 seconds, for 10
+        // minutes of paused time.
+        systemd
+            .journals()
+            .log_auth_failures(&unit, Duration::from_mins(10));
+        systemd.wait_for_stop(&unit).await
+    };
+    let (unit_stopped, stopped) = run_service(&fixture, &systemd, steps, api).await;
+    assert!(stopped, "serve stops without a failure");
+
+    assert_eq!(
+        state_of(&fixture, id).await,
+        "login_expired",
+        "an authentication failure for 5 minutes expires the login"
+    );
+    assert!(
+        unit_stopped,
+        "the sync unit is stopped: {:?}",
+        systemd.calls()
+    );
+    assert_eq!(
+        systemd.journals().read_at_stops(&unit),
+        [Some(Duration::from_mins(5))],
+        "the unit is stopped once, at the first failure 5 minutes after the first one"
+    );
+    assert!(
+        !systemd
+            .calls()
+            .contains(&Call::Start(format!("ratatoskr-notes-login@{id}.service"))),
+        "no login starts: the owner connects again: {:?}",
+        systemd.calls()
+    );
+    assert!(
+        logs.text().contains("notes.sync.login_expired"),
+        "the service reports the code notes.sync.login_expired"
     );
 
     fixture

@@ -9,6 +9,7 @@
 
 #[cfg(unix)]
 pub(crate) mod cmdline;
+pub(crate) mod journal;
 pub(crate) mod logs;
 pub(crate) mod systemd;
 

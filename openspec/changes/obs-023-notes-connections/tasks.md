@@ -42,5 +42,5 @@ The numbers of this group are the numbers of the workspace tasks.
 - [ ] 6.6 GREEN: workspace task 6.6. It waits for 6.5.
 - [x] 6.7 RED: `services/notes/tests/blob_root.rs::new_blob_is_group_readable_and_not_world_readable`, as workspace task 6.7 words it. Confirm that it fails because the service writes with the default umask.
 - [x] 6.8 GREEN: write each blob with mode 0640 and each directory with mode 2750, and keep the setgid bit on new directories. Verify 6.7, and document the read group in the README.
-- [ ] 6.9 RED: `services/notes/tests/sync_supervisor.rs::auth_failure_stops_the_unit_and_waits_for_the_owner`, as workspace task 6.9 words it. Confirm that it fails because the connection stays `active`.
+- [x] 6.9 RED: `services/notes/tests/sync_supervisor.rs::auth_failure_stops_the_unit_and_waits_for_the_owner`, as workspace task 6.9 words it. Confirm that it fails because the connection stays `active`.
 - [ ] 6.10 GREEN: read the journal of the sync unit for the line `Failed to authenticate:` only, stop the unit after 5 minutes of repeats, and set the state. Verify 6.9.
