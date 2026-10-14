@@ -8,8 +8,8 @@ and analyse the notes.
 > **Status:** in development. The service starts, applies the `notes` schema, serves its operator
 > plane, connects and removes vaults with the connect operation, runs the Obsidian login and the
 > Sync supervisor of a `sync` connection, records each file revision with its event and its index,
-> relays its outbox to NATS, and serves the read routes. The device channels are planned in the
-> workspace change `add-notes-vault-connections` (OBS-023), group 8.
+> relays its outbox to NATS, serves the read routes, and takes the change batches, the uploads and
+> the manifests of the `plugin` and `cli` device channels.
 
 > [!IMPORTANT]
 > **Ratatoskr is in development.** No database holds data that has to survive a schema change.
@@ -51,7 +51,10 @@ The domain API serves `POST /v1/notes/connections` and `DELETE /v1/notes/connect
 `PUT /v1/notes/connections/{id}/excluded-folders`, and the read routes `GET /v1/notes/connections`,
 `GET /v1/notes/connections/{id}/files`, `GET /v1/notes/connections/{id}/files/{path}` (the bytes,
 also at `?revision=<sha256>`) and `GET /v1/notes/connections/{id}/index/{path}` (the index with its
-links and backlinks). Every route answers only for the owner in the claim of Edge.
+links and backlinks). The device channels use `POST /v1/notes/connections/{id}/changes`,
+`POST /v1/notes/connections/{id}/manifest` and the upload routes under
+`/v1/notes/connections/{id}/blobs` (see Device channels). Every route answers only for the owner in
+the claim of Edge.
 
 ## Connections
 
@@ -88,18 +91,77 @@ When the owner removes the connection before or while its login runs, the operat
 `notes.connection.not_found`. At most `RATATOSKR__CONNECTIONS__MAX_LOGINS` logins run at the same
 time, 2 by default. A `sync` connect over that limit answers `503` with `notes.service.unavailable`
 and creates nothing, and the client can try again later. A `plugin` or `cli` connect reports
-`first_sync`; the first changes of its device complete it (group 8).
+`first_sync`; the first applied manifest of its device completes it. When no manifest is applied
+within 30 minutes of the connect, the connection becomes `failed` and the operation fails with
+`notes.channel.manifest_missing`. The wait continues after a restart of the service. Each report
+correlates to `operation:<operation id>`.
 
 A `plugin` or `cli` connect comes from a paired device. Edge names the device in
 `x-ratatoskr-device-id` and its kind in `x-ratatoskr-device-kind`. Without both claims the connect
 answers `401` with `notes.request.unauthenticated`. The kind must be `obsidian_plugin` for
 `plugin` and `export_agent` for `cli`; another kind answers `409` with `notes.channel_mismatch`.
 The connection records its device, the only one whose changes it takes (workspace design D5).
+A connect from a second device of the same channel with the vault key of that connection answers
+`409` with `notes.channel_mismatch` and the hint to Obsidian Sync.
 
 `DELETE /v1/notes/connections/{id}` stops the sync unit and a login unit that still runs, runs the
 cleanup unit, and then, in one transaction, marks the connection removed, deletes its ciphertext,
 and writes `notes.vault.disconnected.v1` to the outbox. When the cleanup fails, nothing is committed and the
 owner can send the request again.
+
+## Device channels
+
+The plugin and the export agent send the changes of a vault in one format (workspace design D5 and
+D6). Each request carries the owner claim and the device claims of Edge. A connection of another
+owner answers `404` with `notes.connection.not_found`. A device of another kind than the channel,
+or another device than the one that created the connection, answers `409` with
+`notes.channel_mismatch`.
+
+**Change batch.** `POST /v1/notes/connections/{id}/changes` takes `{"changes": [...]}` with 1 to
+256 changes. Each change has these fields:
+
+| Field | Type | Rule |
+|---|---|---|
+| `sequence` | integer, at least 1 | The device change sequence. It increases by one per change. |
+| `kind` | `created`, `updated`, `renamed` or `deleted` | What happened to the file. |
+| `path` | string | The path after the change, relative to the vault root. Notes stores it in NFC. |
+| `previous_path` | string | The path before the change. Only for `renamed`, and required there. |
+| `sha256` | 64 lowercase hex digits | The SHA-256 of the new bytes. Not for `deleted`, and required for the other kinds. |
+| `length_bytes` | integer | The length of the new bytes. Not for `deleted`, and required for the other kinds. |
+
+The connection keeps the highest device sequence that it committed. The answer is
+`{"committed_sequence": n}`.
+
+- A batch that starts after the next sequence answers `409` with `notes.channel.sequence_gap`
+  and `committed_sequence`. Nothing is committed.
+- A change at or below the committed sequence is a repeat. It changes nothing, so a batch that is
+  sent again gets the same answer.
+- More than 256 changes answer `413` with `notes.channel.batch_too_large` and `max_changes`.
+- A change whose bytes Notes does not hold answers `409` with `notes.channel.bytes_missing` and
+  `missing_sha256`. Nothing is committed. An excluded path and a file over the size limit need no
+  bytes.
+- Otherwise the changes after the committed sequence, and the new committed sequence, are one
+  transaction. A rename keeps the file id and publishes one `renamed` event with `previous_path`.
+
+**Uploads.** Bytes go first, through the shared transfer contract
+(`ratatoskr-blob-transfer-contracts`) on the `transfer` route class of Edge:
+`POST .../blobs` opens a session (`201`), `PUT .../blobs/{token}/chunks/{index}` takes the raw
+bytes of one chunk, `GET .../blobs/{token}/status` answers the resume view, and
+`POST .../blobs/{token}/finalize` with `{"resumption_token": ...}` answers `200` with the outcome
+`stored` or `digest_mismatch`. Bytes with another SHA-256 than the declared one are deleted, and
+no blob is registered. At most 32 sessions are open, each for one hour, and a declaration over the
+size limit (64 MiB) answers `400` with `notes.request.invalid`. A restart forgets the open
+sessions; the device opens a new one.
+
+**Manifest.** When a device cannot prove that it saw every change, it sends
+`POST /v1/notes/connections/{id}/manifest` with `{"entries": [{"path", "sha256",
+"length_bytes"}]}`, every file of the vault, at most 100 000 entries. The answer is
+`{"needed_sha256": [...], "committed_sequence": n}`. When Notes does not hold the bytes of an
+indexed entry, `needed_sha256` lists their hashes and nothing is recorded. The device uploads them
+and sends the manifest again. Then one transaction records `deleted` for each file that the
+manifest does not name, `renamed` when exactly one missing path and exactly one new path have the
+same hash, `updated` for each changed hash, and `created` for each new path. A manifest does not
+change the committed sequence.
 
 ## Template units
 
@@ -201,7 +263,10 @@ one-time code and is never stored.
 - [ ] The pull-only session of spike 3.3 and its replay test (tasks 6.5 and 6.6).
 - [x] Index, file events and the read API (group 7), and the connect operation of workspace design
   D10 (notes tasks 7.9 and 7.10).
-- [ ] Device channel routes (group 8).
+- [x] Device channel routes (group 8, tasks 8.1 to 8.8): change batches, uploads and the
+  manifest.
+- [x] Review follow-ups of group 7 (tasks 8.9 to 8.16): a case-only rename, `.obsidian/` and
+  `.trash/` by path key, the end of a device connect, and the correlation of the reports.
 
 ## Development
 

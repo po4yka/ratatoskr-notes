@@ -138,8 +138,9 @@ An unknown `RATATOSKR__` key stops the start with exit 78.
 database that has no `notes` schema. There are no migrations: a schema change edits `schema.sql`
 in place, and the next test database has it.
 A database made before a part of `schema.sql` does not get that part: the column `logged_in_at`,
-the columns `excluded_folders` and `last_sequence` of `notes.connections`, the column `position`
-of `notes.outbox`, or the tables `notes.files`, `notes.revisions` and `notes.path_collisions`. Drop
+the columns `excluded_folders`, `last_sequence` and `device_sequence` of `notes.connections`, the
+column `position` of `notes.outbox`, the tables `notes.files` and `notes.revisions`, or the table
+`notes.path_collisions` with the columns `revision`, `media_type` and `length_bytes`. Drop
 its `notes` schema (`drop schema notes cascade`), and the next start of the service makes it
 again from `schema.sql` (AGENTS.md, Development status: no migrations).
 
