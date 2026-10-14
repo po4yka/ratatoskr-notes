@@ -115,3 +115,11 @@ the workspace task list with the same numbers.
 - [x] 8.14 GREEN: complete the connect operation of a `plugin` or `cli` connection after its first applied manifest, and fail the connection and its operation with `notes.channel.manifest_missing` when no manifest is applied within 30 minutes of the connect, also across a restart of the service. Verify 8.13.
 - [x] 8.15 RED: `services/notes/tests/connect_operation.rs::reports_correlate_to_their_operation` asserts that each `platform.operation.reported.v1` of a connect has the `correlation_id` `operation:<operation id>`, as the shared report builder of `ratatoskr-contracts` and the other reporters of the fleet set it. Confirm that it fails by assertion, because a report correlates to its own event (`event:<event id>`).
 - [x] 8.16 GREEN: give each report of the connect operation the correlation `operation:<operation id>`. Verify 8.15 and every test of `connect_operation.rs`.
+
+## 8 (continued). Empty files on the device channels (workspace tasks 8.17 and 8.18)
+
+The shared transfer contract refuses a declaration of 0 bytes, so a device cannot upload an empty
+file, and a batch or a manifest that names one could never be committed.
+
+- [x] 8.17 RED: `services/notes/tests/device_channel.rs::empty_file_needs_no_upload` asserts that an upload of 0 bytes is refused with `400`, that a batch with a `created` change of 0 bytes is committed without an upload, and that a manifest with two empty files names no needed hash and records both. Confirm that it fails by assertion, because the batch answers `notes.channel.bytes_missing`.
+- [ ] 8.18 GREEN: put the blob of no bytes in the blob store when a batch or a manifest names its SHA-256. Verify 8.17.

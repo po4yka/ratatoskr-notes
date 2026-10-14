@@ -752,3 +752,57 @@ async fn manifest_deadline_holds_after_a_restart() {
 
     channel.cleanup().await;
 }
+
+#[tokio::test]
+async fn empty_file_needs_no_upload() {
+    let channel = Channel::new().await;
+    let connection = channel.plugin_connection(OWNER, "vault-key-empty").await;
+
+    // The transfer contract refuses a declaration of 0 bytes, so a device cannot upload an empty
+    // file. Notes takes the SHA-256 of no bytes without an upload.
+    let opened = channel
+        .device_call(
+            connection,
+            "blobs",
+            json!({
+                "declared_size_bytes": 0,
+                "media_type": "text/markdown",
+                "digest": { "algorithm": "sha256", "hex": sha256(b"") },
+                "chunk_size_bytes": 65_536,
+            }),
+        )
+        .await;
+    let batch = channel
+        .batch(
+            OWNER,
+            connection,
+            vec![change(1, "created", "Empty.md", b"")],
+        )
+        .await;
+    let manifest = channel
+        .device_call(
+            connection,
+            "manifest",
+            json!({ "entries": [entry("Empty.md", b""), entry("Blank.canvas", b"")] }),
+        )
+        .await;
+
+    assert_eq!(opened.status, StatusCode::BAD_REQUEST, "{:?}", opened.body);
+    assert_eq!(batch.status, StatusCode::OK, "{:?}", batch.body);
+    assert_eq!(batch.body["committed_sequence"], 1);
+    assert_eq!(manifest.status, StatusCode::OK, "{:?}", manifest.body);
+    assert_eq!(
+        manifest.body["needed_sha256"],
+        json!([]),
+        "no bytes are needed for an empty file"
+    );
+    let changes = channel.changes(connection).await;
+    let paths: Vec<&str> = changes
+        .iter()
+        .map(|change| change["path"].as_str().unwrap_or_default())
+        .collect();
+    assert_eq!(paths, ["Empty.md", "Blank.canvas"]);
+    assert_eq!(changes[0]["blob"]["length_bytes"], 0);
+
+    channel.cleanup().await;
+}
