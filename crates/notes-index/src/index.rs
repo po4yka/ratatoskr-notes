@@ -2,6 +2,8 @@
 
 use serde_json::{Map, Value};
 
+use crate::{frontmatter, markdown};
+
 /// The index of one Markdown note.
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct NoteIndex {
@@ -84,8 +86,16 @@ pub struct FrontmatterLink {
 }
 
 /// The index of the note `text`.
+///
+/// The frontmatter is the YAML block between two `---` lines at the start of the note. The body
+/// is `CommonMark` with the Obsidian extensions of workspace design D8.
 #[must_use]
 pub fn parse(text: &str) -> NoteIndex {
-    let _ = text;
-    NoteIndex::default()
+    let mut index = NoteIndex::default();
+    let (frontmatter, body_start) = frontmatter::split(text);
+    if let Some(yaml) = frontmatter {
+        frontmatter::read(yaml, &mut index);
+    }
+    markdown::read(text.get(body_start..).unwrap_or_default(), &mut index);
+    index
 }

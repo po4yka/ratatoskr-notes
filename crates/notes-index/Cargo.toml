@@ -8,12 +8,14 @@ license.workspace      = true
 repository.workspace   = true
 
 [dependencies]
-serde.workspace      = true
-serde_json.workspace = true
+pulldown-cmark.workspace        = true
+serde.workspace                 = true
+serde_json.workspace            = true
+unicode-normalization.workspace = true
+yaml-rust2.workspace            = true
 
 [dev-dependencies]
 serde_json.workspace            = true
-unicode-normalization.workspace = true
 
 [lints]
 workspace = true

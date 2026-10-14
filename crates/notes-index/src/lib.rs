@@ -10,8 +10,11 @@
 //! The oracle is the golden output of the real Obsidian engine under
 //! `tests/fixtures/obsidian-<version>/`. A new Obsidian version adds a new directory there.
 
+mod frontmatter;
 mod index;
+mod markdown;
 mod resolve;
+mod text;
 
 pub use crate::index::{FrontmatterLink, Heading, Link, LinkForm, NoteIndex, parse};
 pub use crate::resolve::{LinkCounts, LinkGraph, Vault};

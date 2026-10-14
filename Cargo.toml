@@ -67,6 +67,11 @@ inotify = { version = "0.11", default-features = false, features = ["stream"] }
 # ---- the index of a note (workspace design D8) ----
 # Paths and link text are compared and published in Unicode NFC.
 unicode-normalization = { version = "0.1.25", default-features = false, features = ["std"] }
+# CommonMark, to find the code, the HTML comments, the math and the Markdown links of a note. The
+# Obsidian extensions (wikilinks, embeds, tags, block ids, comments) are read beside it.
+pulldown-cmark = { version = "0.13.4", default-features = false }
+# The frontmatter. YAML 1.2 core schema, so `2024-01-01` stays a string, as in Obsidian.
+yaml-rust2 = { version = "0.13", default-features = false }
 
 # ---- configuration ----
 figment = { version = "0.10", features = ["env"] }

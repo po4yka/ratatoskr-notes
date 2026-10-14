@@ -71,7 +71,7 @@ service reads only that namespace. Owner decision B: the working tree of a conne
 The numbers of this group are the numbers of the workspace tasks.
 
 - [x] 7.1 RED: commit the fixture vault and the engine output of spike 3.6 under `crates/notes-index/tests/fixtures/obsidian-1.14.4/`, and add `crates/notes-index/tests/golden.rs::index_matches_obsidian_engine_output`, which compares the links, the embeds, the frontmatter links, the resolved and unresolved links, the backlinks, the tags, the properties, the headings and the block ids of each fixture file with the stored output. Add also `parse.rs::every_link_form_is_indexed`, `parse.rs::comment_links_count_and_code_links_do_not` and `resolve.rs::same_folder_then_shortest_path_wins`. The crate `ratatoskr-notes-index` has its types and an empty parser. Confirm that the four fail by assertion.
-- [ ] 7.2 GREEN: implement the parser and the link resolution of workspace design D8. Verify the four tests of 7.1.
+- [x] 7.2 GREEN: implement the parser and the link resolution of workspace design D8. Verify the four tests of 7.1.
 - [ ] 7.3 RED: `crates/notes-index/tests/paths.rs::case_fold_collision_publishes_one`, `obsidian_config_is_never_published` and `nfd_path_is_published_as_nfc`, as workspace task 7.3 words them. Confirm that all three fail by assertion.
 - [ ] 7.4 GREEN: implement NFC paths, path keys (Unicode default case folding), collisions and exclusions (`.obsidian/`, `.trash/`, the excluded folders of the owner, and files over the size limit, 64 MiB by default). Verify 7.3.
 - [ ] 7.5 RED: in `services/notes/tests/file_events.rs`, the five tests of workspace task 7.5. Confirm that all five fail by assertion.
