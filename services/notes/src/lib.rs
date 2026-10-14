@@ -13,12 +13,14 @@
 
 pub mod admin;
 pub mod api;
+pub mod blobs;
 pub mod config;
 pub mod events;
 mod login;
 pub mod secrets;
 mod supervisor;
 pub mod systemd;
+pub mod watcher;
 
 use std::future::Future;
 use std::path::PathBuf;

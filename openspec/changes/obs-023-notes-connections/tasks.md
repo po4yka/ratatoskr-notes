@@ -36,7 +36,7 @@ The numbers of this group are the numbers of the workspace tasks.
 
 - [x] 6.1 RED: `services/notes/tests/sync_supervisor.rs::connect_starts_one_unit_in_pull_only_mode`, as workspace task 6.1 words it: with a stub `ob` that records its calls, a connect calls `sync-config --mode pull-only --configs ""` with the device name `ratatoskr-<id>` and starts `ratatoskr-notes-sync@<id>.service`, and the next start of the service starts the same unit again. Confirm that it fails because the supervisor does not exist.
 - [x] 6.2 GREEN: implement the supervisor through the systemd D-Bus API, and ship `deploy/systemd/ratatoskr-notes-sync@.service` with a provisional `MemoryMax=` until spike 3.1 measures it. The polkit rule is in the deploy role of `ratatoskr-workspace`, which must add the sync unit to `ratatoskr_template_units`. Verify 6.1.
-- [ ] 6.3 RED: `services/notes/tests/sync_watcher.rs::settled_change_becomes_one_revision`, as workspace task 6.3 words it. Confirm that it fails because the watcher does not exist.
+- [x] 6.3 RED: `services/notes/tests/sync_watcher.rs::settled_change_becomes_one_revision`, as workspace task 6.3 words it. Confirm that it fails because the watcher does not exist.
 - [ ] 6.4 GREEN: implement the inotify watcher, the settle window and the 15-minute rescan. Verify 6.3.
 - [ ] 6.5 RED: workspace task 6.5. It waits for the pull-only session that spike 3.3 records.
 - [ ] 6.6 GREEN: workspace task 6.6. It waits for 6.5.
