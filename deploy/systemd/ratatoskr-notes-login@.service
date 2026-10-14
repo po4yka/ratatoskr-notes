@@ -10,7 +10,8 @@
 #
 # The exit status names the failure. services/notes/src/login.rs reads it as ExecMainStatus:
 #   10  ob login failed, or ob sync-setup failed for another reason: notes.sync.login_failed
-#   11  ob login ended without a token, because the account needs an MFA code: notes.sync.mfa_required
+#   11  ob login ended without a token, because the account needs an MFA code:
+#       notes.sync.mfa_required
 #   12  ob sync-setup refused the end-to-end password (ob exit 2): notes.sync.e2e_password_wrong
 #   13  ob sync-setup found no remote vault with this id (ob exit 3): notes.sync.vault_not_found
 #
@@ -27,9 +28,11 @@ Type=oneshot
 # and the cleanup unit use.
 User=ratatoskr-notes-sync
 Group=ratatoskr-notes-sync
-# Owner decision B of 2026-10-14: ob sync-setup creates the tree /mnt/nvme/ratatoskr/notes/trees/<id>, which gets the group
-# ratatoskr-notes-trees and the setgid bit from the trees root, and with this umask mode 2750.
-# Step 1 sets the umask 0077 for ob login, which creates the client state /mnt/nvme/ratatoskr/notes/clients/<id> with mode 0700.
+# Owner decision B of 2026-10-14. ob sync-setup creates the tree
+# /mnt/nvme/ratatoskr/notes/trees/<id>. The tree gets the group ratatoskr-notes-trees and the setgid
+# bit from the trees root. With this umask, its mode is 2750.
+# Step 1 sets the umask 0077 for ob login. ob login creates the client state
+# /mnt/nvme/ratatoskr/notes/clients/<id> with mode 0700.
 UMask=0027
 # ob keeps its state under $XDG_CONFIG_HOME/obsidian-headless on Linux (spike 3.2).
 Environment=HOME=/mnt/nvme/ratatoskr/notes/clients/%i

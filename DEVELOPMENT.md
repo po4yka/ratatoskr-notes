@@ -66,8 +66,11 @@ is done when its command started, as for `Type=exec`. A test can hold each login
 first command until it releases it. A stop of a login
 unit that runs ends its start job with `canceled` and kills its command, as systemd does.
 
-`sync_watcher.rs::settled_change_becomes_one_revision` runs under paused tokio time and reads
-inotify, so it runs on Linux only. On macOS it is ignored, and the watcher there only rescans.
+`sync_watcher.rs::settled_change_becomes_one_revision` and
+`sync_watcher.rs::linked_folder_does_not_leak_outside_content` run under paused tokio time and read
+inotify, so they run on Linux only. On macOS they are ignored, and the watcher there only rescans.
+`sync_watcher.rs::linked_tree_root_leaks_no_outside_content` needs only the first read of the
+tree, so it runs on every platform.
 
 `blob_setgid.rs::strict_umask_cannot_drop_setgid` changes the umask of the process and the
 credentials of one thread, so it runs on Linux only, alone in its file. As root it prepares the blob
@@ -141,9 +144,9 @@ The host needs, before the first `sync` connect: the user `ratatoskr-notes-sync`
 the owner `ratatoskr-notes-sync` and mode 0700; `/run/ratatoskr-notes`
 owned by `ratatoskr-notes` (`RuntimeDirectory=` of the service unit); the key file; and `ob` at
 `/usr/bin/ob`. The service unit also needs `UMask=0027` for the blob root. The service reads the
-journal namespace `ratatoskr-notes-sync` of the sync units with `/usr/bin/journalctl`, so the host
-needs this tmpfiles.d entry, which gives the group `ratatoskr-notes` read access to that namespace
-and to no other journal (`%m` is the machine id):
+journal namespace `ratatoskr-notes-sync` of the sync units with `/usr/bin/journalctl`. So the host
+needs this tmpfiles.d entry. It gives the group `ratatoskr-notes` read access to that namespace and
+to no other journal (`%m` is the machine id):
 
 ```text
 d  /var/log/journal/%m.ratatoskr-notes-sync 2755 root systemd-journal - -

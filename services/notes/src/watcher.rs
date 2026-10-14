@@ -14,16 +14,21 @@
 //! Linux it opens each file and each directory with `openat2` and
 //! `RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS` from the root of the tree, and elsewhere it opens each
 //! component with `O_NOFOLLOW`. The state of a file is the `fstat` of the open file, and the bytes
-//! of a revision come from the same open file. So a link in the tree, also one that replaces a
-//! watched directory, never makes a revision of a file outside it. Other platforms than Linux have
+//! of a revision come from the same open file. The watcher opens the root of the tree once, at its
+//! start, without following a link, and keeps it open. Every read starts from that root, not from
+//! the path of the tree. So a link in the tree, or in place of the tree, never makes a revision of a
+//! file outside it. The inotify watches use paths, but they only tell the watcher which path to
+//! read. Other platforms than Linux have
 //! no inotify, and there the watcher only rescans. Paths are not logged: a file name is the owner's
 //! content.
 
 use std::collections::{HashMap, HashSet};
 use std::ffi::OsStr;
 use std::fs::File;
+use std::os::fd::{AsFd as _, BorrowedFd, OwnedFd};
 use std::os::unix::ffi::OsStrExt as _;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use rustix::fs::{AtFlags, Dir, FileType, OFlags};
@@ -71,9 +76,17 @@ pub fn watch(
     stop: CancellationToken,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
+        let root = match beneath::open_root(&tree) {
+            Ok(root) => Arc::new(root),
+            Err(error) => {
+                tracing::error!(%error, "the working tree cannot be opened, or it is a symbolic link; the watcher stops");
+                return;
+            }
+        };
         let mut events = events::Events::open();
         let mut watcher = Watcher {
             tree,
+            root,
             blobs,
             changes,
             settled: HashMap::new(),
@@ -131,8 +144,8 @@ impl FileState {
 
 /// Open the regular file at `path` of the tree, never through a symbolic link and never outside
 /// the tree, and take its state from the open file.
-fn open_file(tree: &Path, path: &Path) -> Option<(File, FileState)> {
-    let file = File::from(beneath::open(tree, path, OFlags::RDONLY | OFlags::NONBLOCK).ok()?);
+fn open_file(root: BorrowedFd<'_>, path: &Path) -> Option<(File, FileState)> {
+    let file = File::from(beneath::open(root, path, OFlags::RDONLY | OFlags::NONBLOCK).ok()?);
     let state = FileState::of(&file)?;
     Some((file, state))
 }
@@ -141,12 +154,12 @@ fn open_file(tree: &Path, path: &Path) -> Option<(File, FileState)> {
 /// `state`, before and after the copy, which reads the same open file. `None` when the file
 /// changed or left the tree. It blocks.
 fn copy_settled(
-    tree: &Path,
+    root: BorrowedFd<'_>,
     blobs: &BlobStore,
     path: &Path,
     state: FileState,
 ) -> std::io::Result<Option<StoredBlob>> {
-    let Some((file, before)) = open_file(tree, path) else {
+    let Some((file, before)) = open_file(root, path) else {
         return Ok(None);
     };
     if before != state {
@@ -166,11 +179,11 @@ struct Found {
 }
 
 /// Read the directory `top` of the tree and every directory under it. It blocks.
-fn walk(tree: &Path, top: PathBuf) -> Found {
+fn walk(root: BorrowedFd<'_>, top: PathBuf) -> Found {
     let mut found = Found::default();
     let mut open = vec![top];
     while let Some(directory) = open.pop() {
-        let opened = beneath::open(tree, &directory, OFlags::RDONLY | OFlags::DIRECTORY)
+        let opened = beneath::open(root, &directory, OFlags::RDONLY | OFlags::DIRECTORY)
             .and_then(|descriptor| Ok(Dir::new(descriptor)?));
         let mut entries = match opened {
             Ok(entries) => entries,
@@ -188,7 +201,7 @@ fn walk(tree: &Path, top: PathBuf) -> Found {
             match kind_of(&entries, name, entry.file_type()) {
                 FileType::Directory => open.push(path),
                 FileType::RegularFile => {
-                    if let Some((_, state)) = open_file(tree, &path) {
+                    if let Some((_, state)) = open_file(root, &path) {
                         found.files.push((path, state));
                     }
                 }
@@ -225,7 +238,11 @@ struct Pending {
 
 /// The state of one watcher. Every method that sends returns `false` when the receiver is gone.
 struct Watcher {
+    /// The path of the tree, for the inotify watches only.
     tree: PathBuf,
+    /// The root of the tree, opened once at the start without following a link. Every file and
+    /// every directory is opened beneath it.
+    root: Arc<OwnedFd>,
     blobs: BlobStore,
     changes: mpsc::Sender<TreeChange>,
     /// The state of each file that became a revision.
@@ -236,7 +253,7 @@ struct Watcher {
 impl Watcher {
     /// The state of a regular file of the tree, or `None` when it is not one.
     fn stat(&self, path: &Path) -> Option<FileState> {
-        open_file(&self.tree, path).map(|(_, state)| state)
+        open_file(self.root.as_fd(), path).map(|(_, state)| state)
     }
 
     /// The earliest time at which a pending file is settled.
@@ -283,10 +300,10 @@ impl Watcher {
     /// watch each directory, observe each file, and check each known file under `top` that the
     /// read did not find. The empty path is the whole tree.
     async fn scan(&mut self, events: &mut events::Events, top: PathBuf) -> bool {
-        let tree = self.tree.clone();
+        let root = Arc::clone(&self.root);
         let walked = tokio::task::spawn_blocking({
             let top = top.clone();
-            move || walk(&tree, top)
+            move || walk(root.as_fd(), top)
         })
         .await;
         let found = match walked {
@@ -367,11 +384,12 @@ impl Watcher {
         if self.settled.get(&path) == Some(&state) {
             return true;
         }
-        let tree = self.tree.clone();
+        let root = Arc::clone(&self.root);
         let blobs = self.blobs.clone();
         let source = path.clone();
         let copied =
-            tokio::task::spawn_blocking(move || copy_settled(&tree, &blobs, &source, state)).await;
+            tokio::task::spawn_blocking(move || copy_settled(root.as_fd(), &blobs, &source, state))
+                .await;
         let blob = match copied {
             Ok(Ok(Some(blob))) => blob,
             Ok(Ok(None)) => return self.observe(path).await,
@@ -399,28 +417,47 @@ impl Watcher {
 
 /// Opens a path of a tree without a symbolic link in any component and without leaving the tree.
 mod beneath {
-    use std::os::fd::OwnedFd;
+    use std::os::fd::{BorrowedFd, OwnedFd};
     use std::path::Path;
 
     use rustix::fs::{Mode, OFlags};
 
-    /// Open `path`, relative to the root of `tree`, with `flags`. The empty path is the root.
+    /// The flags of each directory that the watcher opens.
+    const DIRECTORY: OFlags = OFlags::RDONLY
+        .union(OFlags::DIRECTORY)
+        .union(OFlags::NOFOLLOW)
+        .union(OFlags::CLOEXEC);
+
+    /// Open the root of `tree`: open its parent by path, then open the tree in the parent without
+    /// following a link. The parent is the trees root, which the host keeps. The tree belongs to
+    /// the user of `ob`, who can put a link in its place.
+    pub(super) fn open_root(tree: &Path) -> std::io::Result<OwnedFd> {
+        let (Some(parent), Some(name)) = (tree.parent(), tree.file_name()) else {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "a tree has a parent and a name",
+            ));
+        };
+        let parent = rustix::fs::open(parent, DIRECTORY, Mode::empty())?;
+        Ok(rustix::fs::openat(&parent, name, DIRECTORY, Mode::empty())?)
+    }
+
+    /// Open `path`, relative to `root`, with `flags`. The empty path is the root.
     #[cfg(target_os = "linux")]
-    pub(super) fn open(tree: &Path, path: &Path, flags: OFlags) -> std::io::Result<OwnedFd> {
+    pub(super) fn open(
+        root: BorrowedFd<'_>,
+        path: &Path,
+        flags: OFlags,
+    ) -> std::io::Result<OwnedFd> {
         use rustix::fs::ResolveFlags;
 
-        let root = rustix::fs::open(
-            tree,
-            OFlags::PATH | OFlags::DIRECTORY | OFlags::CLOEXEC,
-            Mode::empty(),
-        )?;
         let path = if path.as_os_str().is_empty() {
             Path::new(".")
         } else {
             path
         };
         Ok(rustix::fs::openat2(
-            &root,
+            root,
             path,
             flags | OFlags::NOFOLLOW | OFlags::CLOEXEC,
             Mode::empty(),
@@ -428,14 +465,17 @@ mod beneath {
         )?)
     }
 
-    /// Open `path`, relative to the root of `tree`, with `flags`, one component at a time, each
-    /// with `O_NOFOLLOW`. The empty path is the root.
+    /// Open `path`, relative to `root`, with `flags`, one component at a time, each with
+    /// `O_NOFOLLOW`. The empty path is the root.
     #[cfg(not(target_os = "linux"))]
-    pub(super) fn open(tree: &Path, path: &Path, flags: OFlags) -> std::io::Result<OwnedFd> {
+    pub(super) fn open(
+        root: BorrowedFd<'_>,
+        path: &Path,
+        flags: OFlags,
+    ) -> std::io::Result<OwnedFd> {
         use std::path::Component;
 
-        let directory_flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC;
-        let mut directory = rustix::fs::open(tree, directory_flags, Mode::empty())?;
+        let mut directory = rustix::fs::openat(root, ".", DIRECTORY, Mode::empty())?;
         let mut components = path.components().peekable();
         while let Some(component) = components.next() {
             let Component::Normal(name) = component else {
@@ -445,7 +485,7 @@ mod beneath {
                 ));
             };
             let last = components.peek().is_none();
-            let flags = if last { flags } else { directory_flags };
+            let flags = if last { flags } else { DIRECTORY };
             directory = rustix::fs::openat(
                 &directory,
                 name,
@@ -627,7 +667,9 @@ mod events {
 mod tests {
     use std::path::Path;
 
-    use super::open_file;
+    use std::os::fd::AsFd as _;
+
+    use super::{beneath, open_file};
 
     #[test]
     fn a_file_opens_only_beneath_the_tree_and_without_a_link() {
@@ -642,13 +684,18 @@ mod tests {
         std::os::unix::fs::symlink(outside.join("secret.md"), tree.join("link.md"))
             .expect("a linked file");
 
-        assert!(open_file(&tree, Path::new("Daily/note.md")).is_some());
-        assert!(open_file(&tree, Path::new("Linked/secret.md")).is_none());
-        assert!(open_file(&tree, Path::new("link.md")).is_none());
-        assert!(open_file(&tree, Path::new("../outside/secret.md")).is_none());
+        let root = beneath::open_root(&tree).expect("the root of the tree");
+        let root = root.as_fd();
+        assert!(open_file(root, Path::new("Daily/note.md")).is_some());
+        assert!(open_file(root, Path::new("Linked/secret.md")).is_none());
+        assert!(open_file(root, Path::new("link.md")).is_none());
+        assert!(open_file(root, Path::new("../outside/secret.md")).is_none());
+        assert!(open_file(root, Path::new("Daily")).is_none(), "a directory");
+        let linked_tree = host.path().join("linked-tree");
+        std::os::unix::fs::symlink(&tree, &linked_tree).expect("a linked tree");
         assert!(
-            open_file(&tree, Path::new("Daily")).is_none(),
-            "a directory"
+            beneath::open_root(&linked_tree).is_err(),
+            "the root of a tree is not opened through a link"
         );
     }
 }

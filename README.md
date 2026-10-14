@@ -115,12 +115,12 @@ reads that one line and no other. When the line repeats for 5 minutes, the conne
 no login: the owner removes the connection and connects again. The line comes from
 `obsidian-headless` 0.0.14 and is provisional until spike 3.1 sees a real expired token.
 
-The service user is not in the group `systemd-journal`: it reads only the namespace of the sync
-units, through an ACL that the deploy role puts on the directory of the namespace. At start the
-service checks that it can read the namespace; when it cannot, it logs
+The service user is not in the group `systemd-journal`. It reads only the namespace of the sync
+units. The deploy role gives it this access with an ACL on the directory of the namespace. At start
+the service checks that it can read the namespace. When it cannot, it logs
 `notes.sync.journal_unreadable` with the reason that `journalctl` gives, and an expired login is
-not found. When the follower ends, the service starts a new one after 1 second, and doubles the
-wait up to 1 minute while the follower keeps ending. To read the journal of a sync unit, run
+not found. When the follower ends, the service starts a new one after 1 second. It doubles the
+wait, up to 1 minute, while the follower keeps ending. To read the journal of a sync unit, run
 `journalctl --namespace=ratatoskr-notes-sync --unit=ratatoskr-notes-sync@<id>.service`.
 
 ## Blob root and its read group

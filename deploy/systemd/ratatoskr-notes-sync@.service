@@ -1,8 +1,9 @@
 # Runs the continuous Obsidian Sync client of one `sync` connection: `ob sync --continuous` into the
 # working tree of the connection. The instance name is the connection id. ratatoskr-notes starts it
 # through the systemd D-Bus API after the first login of the connection succeeded, and again at each
-# start of the service; it stops it at a disconnect and when the Sync login expired (workspace change
-# add-notes-vault-connections, design D3). The unit is not enabled: only the service starts it.
+# start of the service. It stops it at a disconnect and when the Sync login expired (workspace
+# change add-notes-vault-connections, design D3). The unit is not enabled: only the service starts
+# it.
 #
 # Every start first runs `ob sync-config`: pull-only mode, no sync of the `.obsidian` configuration,
 # and the device name ratatoskr-<id> in the Sync history. Notes never writes into a vault in this
@@ -17,9 +18,9 @@
 # role of ratatoskr-workspace, because a release can change the line.
 #
 # services/notes/tests/sync_supervisor.rs runs the ExecStartPre= and ExecStart= lines of this file
-# through the fake systemd bus, with the trees root and the clients root moved into a temporary
-# directory and `ob`
-# replaced by a stub. Keep each command on one line, and use no `$` and no backslash.
+# through the fake systemd bus. The fake moves the trees root and the clients root into a temporary
+# directory and replaces `ob` by a stub. Keep each command on one line, and use no `$` and no
+# backslash.
 [Unit]
 Description=Ratatoskr notes: continuous Obsidian Sync of connection %i
 Documentation=https://github.com/po4yka/ratatoskr-notes
@@ -34,10 +35,10 @@ Type=exec
 # The owner of the working tree and of the client state, which the login unit created.
 User=ratatoskr-notes-sync
 Group=ratatoskr-notes-sync
-# Owner decision B of 2026-10-14: the trees root /mnt/nvme/ratatoskr/notes/trees has the group ratatoskr-notes-trees and the
-# setgid bit, so each file that ob writes in the tree gets that group, and with this umask mode 0640
-# (0750 for a directory). ratatoskr-notes, the only member of the group, reads the tree. The client
-# state stays mode 0700, which the login unit set.
+# Owner decision B of 2026-10-14. The trees root /mnt/nvme/ratatoskr/notes/trees has the group
+# ratatoskr-notes-trees and the setgid bit. So each file that ob writes in the tree gets that group.
+# With this umask, a file gets mode 0640 and a directory mode 2750. ratatoskr-notes is the only
+# member of the group, and it reads the tree. The client state keeps mode 0700 from the login unit.
 UMask=0027
 # ob keeps its state under $XDG_CONFIG_HOME/obsidian-headless on Linux (spike 3.2).
 Environment=HOME=/mnt/nvme/ratatoskr/notes/clients/%i
@@ -46,9 +47,10 @@ ExecStartPre=/usr/bin/ob sync-config --path /mnt/nvme/ratatoskr/notes/trees/%i -
 ExecStart=/usr/bin/ob sync --continuous --path /mnt/nvme/ratatoskr/notes/trees/%i
 Restart=on-failure
 RestartSec=30
-# The journal namespace that ratatoskr-notes reads (SYNC_LOG_NAMESPACE in services/notes/src/systemd.rs).
-# systemd starts systemd-journald@ratatoskr-notes-sync.service for it. Check it on a real Debian 12
-# host (systemd 252): the deploy role gives the group ratatoskr-notes read access to its directory.
+# The journal namespace that ratatoskr-notes reads (SYNC_LOG_NAMESPACE in
+# services/notes/src/systemd.rs). systemd starts systemd-journald@ratatoskr-notes-sync.service for
+# it. The deploy role gives the group ratatoskr-notes read access to its directory. Check this on a
+# real Debian 12 host (systemd 252).
 LogNamespace=ratatoskr-notes-sync
 # ob stops cleanly on SIGTERM (spike 3.2). A disconnect waits for this stop, and Edge ends a request
 # after 300 seconds.

@@ -80,8 +80,8 @@ the working tree at `/mnt/nvme/ratatoskr/notes/trees/<id>` (group `ratatoskr-not
 only member is `ratatoskr-notes`, mode 2750) and the client state at
 `/mnt/nvme/ratatoskr/notes/clients/<id>` (mode 0700); `systemd::tree_dir` and `systemd::client_dir`
 build these paths, and `tests/unit_files.rs` compares them with the units. The sync and login units
-run with `UMask=0027`, so each file of a tree gets the group of the setgid trees root and mode 0640,
-and the service reads the tree through that group. The login unit sets the umask 0077 for
+run with `UMask=0027`. So each file of a tree gets the group of the setgid trees root and mode 0640.
+The service reads the tree through that group. The login unit sets the umask 0077 for
 `ob login`, which creates the client state. It runs `ob sync-unlink --path <tree>` with
 the `-` prefix, because a connection whose setup never finished has no Sync configuration and `ob`
 then exits 3. It then deletes the working tree and the client state with `rm -rf`, so it may write
@@ -175,11 +175,13 @@ queue (`IN_Q_OVERFLOW`) makes the watcher read the whole tree. A new directory m
 directory only, and a removed directory makes it check the files that it knew under it. Each read
 of the tree runs on the blocking pool. The watcher sends `TreeChange::Revision` and
 `TreeChange::Removed` to a channel. It reads regular files only, and never through a symbolic link
-or outside the tree: `ob` writes the tree, and it can put a link where a watched directory was. On
-Linux the watcher opens each file and each directory with `openat2` and `RESOLVE_BENEATH |
-RESOLVE_NO_SYMLINKS` from the root of the tree; on other platforms it opens each component with
-`O_NOFOLLOW`. The state of a file is the `fstat` of the open file, and the bytes of a revision come
-from the same open file, which must have the settled state before and after the copy. Other
+or outside the tree: `ob` writes the tree, and it can put a link where a watched directory was. The
+watcher opens the root of the tree once, at its start. It opens the parent of the tree by path, and
+then the tree with `O_NOFOLLOW`, so a link in place of the tree stops the watcher. It keeps that
+root open. On Linux it opens each file and each directory beneath that root with `openat2` and
+`RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS`. On other platforms it opens each component with
+`O_NOFOLLOW`. The state of a file is the `fstat` of the open file. The bytes of a revision come from
+the same open file. That file must have the settled state before and after the copy. Other
 platforms have no inotify, and there the watcher only rescans; the tests of the watcher therefore
 run on Linux.
 
@@ -205,13 +207,13 @@ left behind, and the store writes the directory of a new blob to disk after the 
 
 The sync units log to the journal namespace `ratatoskr-notes-sync` (`LogNamespace=`, owner decision
 A of 2026-10-14). The supervisor follows that namespace through `SystemdBus::follow_journal`, with
-one follower for all units: each follower is one `journalctl` process, and the host has no spare
+one follower for all units. Each follower is one `journalctl` process, and the host has no spare
 memory for one process per connection. The production bus runs `journalctl
 --namespace=ratatoskr-notes-sync --follow --lines=0 --output=json
 --output-fields=MESSAGE,_SYSTEMD_UNIT` and reads the unit, the monotonic time and the message of
 each entry. `_SYSTEMD_UNIT` is a trusted field: journald sets it, and `ob` cannot. The supervisor
-counts the lines of a unit only after it started that unit, and starts the follower before the
-first start of a unit, so no line of that start is lost. Only one line counts: a message that starts with
+counts the lines of a unit only after it started that unit. It starts the follower before the first
+start of a unit, so no line of that start is lost. Only one line counts: a message that starts with
 `Failed to authenticate:`, also after `Error: `. `ob` 0.0.14 throws
 `new Error("Failed to authenticate: " + msg)` when the Sync server refuses its token, and
 `getServer()` logs the error with `console.error`, so the journal line is
@@ -229,16 +231,16 @@ The line and the 5-minute rule are PROVISIONAL: they come from the code of `obsi
 0.0.14, not from an expired token. Spike 3.1 confirms them, and the deploy role pins the version,
 because a release can change the line.
 
-The service user needs read access to the namespace only, not to the system journal: the deploy
+The service user needs read access to the namespace only, not to the system journal. The deploy
 role gives the group `ratatoskr-notes` an ACL on `/var/log/journal/<machine id>.ratatoskr-notes-sync`
 (DEVELOPMENT.md holds the tmpfiles.d entry). At start the supervisor runs `journalctl
 --namespace=ratatoskr-notes-sync --lines=0`, which exits 1 when it can open no file of the
 namespace, and logs `notes.sync.journal_unreadable` with the stderr of `journalctl`. The follower
 keeps its stderr too, and logs each line with the same code. When the follower ends, the supervisor
-logs the code and starts a new follower after 1 second, then after twice the last wait, up to 1
-minute; a follower that ran for 1 minute starts the wait at 1 second again. The run of failures of a
-unit stays across a new follower, but the lines between two followers are lost: `ob` repeats the
-line every 30 seconds, so a gap delays the expiry and does not hide it.
+logs the code and starts a new follower after 1 second. Each next wait is twice the last wait, up
+to 1 minute. After a follower that ran for 1 minute, the wait starts at 1 second again. The run of
+failures of a unit stays across a new follower. The lines between two followers are lost, but `ob`
+repeats the line every 30 seconds, so a gap delays the expiry and does not hide it.
 
 ## Risks / Trade-offs
 
@@ -255,15 +257,15 @@ line every 30 seconds, so a gap delays the expiry and does not hide it.
   only root can create `/run/ratatoskr-notes`. The service unit that ships with group 6 needs
   `RuntimeDirectory=ratatoskr-notes`.
 - The login unit and the cleanup unit may write the two roots, `/mnt/nvme/ratatoskr/notes/trees`
-  and `/mnt/nvme/ratatoskr/notes/clients`, because the directories of a new connection do not exist
-  when the login unit starts, a `ReadWritePaths=` entry must exist, and a removal removes an entry
-  of each root. Every directory there belongs to `ratatoskr-notes-sync`. The deploy role must create
-  the trees root with that owner, the group `ratatoskr-notes-trees` and mode 2750, and the clients
-  root with that owner and mode 0700, and must add the three units to `ratatoskr_template_units`
-  (workspace task 14.7).
+  and `/mnt/nvme/ratatoskr/notes/clients`. The directories of a new connection do not exist when the
+  login unit starts, and a `ReadWritePaths=` entry must exist. A removal removes an entry of each
+  root. Every directory there belongs to `ratatoskr-notes-sync`. The deploy role must create the
+  trees root with that owner, the group `ratatoskr-notes-trees` and mode 2750. It must create the
+  clients root with that owner and mode 0700. It must add the three units to
+  `ratatoskr_template_units` (workspace task 14.7).
 - The setgid bit and the group of a tree come from the trees root, and the mode of each file from
-  `UMask=0027`. A file that `ob` makes with an explicit mode that is stricter than 0640 is not
-  readable by the service; the watcher then skips it and logs nothing about its name.
+  `UMask=0027`. `ob` can make a file with an explicit mode that is stricter than 0640. The service
+  cannot read that file. The watcher then skips it and logs nothing about its name.
 - `no_secret_in_any_cmdline` runs on Linux only. A run on macOS ignores it, so the Linux CI job is
   the check.
 - A reconnect of a `login_expired` connection is a new `POST`, and the connection still holds its

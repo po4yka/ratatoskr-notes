@@ -5,8 +5,8 @@
 # finish (workspace change add-notes-vault-connections, design D3).
 #
 # services/notes/tests/connections.rs runs the ExecStart= lines of this file through the fake
-# systemd bus, with the trees root, the clients root and `ob` moved into a temporary directory. Keep each
-# command on one line, without quotes or shell syntax.
+# systemd bus. The fake moves the trees root, the clients root and `ob` into a temporary directory.
+# Keep each command on one line, without quotes or shell syntax.
 [Unit]
 Description=Ratatoskr notes: remove the Sync client of connection %i
 Documentation=https://github.com/po4yka/ratatoskr-notes
