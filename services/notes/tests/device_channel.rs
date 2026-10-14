@@ -10,6 +10,8 @@
 
 mod support;
 
+use std::time::Duration;
+
 use axum::Router;
 use axum::body::Body;
 use axum::http::{Method, Request, StatusCode};
@@ -24,7 +26,7 @@ use uuid::Uuid;
 use crate::support::systemd::FakeSystemd;
 use crate::support::{
     Answer, DEVICE_ID_HEADER, DEVICE_KIND_HEADER, USER_HEADER, connect, connection_id, device_of,
-    send_with,
+    send_with, terminal_report,
 };
 use tower::ServiceExt as _;
 
@@ -33,7 +35,7 @@ const OWNER: Uuid = Uuid::from_u128(0x0192_0000_0000_7000_8000_0000_0000_0dc1);
 /// The domain router of one test database, with its blob store.
 struct Channel {
     fixture: TestDatabase,
-    _systemd: FakeSystemd,
+    systemd: FakeSystemd,
     router: Router,
     blobs: BlobStore,
     scratch: tempfile::TempDir,
@@ -41,24 +43,33 @@ struct Channel {
 
 impl Channel {
     async fn new() -> Self {
+        Self::with(|state| state).await
+    }
+
+    /// A router whose state `settings` adjusts.
+    async fn with(settings: impl FnOnce(ApiState<FakeSystemd>) -> ApiState<FakeSystemd>) -> Self {
         let fixture = TestDatabase::create().await.expect("a test database");
         let systemd = FakeSystemd::new();
         let root = systemd.blob_root();
         std::fs::create_dir_all(&root).expect("the blob root");
         let blobs = BlobStore::new(root);
-        let router = domain_router(
-            ApiState::new(fixture.database.clone(), systemd.clone())
-                .with_key_file(systemd.key_file())
-                .with_credentials_dir(systemd.credentials_root())
-                .with_blobs(blobs.clone()),
-        );
-        Self {
+        let mut channel = Self {
             fixture,
-            _systemd: systemd,
-            router,
+            systemd,
+            router: Router::new(),
             blobs,
             scratch: tempfile::tempdir().expect("a scratch directory"),
-        }
+        };
+        channel.router = domain_router(settings(channel.state()));
+        channel
+    }
+
+    /// The state of the domain routes of this test database, as the service builds it at start.
+    fn state(&self) -> ApiState<FakeSystemd> {
+        ApiState::new(self.fixture.database.clone(), self.systemd.clone())
+            .with_key_file(self.systemd.key_file())
+            .with_credentials_dir(self.systemd.credentials_root())
+            .with_blobs(self.blobs.clone())
     }
 
     /// A `plugin` connection of `owner`, from the device of `owner`.
@@ -648,6 +659,96 @@ async fn manifest_reconciles_offline_changes() {
         offline.contains(&("created".to_owned(), "new.md".to_owned(), Value::Null)),
         "{offline:#?}"
     );
+
+    channel.cleanup().await;
+}
+
+impl Channel {
+    /// The state of a connection.
+    async fn connection_state(&self, connection_id: Uuid) -> String {
+        sqlx::query_scalar("select state from notes.connections where connection_id = $1")
+            .bind(connection_id)
+            .fetch_one(self.fixture.pool())
+            .await
+            .expect("the connection exists")
+    }
+
+    /// The number of `notes.vault.connected.v1` events of a connection.
+    async fn connected_events(&self, connection_id: Uuid) -> i64 {
+        sqlx::query_scalar(
+            "select count(*) from notes.outbox
+             where event_type = 'notes.vault.connected.v1'
+               and payload -> 'payload' ->> 'connection_id' = $1",
+        )
+        .bind(connection_id.to_string())
+        .fetch_one(self.fixture.pool())
+        .await
+        .expect("the outbox can be read")
+    }
+}
+
+/// A short bound for the first manifest, so that a test sees its end.
+const SHORT_DEADLINE: Duration = Duration::from_millis(200);
+
+#[tokio::test]
+async fn first_manifest_completes_the_device_connect() {
+    let channel = Channel::new().await;
+    let connection = channel
+        .plugin_connection(OWNER, "vault-key-first-manifest")
+        .await;
+    channel.hold(b"the first note\n");
+
+    let applied = channel
+        .device_call(
+            connection,
+            "manifest",
+            json!({ "entries": [entry("First.md", b"the first note\n")] }),
+        )
+        .await;
+    let report = terminal_report(&channel.fixture, connection).await;
+
+    assert_eq!(applied.status, StatusCode::OK, "{:?}", applied.body);
+    assert_eq!(applied.body["needed_sha256"], json!([]));
+    assert_eq!(
+        report["status"], "succeeded",
+        "the first manifest ends the connect operation: {report:?}"
+    );
+    assert_eq!(channel.connection_state(connection).await, "active");
+    assert_eq!(channel.connected_events(connection).await, 1);
+
+    channel.cleanup().await;
+}
+
+#[tokio::test]
+async fn device_connect_without_manifest_fails_in_its_bound() {
+    let channel = Channel::with(|state| state.with_manifest_deadline(SHORT_DEADLINE)).await;
+    let connection = channel
+        .plugin_connection(OWNER, "vault-key-no-manifest")
+        .await;
+
+    let report = terminal_report(&channel.fixture, connection).await;
+
+    assert_eq!(report["status"], "failed", "{report:?}");
+    assert_eq!(report["error"]["code"], "notes.channel.manifest_missing");
+    assert_eq!(channel.connection_state(connection).await, "failed");
+    assert_eq!(channel.connected_events(connection).await, 0);
+
+    channel.cleanup().await;
+}
+
+#[tokio::test]
+async fn manifest_deadline_holds_after_a_restart() {
+    let channel = Channel::new().await;
+    let connection = channel.plugin_connection(OWNER, "vault-key-restart").await;
+
+    // The next start of the service finds the connection that still waits for its manifest.
+    let restarted = channel.state().with_manifest_deadline(SHORT_DEADLINE);
+    restarted.resume_device_connects().await;
+    let report = terminal_report(&channel.fixture, connection).await;
+
+    assert_eq!(report["status"], "failed", "{report:?}");
+    assert_eq!(report["error"]["code"], "notes.channel.manifest_missing");
+    assert_eq!(channel.connection_state(connection).await, "failed");
 
     channel.cleanup().await;
 }

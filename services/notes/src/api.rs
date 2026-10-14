@@ -8,6 +8,7 @@ use std::future::Future;
 use std::path::{Path as FsPath, PathBuf};
 use std::pin::Pin;
 use std::sync::Arc;
+use std::time::Duration;
 
 use axum::extract::rejection::{JsonRejection, PathRejection};
 use axum::extract::{DefaultBodyLimit, Path, State};
@@ -59,6 +60,9 @@ pub const DEFAULT_KEY_FILE: &str = "/etc/ratatoskr/notes-secrets.key";
 /// login unit names the same path in its `LoadCredential=` lines.
 pub const DEFAULT_CREDENTIALS_DIR: &str = "/run/ratatoskr-notes/credentials";
 
+/// How long a `plugin` or `cli` connect waits for the first manifest of its device.
+pub const DEFAULT_MANIFEST_DEADLINE: Duration = Duration::from_mins(30);
+
 /// How many first logins run at the same time when the configuration does not say.
 pub const DEFAULT_MAX_LOGINS: usize = 2;
 
@@ -92,6 +96,7 @@ pub struct ApiState<B> {
     trees_root: PathBuf,
     max_file_bytes: u64,
     uploads: Uploads,
+    manifest_deadline: Duration,
 }
 
 impl<B> Clone for ApiState<B> {
@@ -111,6 +116,7 @@ impl<B> Clone for ApiState<B> {
             trees_root: self.trees_root.clone(),
             max_file_bytes: self.max_file_bytes,
             uploads: self.uploads.clone(),
+            manifest_deadline: self.manifest_deadline,
         }
     }
 }
@@ -139,8 +145,22 @@ impl<B: SystemdBus> ApiState<B> {
             trees_root,
             max_file_bytes,
             uploads: Uploads::default(),
+            manifest_deadline: DEFAULT_MANIFEST_DEADLINE,
         }
     }
+
+    /// Wait at most `deadline` for the first manifest of a `plugin` or `cli` connection instead of
+    /// [`DEFAULT_MANIFEST_DEADLINE`].
+    #[must_use]
+    pub const fn with_manifest_deadline(mut self, deadline: Duration) -> Self {
+        self.manifest_deadline = deadline;
+        self
+    }
+
+    /// Wait again for the first manifest of each `plugin` or `cli` connection that is
+    /// `connecting`. The service calls it at start.
+    #[expect(clippy::unused_async, reason = "workspace task 8.14 fills it")]
+    pub async fn resume_device_connects(&self) {}
 
     /// Watch the working trees under `root` instead of [`crate::systemd::TREES_ROOT`]. For tests:
     /// the sync units on the host write under [`crate::systemd::TREES_ROOT`].
