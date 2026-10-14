@@ -40,6 +40,10 @@ create table notes.connections (
     vault_key          text        not null,
     vault_display_name text        not null,
     state              text        not null,
+    -- When the first login and the setup of a `sync` connection succeeded. Null while the login
+    -- runs, and for the other channels. At start, the service fails each `sync` connection that is
+    -- `connecting` with no value here: a stop of the service interrupted its login.
+    logged_in_at       timestamptz,
     created_at         timestamptz not null,
     updated_at         timestamptz not null,
 
@@ -56,7 +60,9 @@ create table notes.connections (
     constraint connections_state_is_known
         check (state in ('connecting', 'active', 'login_expired', 'failed', 'removed')),
     constraint connections_updated_at_is_not_before_created_at
-        check (updated_at >= created_at)
+        check (updated_at >= created_at),
+    constraint connections_only_sync_logs_in
+        check (logged_in_at is null or channel = 'sync')
 );
 
 comment on table notes.connections is

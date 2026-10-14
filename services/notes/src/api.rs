@@ -20,7 +20,9 @@ use ratatoskr_identifiers::SafeMessage;
 use ratatoskr_notes_contracts::{VaultChannel, VaultDisplayName};
 use ratatoskr_notes_persistence::{CreateOutcome, Database, NewConnection, NewSecret, OutboxEvent};
 use secrecy::ExposeSecret as _;
-use tokio::sync::{Semaphore, oneshot};
+use tokio::sync::{OwnedSemaphorePermit, Semaphore, oneshot};
+use tokio_util::sync::CancellationToken;
+use tokio_util::task::TaskTracker;
 use uuid::Uuid;
 
 use crate::events;
@@ -47,9 +49,12 @@ pub const DEFAULT_CREDENTIALS_DIR: &str = "/run/ratatoskr-notes/credentials";
 /// How many first logins run at the same time when the configuration does not say.
 pub const DEFAULT_MAX_LOGINS: usize = 2;
 
+/// The future of one [`BeforeLogin`] pause.
+type Pause = Pin<Box<dyn Future<Output = ()> + Send>>;
+
 /// A pause between the insert of a connection and the start of its login. For tests.
 #[derive(Clone)]
-struct BeforeLogin(Arc<dyn Fn(Uuid) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync>);
+struct BeforeLogin(Arc<dyn Fn(Uuid) -> Pause + Send + Sync>);
 
 impl fmt::Debug for BeforeLogin {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -65,6 +70,8 @@ pub struct ApiState<B> {
     key_file: PathBuf,
     credentials_dir: PathBuf,
     logins: Arc<Semaphore>,
+    connects: TaskTracker,
+    stopping: CancellationToken,
     before_login: Option<BeforeLogin>,
 }
 
@@ -76,6 +83,8 @@ impl<B> Clone for ApiState<B> {
             key_file: self.key_file.clone(),
             credentials_dir: self.credentials_dir.clone(),
             logins: Arc::clone(&self.logins),
+            connects: self.connects.clone(),
+            stopping: self.stopping.clone(),
             before_login: self.before_login.clone(),
         }
     }
@@ -91,6 +100,8 @@ impl<B: SystemdBus> ApiState<B> {
             key_file: PathBuf::from(DEFAULT_KEY_FILE),
             credentials_dir: PathBuf::from(DEFAULT_CREDENTIALS_DIR),
             logins: Arc::new(Semaphore::new(DEFAULT_MAX_LOGINS)),
+            connects: TaskTracker::new(),
+            stopping: CancellationToken::new(),
             before_login: None,
         }
     }
@@ -117,11 +128,50 @@ impl<B: SystemdBus> ApiState<B> {
         self
     }
 
-    /// The step of the stop of the service for the connects that still run: none.
-    pub async fn shut_down(&self) {}
+    /// Fail the connects that still run, and wait until each one ended. The service calls it when
+    /// the stop signal arrives, and gives it the grace window.
+    ///
+    /// A connect whose login runs stops the login unit, runs the cleanup unit, and marks its
+    /// connection `failed` without its ciphertext, as after a failed login. Its request answers
+    /// `503`. A connect that starts after this call answers `503` and creates nothing.
+    pub async fn shut_down(&self) {
+        self.stopping.cancel();
+        self.connects.close();
+        self.connects.wait().await;
+    }
 
-    /// The step of the start of the service for the connections that a stop interrupted: none.
-    pub async fn reconcile_interrupted_logins(&self) {}
+    /// Fail each `sync` connection whose first login a stop of the service interrupted: stop the
+    /// sync unit and the login unit, run the cleanup unit, and mark the connection `failed`
+    /// without its ciphertext. A connection whose login finished is left alone.
+    ///
+    /// The service calls it at start, after it binds the listeners and before they accept a
+    /// request, so no connect of this process runs yet. A failure is logged and the start
+    /// continues; the connection then stays `connecting` until the next start or a disconnect.
+    pub async fn reconcile_interrupted_logins(&self) {
+        let interrupted = match self.database.interrupted_logins().await {
+            Ok(interrupted) => interrupted,
+            Err(error) => {
+                tracing::error!(%error, "the interrupted logins could not be read");
+                return;
+            }
+        };
+        for connection_id in interrupted {
+            if clean_up_sync_client(self.systemd.as_ref(), connection_id)
+                .await
+                .is_err()
+            {
+                continue;
+            }
+            match self.database.fail_connection(connection_id).await {
+                Ok(_) => {
+                    tracing::info!(%connection_id, "a login that a stop interrupted is failed");
+                }
+                Err(error) => {
+                    tracing::error!(%error, %connection_id, "an interrupted login could not be failed");
+                }
+            }
+        }
+    }
 
     /// Read the secrets key from `path` instead of [`DEFAULT_KEY_FILE`].
     #[must_use]
@@ -197,7 +247,11 @@ struct ConnectAccepted {
 /// After the checks, the connect runs to its end in a task that the request does not own. When the
 /// client goes away, the request future is dropped, but the task continues: it stops the login,
 /// runs the cleanup unit and marks the connection `failed`, so that the connection does not stay
-/// `connecting` and the vault key is free again.
+/// `connecting` and the vault key is free again. A stop of the service does the same within the
+/// grace window (see [`ApiState::shut_down`]).
+///
+/// At most the configured number of `sync` logins run at the same time. A `sync` connect over the
+/// limit answers `503` at once and creates nothing.
 async fn create_connection<B: SystemdBus>(
     State(state): State<ApiState<B>>,
     headers: HeaderMap,
@@ -217,6 +271,14 @@ async fn create_connection<B: SystemdBus>(
         _ => return Err(ApiFault::InvalidRequest),
     }
 
+    let login_permit = match &request.sync_login {
+        Some(_) => Some(Arc::clone(&state.logins).try_acquire_owned().map_err(|_| {
+            tracing::warn!("a connect is refused: the limit of concurrent logins is reached");
+            ApiFault::Unavailable
+        })?),
+        None => None,
+    };
+
     let connection_id = Uuid::now_v7();
     let sealed = match &request.sync_login {
         Some(sync_login) => seal_secrets(&state.key_file, connection_id, sync_login)?,
@@ -225,15 +287,21 @@ async fn create_connection<B: SystemdBus>(
 
     // The sender lives as long as the request. The task sees its drop as the end of the request.
     let (request_alive, request_gone) = oneshot::channel::<()>();
-    let connect = tokio::spawn(finish_connect(
-        state,
-        connection_id,
-        owner_id,
-        channel,
-        request,
-        sealed,
-        request_gone,
-    ));
+    let connects = state.connects.clone();
+    let connect = connects.spawn(async move {
+        // The place of this login is free when the connect ends, after its cleanup.
+        let _login_permit: Option<OwnedSemaphorePermit> = login_permit;
+        finish_connect(
+            state,
+            connection_id,
+            owner_id,
+            channel,
+            request,
+            sealed,
+            request_gone,
+        )
+        .await
+    });
     let finished = connect.await;
     drop(request_alive);
     finished.map_err(|error| {
@@ -251,7 +319,8 @@ async fn create_connection<B: SystemdBus>(
 }
 
 /// Insert the connection with its ciphertext and, for `sync`, run the first login. It runs in its
-/// own task, so a dropped request does not stop it halfway.
+/// own task, so a dropped request does not stop it halfway. After the stop signal it creates
+/// nothing.
 async fn finish_connect<B: SystemdBus>(
     state: ApiState<B>,
     connection_id: Uuid,
@@ -261,6 +330,9 @@ async fn finish_connect<B: SystemdBus>(
     sealed: Vec<Sealed>,
     request_gone: oneshot::Receiver<()>,
 ) -> Result<(), ApiFault> {
+    if state.stopping.is_cancelled() {
+        return Err(ApiFault::Unavailable);
+    }
     let secrets: Vec<NewSecret<'_>> = sealed
         .iter()
         .map(|sealed| NewSecret {
@@ -339,13 +411,17 @@ fn seal_secrets(
         .collect()
 }
 
-/// Write the credential files of a new `sync` connection, run its login unit, wait for it, and
-/// delete the files.
+/// Run the first login of a new `sync` connection, and record it when it succeeded.
 ///
-/// When the login fails, or the request ends while the login runs, the cleanup step stops the
-/// login unit, the cleanup unit removes what the login left in `ob-home` (a token, when only the
-/// setup step failed), and the connection becomes `failed`. When the cleanup fails, the
-/// connection stays `connecting` with its ciphertext, and the owner removes it with a disconnect.
+/// The owner can remove the connection between its insert and this step. The login then does not
+/// start, and the answer is `404`. When the owner removes it while the login runs, the login can
+/// write to `ob-home` after the cleanup of the disconnect, so the cleanup runs again.
+///
+/// When the login fails, or the request ends or the service stops while the login runs, the
+/// cleanup step stops the login unit, the cleanup unit removes what the login left in `ob-home`
+/// (a token, when only the setup step failed), and the connection becomes `failed`. When the
+/// cleanup fails, the connection stays `connecting` with its ciphertext, and the owner removes it
+/// with a disconnect, or the next start of the service fails it.
 async fn log_in<B: SystemdBus>(
     state: &ApiState<B>,
     connection_id: Uuid,
@@ -353,41 +429,33 @@ async fn log_in<B: SystemdBus>(
     sync_login: &SyncLogin,
     request_gone: oneshot::Receiver<()>,
 ) -> Result<(), ApiFault> {
-    let fault = match CredentialFiles::write(
-        &state.credentials_dir,
-        connection_id,
-        vault_id,
-        sync_login,
-    ) {
-        Ok(credentials) => {
-            // `None` when the request ended first. The wait for the unit is then dropped, and the
-            // cleanup below stops the unit.
-            let outcome = tokio::select! {
-                outcome = login::run(state.systemd.as_ref(), connection_id) => Some(outcome),
-                _ = request_gone => None,
-            };
-            // The files are deleted whatever the result of the unit.
-            drop(credentials);
-            match outcome {
-                Some(Ok(None)) => return Ok(()),
-                Some(Ok(Some(failure))) => ApiFault::Login(failure),
-                Some(Err(error)) => {
-                    tracing::error!(%error, %connection_id, "the login unit could not run");
+    let fault = match state.database.is_connecting(connection_id).await {
+        Ok(true) => match run_login(state, connection_id, vault_id, sync_login, request_gone).await
+        {
+            Ok(()) => match state.database.record_login(connection_id).await {
+                Ok(true) => return Ok(()),
+                Ok(false) => {
+                    tracing::info!(%connection_id, "the connection was removed while its login ran; the cleanup runs again");
+                    ApiFault::NotFound
+                }
+                Err(error) => {
+                    tracing::error!(%error, %connection_id, "a finished login could not be recorded");
                     ApiFault::Unavailable
                 }
-                None => {
-                    tracing::warn!(%connection_id, "the connect request ended while the login ran; the login is stopped");
-                    ApiFault::Unavailable
-                }
-            }
+            },
+            Err(fault) => fault,
+        },
+        Ok(false) => {
+            tracing::info!(%connection_id, "the connection was removed before its login started; no login runs");
+            return Err(ApiFault::NotFound);
         }
         Err(error) => {
-            tracing::error!(%error, %connection_id, "the credential files of a login could not be written");
+            tracing::error!(%error, %connection_id, "the state of a connection could not be read");
             ApiFault::Unavailable
         }
     };
     clean_up_sync_client(state.systemd.as_ref(), connection_id).await?;
-    state
+    let failed = state
         .database
         .fail_connection(connection_id)
         .await
@@ -395,8 +463,52 @@ async fn log_in<B: SystemdBus>(
             tracing::error!(%error, %connection_id, "a failed connection could not be marked");
             ApiFault::Unavailable
         })?;
-    tracing::info!(%connection_id, "a connection failed at its first login");
+    if failed {
+        tracing::info!(%connection_id, "a connection failed at its first login");
+    }
     Err(fault)
+}
+
+/// Write the credential files of the login, run the login unit, wait for it, and delete the files.
+///
+/// The wait ends early when the request ends or the service stops. The wait for the unit is then
+/// dropped, and the caller stops the unit. When both happened, the end of the request counts.
+async fn run_login<B: SystemdBus>(
+    state: &ApiState<B>,
+    connection_id: Uuid,
+    vault_id: &str,
+    sync_login: &SyncLogin,
+    request_gone: oneshot::Receiver<()>,
+) -> Result<(), ApiFault> {
+    let credentials =
+        CredentialFiles::write(&state.credentials_dir, connection_id, vault_id, sync_login)
+            .map_err(|error| {
+                tracing::error!(%error, %connection_id, "the credential files of a login could not be written");
+                ApiFault::Unavailable
+            })?;
+    let outcome = tokio::select! {
+        biased;
+        _ = request_gone => {
+            tracing::warn!(%connection_id, "the connect request ended while the login ran; the login is stopped");
+            None
+        }
+        () = state.stopping.cancelled() => {
+            tracing::warn!(%connection_id, "the service stops while a login runs; the login is stopped");
+            None
+        }
+        outcome = login::run(state.systemd.as_ref(), connection_id) => Some(outcome),
+    };
+    // The files are deleted whatever the result of the unit.
+    drop(credentials);
+    match outcome {
+        Some(Ok(None)) => Ok(()),
+        Some(Ok(Some(failure))) => Err(ApiFault::Login(failure)),
+        Some(Err(error)) => {
+            tracing::error!(%error, %connection_id, "the login unit could not run");
+            Err(ApiFault::Unavailable)
+        }
+        None => Err(ApiFault::Unavailable),
+    }
 }
 
 /// `DELETE /v1/notes/connections/{id}`: remove a connection of this owner.

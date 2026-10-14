@@ -18,3 +18,7 @@ RATATOSKR__TELEMETRY__LOG_FORMAT=json
 # ratatoskr-notes. Create it once with `head -c 32 /dev/urandom`. A lost key makes the stored
 # passwords unreadable; the owner then connects the vault again. This line repeats the default.
 RATATOSKR__SECRETS__KEY_FILE=/etc/ratatoskr/notes-secrets.key
+
+# How many first logins of sync connections run at the same time, 1 to 16. Each login runs ob, a
+# Node.js process. A sync connect over the limit answers 503. This line repeats the default.
+RATATOSKR__CONNECTIONS__MAX_LOGINS=2

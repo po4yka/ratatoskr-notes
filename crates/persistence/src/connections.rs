@@ -1,5 +1,5 @@
 //! Vault connections: create one with its encrypted secrets, refuse a second one for the same
-//! owner and vault key, mark a failed login, and remove one.
+//! owner and vault key, record a finished or a failed login, and remove one.
 
 use uuid::Uuid;
 
@@ -244,8 +244,9 @@ impl Database {
 }
 
 impl Database {
-    /// Mark a `connecting` connection `failed` after its first login failed, and delete its
-    /// stored ciphertext, in one transaction. The vault key is then free again.
+    /// Mark a `connecting` connection `failed` after its first login failed or a stop of the
+    /// service interrupted it, and delete its stored ciphertext, in one transaction. The vault key
+    /// is then free again.
     ///
     /// Returns `false` and changes nothing when the connection is not `connecting`.
     ///
@@ -275,5 +276,62 @@ impl Database {
             .await
             .map_err(PersistenceError::Query)?;
         Ok(true)
+    }
+}
+
+impl Database {
+    /// Whether the connection is `connecting`. A connect reads it before the login starts, so
+    /// that a connection that the owner removed meanwhile gets no login.
+    ///
+    /// # Errors
+    ///
+    /// [`PersistenceError::Query`] when the statement fails.
+    pub async fn is_connecting(&self, connection_id: Uuid) -> Result<bool, PersistenceError> {
+        sqlx::query_scalar(
+            "select exists (select 1 from notes.connections
+                            where connection_id = $1 and state = 'connecting')",
+        )
+        .bind(connection_id)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(PersistenceError::Query)
+    }
+
+    /// Record that the first login of a `connecting` connection succeeded. The connection stays
+    /// `connecting` until its first scan.
+    ///
+    /// Returns `false` and changes nothing when the connection is not `connecting`, for example
+    /// because the owner removed it while the login ran.
+    ///
+    /// # Errors
+    ///
+    /// [`PersistenceError::Query`] when the statement fails.
+    pub async fn record_login(&self, connection_id: Uuid) -> Result<bool, PersistenceError> {
+        let recorded = sqlx::query(
+            "update notes.connections set logged_in_at = now(), updated_at = now()
+             where connection_id = $1 and state = 'connecting'",
+        )
+        .bind(connection_id)
+        .execute(&self.pool)
+        .await
+        .map_err(PersistenceError::Query)?;
+        Ok(recorded.rows_affected() == 1)
+    }
+
+    /// The `sync` connections that are `connecting` and whose first login did not finish. When no
+    /// connect runs, as at the start of the service, a stop of the service interrupted each one.
+    ///
+    /// # Errors
+    ///
+    /// [`PersistenceError::Query`] when the statement fails.
+    pub async fn interrupted_logins(&self) -> Result<Vec<Uuid>, PersistenceError> {
+        sqlx::query_scalar(
+            "select connection_id from notes.connections
+             where channel = 'sync' and state = 'connecting' and logged_in_at is null
+             order by created_at",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(PersistenceError::Query)
     }
 }

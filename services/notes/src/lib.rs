@@ -41,7 +41,10 @@ use crate::systemd::DbusSystemd;
 /// 2. Initialise logging and the metrics recorder; on failure exit 1.
 /// 3. Connect the database and apply the schema; on failure exit 1.
 /// 4. Bind the operator and the domain listeners; on failure exit 1.
-/// 5. Serve until SIGTERM or SIGINT, then let in-flight requests finish within the grace window.
+/// 5. Fail each `sync` login that a stop of the previous process interrupted, before the listeners
+///    accept a request.
+/// 6. Serve until SIGTERM or SIGINT. Then, within the grace window, let in-flight requests finish,
+///    and fail each connect whose login still runs.
 pub async fn run() -> ExitCode {
     let config = match config::load() {
         Ok(config) => config,
@@ -127,20 +130,20 @@ async fn serve(config: &NotesConfig, metrics: PrometheusHandle) -> Result<(), St
     let admin = bind(config.admin.bind, "operator").await?;
     let api = bind(config.api.listen_address, "domain").await?;
 
+    let state = ApiState::new(database.clone(), DbusSystemd::new())
+        .with_key_file(config.secrets.key_file.clone())
+        .with_max_logins(config.connections.max_logins);
+    // After the binds, so that a second process that cannot bind changes nothing, and before the
+    // listeners accept, so that no connect of this process runs yet.
+    state.reconcile_interrupted_logins().await;
+
     let (stop_sender, stop_receiver) = tokio::sync::watch::channel(false);
     let admin_task = spawn_server(
         admin,
         admin_router(Arc::clone(&runtime), metrics),
         stop_receiver.clone(),
     );
-    let api_task = spawn_server(
-        api,
-        domain_router(
-            ApiState::new(database.clone(), DbusSystemd::new())
-                .with_key_file(config.secrets.key_file.clone()),
-        ),
-        stop_receiver,
-    );
+    let api_task = spawn_server(api, domain_router(state.clone()), stop_receiver);
 
     runtime.mark_started();
     tracing::info!(
@@ -156,8 +159,10 @@ async fn serve(config: &NotesConfig, metrics: PrometheusHandle) -> Result<(), St
 
     let grace = std::time::Duration::from_secs(config.shutdown.grace_seconds);
     let drained = tokio::time::timeout(grace, async {
-        let _ = admin_task.await;
-        let _ = api_task.await;
+        tokio::join!(state.shut_down(), async {
+            let _ = admin_task.await;
+            let _ = api_task.await;
+        })
     })
     .await
     .is_ok();

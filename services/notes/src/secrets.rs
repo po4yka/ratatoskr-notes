@@ -106,10 +106,11 @@ impl SecretsKey {
         use rustix::fs::{Mode, OFlags};
 
         // O_NONBLOCK: the open of a FIFO does not wait for a writer, and the type check below
-        // refuses it.
+        // refuses it. O_NOCTTY: a terminal device does not become the controlling terminal of the
+        // service before the type check refuses it.
         let file = rustix::fs::open(
             path,
-            OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC | OFlags::NONBLOCK,
+            OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC | OFlags::NONBLOCK | OFlags::NOCTTY,
             Mode::empty(),
         )
         .map(std::fs::File::from)

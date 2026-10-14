@@ -59,6 +59,8 @@ paths moved into a temporary directory, and `/usr/bin/ob` replaced by a stub. It
 `Environment=`, `EnvironmentFile=` and `LoadCredential=`, and gives the unit a
 `$CREDENTIALS_DIRECTORY` that it removes after the run. A test therefore checks the shipped unit
 file. Keep each command of a unit on one line, write `$$` for each shell `$`, and use no backslash.
+A test can hold each login unit before its first command until it releases it. A stop of a login
+unit that runs ends its start job with `canceled` and kills its command, as systemd does.
 
 `secret_custody.rs::no_secret_in_any_cmdline` reads `/proc/*/cmdline` as the user `nobody` while
 the login runs, so it runs on Linux only. On macOS it is ignored.
@@ -91,10 +93,11 @@ validates the environment and binds nothing (exit 0 valid, exit 78 invalid).
 | `RATATOSKR__DATABASE__URL` | none, required | SECRET. The `PostgreSQL` URL. |
 | `RATATOSKR__DATABASE__MAX_CONNECTIONS` | `4` | The pool bound, 1 to 16. |
 | `RATATOSKR__DATABASE__ACQUIRE_TIMEOUT_SECONDS` | `5` | 1 to 60. |
+| `RATATOSKR__CONNECTIONS__MAX_LOGINS` | `2` | How many first logins of `sync` connections run at the same time, 1 to 16. A `sync` connect over the limit answers `503`. |
 | `RATATOSKR__ADMIN__BIND` | `127.0.0.1:9471` | The operator listener. |
 | `RATATOSKR__API__LISTEN_ADDRESS` | `127.0.0.1:8099` | The domain API listener. It must differ from the operator listener. |
 | `RATATOSKR__SECRETS__KEY_FILE` | `/etc/ratatoskr/notes-secrets.key` | The 32-byte key of the stored Obsidian passwords: a regular file, not a symbolic link, mode 0400 or 0600, owned by the user of the service. Read at each `sync` connect. |
-| `RATATOSKR__SHUTDOWN__GRACE_SECONDS` | `10` | How long in-flight requests may run after SIGTERM, 1 to 60. |
+| `RATATOSKR__SHUTDOWN__GRACE_SECONDS` | `10` | How long in-flight requests and running logins may take after SIGTERM, 1 to 60. The service fails each running login in this window; the next start fails a login that it did not reach. |
 | `RATATOSKR__TELEMETRY__LOG_FORMAT` | `text` | `text` or `json`. |
 | `RATATOSKR__TELEMETRY__LOG_FILTER` | `info` | A tracing `EnvFilter` directive string. |
 

@@ -38,6 +38,10 @@ pub struct NotesConfig {
     #[serde(default)]
     pub api: ApiConfig,
 
+    /// The connects of vault connections.
+    #[serde(default)]
+    pub connections: ConnectionsConfig,
+
     /// The `PostgreSQL` connection that holds the `notes` schema. Required.
     pub database: DatabaseConfig,
 
@@ -52,6 +56,29 @@ pub struct NotesConfig {
     /// Logging.
     #[serde(default)]
     pub telemetry: TelemetryConfig,
+}
+
+/// `RATATOSKR__CONNECTIONS__*`.
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ConnectionsConfig {
+    /// How many first logins of `sync` connections run at the same time. Each one runs `ob`, a
+    /// Node.js process, in its own unit. A `sync` connect over the limit answers `503` with
+    /// `notes.service.unavailable` and creates nothing.
+    #[serde(default = "default_max_logins")]
+    pub max_logins: usize,
+}
+
+impl Default for ConnectionsConfig {
+    fn default() -> Self {
+        Self {
+            max_logins: default_max_logins(),
+        }
+    }
+}
+
+const fn default_max_logins() -> usize {
+    crate::api::DEFAULT_MAX_LOGINS
 }
 
 /// `RATATOSKR__SECRETS__*`.
@@ -345,6 +372,13 @@ fn validate(config: &NotesConfig) -> Vec<Violation> {
             key: "database.acquire_timeout_seconds",
             env_var: "RATATOSKR__DATABASE__ACQUIRE_TIMEOUT_SECONDS",
             rule: "must be 1..=60",
+        });
+    }
+    if !(1..=16).contains(&config.connections.max_logins) {
+        found.push(Violation {
+            key: "connections.max_logins",
+            env_var: "RATATOSKR__CONNECTIONS__MAX_LOGINS",
+            rule: "must be 1..=16",
         });
     }
     if !(1..=60).contains(&config.shutdown.grace_seconds) {

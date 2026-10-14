@@ -81,6 +81,9 @@ esac
 exit 0
 "#;
 
+/// The login units that run now, by unit name.
+type Running = Arc<Mutex<HashMap<String, (Arc<Notify>, watch::Receiver<()>)>>>;
+
 /// One call that the service made.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Call {
@@ -115,7 +118,7 @@ pub(crate) struct FakeSystemd {
     logins_held: Arc<watch::Sender<bool>>,
     /// The login units that run now: the signal that stops each one, and the channel whose close
     /// tells that it ended.
-    running: Arc<Mutex<HashMap<String, (Arc<Notify>, watch::Receiver<()>)>>>,
+    running: Running,
 }
 
 impl FakeSystemd {
@@ -482,8 +485,6 @@ fn instance_of<'a>(unit: &'a UnitName, template: &str) -> Option<&'a str> {
         .strip_prefix(template.trim_end_matches(".service"))
         .and_then(|rest| rest.strip_suffix(".service"))
 }
-
-type Running = Arc<Mutex<HashMap<String, (Arc<Notify>, watch::Receiver<()>)>>>;
 
 /// A login unit that runs. Its drop removes it from the record of the running units and closes
 /// its channel, so that a stop that waits for it continues.

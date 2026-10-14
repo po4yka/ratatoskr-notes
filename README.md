@@ -67,9 +67,15 @@ answers:
 
 When the client goes away while the login runs, the connect continues in its own task: it stops
 the login unit, runs the cleanup unit, and marks the connection `failed`, as after a failed login.
-A SIGTERM does not wait for that task beyond `RATATOSKR__SHUTDOWN__GRACE_SECONDS`. A connection
-whose login a stop of the service interrupted stays `connecting` with its ciphertext, and the
-owner removes it with a disconnect.
+A SIGTERM does the same for each login that runs, within `RATATOSKR__SHUTDOWN__GRACE_SECONDS`, and
+the connect request answers `503`. When the grace window ends first, the connection stays
+`connecting` with its ciphertext. The next start of the service then does these steps for it before
+it accepts a request. The start does not touch a connection whose login finished.
+
+When the owner removes the connection before its login starts, no login runs, and the connect
+answers `404` with `notes.connection.not_found`. At most `RATATOSKR__CONNECTIONS__MAX_LOGINS` logins
+run at the same time, 2 by default. A `sync` connect over that limit answers `503` with
+`notes.service.unavailable` and creates nothing, and the client can try again later.
 
 `DELETE /v1/notes/connections/{id}` stops the sync unit and a login unit that still runs, runs the
 cleanup unit, and then, in one transaction, marks the connection removed, deletes its ciphertext,
