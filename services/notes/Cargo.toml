@@ -44,6 +44,8 @@ tempfile.workspace          = true
 http-body-util.workspace    = true
 serde_json.workspace        = true
 sqlx.workspace              = true
+# The blob store test drops the credentials of one thread to another user (Linux).
+rustix                      = { workspace = true, features = ["thread"] }
 # Paused time for the settle window and the rescan of the watcher tests.
 tokio                       = { workspace = true, features = ["test-util"] }
 tower.workspace             = true

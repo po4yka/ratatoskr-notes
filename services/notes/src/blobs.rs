@@ -54,6 +54,15 @@ impl BlobStore {
         Self { root: root.into() }
     }
 
+    /// The store under `root`, for the service. The deploy role creates the root.
+    ///
+    /// # Errors
+    ///
+    /// The reason when the store cannot keep the modes of the root.
+    pub fn open(root: impl Into<PathBuf>) -> std::io::Result<Self> {
+        Ok(Self::new(root))
+    }
+
     /// The blob root.
     #[must_use]
     pub fn root(&self) -> &Path {
