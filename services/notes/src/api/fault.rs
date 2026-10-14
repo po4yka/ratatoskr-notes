@@ -20,6 +20,7 @@ pub(super) enum ApiFault {
     },
     NotFound,
     FileNotFound,
+    ChannelMismatch,
     Login(LoginFailure),
     CleanupFailed,
     Unavailable,
@@ -30,7 +31,7 @@ impl ApiFault {
         match self {
             Self::Unauthenticated => StatusCode::UNAUTHORIZED,
             Self::InvalidRequest => StatusCode::BAD_REQUEST,
-            Self::VaultAlreadyConnected { .. } => StatusCode::CONFLICT,
+            Self::VaultAlreadyConnected { .. } | Self::ChannelMismatch => StatusCode::CONFLICT,
             Self::NotFound | Self::FileNotFound => StatusCode::NOT_FOUND,
             Self::Login(_) => StatusCode::UNPROCESSABLE_ENTITY,
             Self::CleanupFailed | Self::Unavailable => StatusCode::SERVICE_UNAVAILABLE,
@@ -54,6 +55,12 @@ impl ApiFault {
             Self::NotFound => (
                 "notes.connection.not_found",
                 "The connection does not exist.",
+                false,
+            ),
+            Self::ChannelMismatch => (
+                "notes.channel_mismatch",
+                "This vault is connected through another channel or device. To use the vault on \
+                 more devices, connect it through Obsidian Sync.",
                 false,
             ),
             Self::FileNotFound => (

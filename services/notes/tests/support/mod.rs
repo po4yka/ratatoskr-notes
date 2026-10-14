@@ -50,6 +50,15 @@ pub(crate) struct Answer {
     pub(crate) body: Value,
 }
 
+/// The claims that Edge mints for a paired device.
+pub(crate) const DEVICE_ID_HEADER: &str = "x-ratatoskr-device-id";
+pub(crate) const DEVICE_KIND_HEADER: &str = "x-ratatoskr-device-kind";
+
+/// The device of `owner` that the helpers connect a `plugin` or `cli` vault from.
+pub(crate) fn device_of(owner: Uuid) -> Uuid {
+    Uuid::from_u128(owner.as_u128() ^ 0xde71_ce00)
+}
+
 /// Sends one request with the owner claim and an optional JSON body.
 pub(crate) async fn send(
     router: &Router,
@@ -58,11 +67,26 @@ pub(crate) async fn send(
     owner: Uuid,
     body: Option<Value>,
 ) -> Answer {
+    send_with(router, method, path, owner, &[], body).await
+}
+
+/// Sends one request with the owner claim, the claims in `headers` and an optional JSON body.
+pub(crate) async fn send_with(
+    router: &Router,
+    method: Method,
+    path: &str,
+    owner: Uuid,
+    headers: &[(&str, String)],
+    body: Option<Value>,
+) -> Answer {
     let mut request = Request::builder()
         .method(method)
         .uri(path)
         .header(USER_HEADER, owner.to_string())
         .header(OPERATION_HEADER, Uuid::now_v7().to_string());
+    for (name, value) in headers {
+        request = request.header(*name, value);
+    }
     let body = match body {
         Some(json) => {
             request = request.header("content-type", "application/json");
@@ -106,11 +130,22 @@ pub(crate) async fn connect(
         "vault_key": vault_key,
         "vault_display_name": "Personal",
     });
-    send(
+    // A device connects a `plugin` or `cli` vault, and Edge names it in its claims.
+    let kind = if channel == "cli" {
+        "export_agent"
+    } else {
+        "obsidian_plugin"
+    };
+    let claims = [
+        (DEVICE_ID_HEADER, device_of(owner).to_string()),
+        (DEVICE_KIND_HEADER, kind.to_owned()),
+    ];
+    send_with(
         router,
         Method::POST,
         "/v1/notes/connections",
         owner,
+        &claims,
         Some(body),
     )
     .await

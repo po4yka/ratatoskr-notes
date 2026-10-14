@@ -90,6 +90,12 @@ time, 2 by default. A `sync` connect over that limit answers `503` with `notes.s
 and creates nothing, and the client can try again later. A `plugin` or `cli` connect reports
 `first_sync`; the first changes of its device complete it (group 8).
 
+A `plugin` or `cli` connect comes from a paired device. Edge names the device in
+`x-ratatoskr-device-id` and its kind in `x-ratatoskr-device-kind`. Without both claims the connect
+answers `401` with `notes.request.unauthenticated`. The kind must be `obsidian_plugin` for
+`plugin` and `export_agent` for `cli`; another kind answers `409` with `notes.channel_mismatch`.
+The connection records its device, the only one whose changes it takes (workspace design D5).
+
 `DELETE /v1/notes/connections/{id}` stops the sync unit and a login unit that still runs, runs the
 cleanup unit, and then, in one transaction, marks the connection removed, deletes its ciphertext,
 and writes `notes.vault.disconnected.v1` to the outbox. When the cleanup fails, nothing is committed and the

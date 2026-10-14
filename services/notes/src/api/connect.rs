@@ -20,7 +20,10 @@ use secrecy::ExposeSecret as _;
 use tokio::sync::OwnedSemaphorePermit;
 use uuid::Uuid;
 
-use super::{ApiFault, ApiState, channel_word, clean_up_sync_client, owner, valid_vault_key};
+use super::{
+    ApiFault, ApiState, channel_word, clean_up_sync_client, device_claim, device_kind_of, owner,
+    valid_vault_key,
+};
 use crate::login::{self, CredentialFiles, SyncLogin};
 use crate::operation::{self, Completion, OPERATION_KIND, OPERATION_LANE, Phase, Report};
 use crate::secrets::{Sealed, SecretKind, SecretsKey};
@@ -96,6 +99,18 @@ pub(super) async fn create_connection<B: SystemdBus>(
         ("plugin" | "cli", None) => {}
         _ => return Err(ApiFault::InvalidRequest),
     }
+    // A device connects a `plugin` or `cli` vault: the connection takes changes from that device
+    // only, and the kind of the device must be the kind of the channel.
+    let device_id = match device_kind_of(channel) {
+        Some(wanted) => {
+            let device = device_claim(&headers)?;
+            if device.kind != wanted {
+                return Err(ApiFault::ChannelMismatch);
+            }
+            Some(device.device_id)
+        }
+        None => None,
+    };
 
     let login_permit = match &request.sync_login {
         Some(_) => Some(Arc::clone(&state.logins).try_acquire_owned().map_err(|_| {
@@ -112,16 +127,14 @@ pub(super) async fn create_connection<B: SystemdBus>(
     if state.stopping.is_cancelled() {
         return Err(ApiFault::Unavailable);
     }
-    insert(
-        &state,
+    let new = Insert {
         connection_id,
         owner_id,
         operation_id,
+        device_id,
         channel,
-        &request,
-        &sealed,
-    )
-    .await?;
+    };
+    insert(&state, &new, &request, &sealed).await?;
     tracing::info!(%connection_id, channel, "a connection was created");
 
     let first = if request.sync_login.is_some() {
@@ -166,13 +179,20 @@ pub(super) async fn create_connection<B: SystemdBus>(
     ))
 }
 
-/// Insert the connection with its ciphertext, or refuse a second connection of the vault.
-async fn insert<B: SystemdBus>(
-    state: &ApiState<B>,
+/// The ids of a connection to insert.
+#[derive(Debug, Clone, Copy)]
+struct Insert {
     connection_id: Uuid,
     owner_id: Uuid,
     operation_id: Uuid,
+    device_id: Option<Uuid>,
     channel: &'static str,
+}
+
+/// Insert the connection with its ciphertext, or refuse a second connection of the vault.
+async fn insert<B: SystemdBus>(
+    state: &ApiState<B>,
+    new: &Insert,
     request: &ConnectRequest,
     sealed: &[Sealed],
 ) -> Result<(), ApiFault> {
@@ -187,14 +207,14 @@ async fn insert<B: SystemdBus>(
     let outcome = state
         .database
         .create_connection(&NewConnection {
-            connection_id,
-            owner_id,
-            channel,
+            connection_id: new.connection_id,
+            owner_id: new.owner_id,
+            channel: new.channel,
             vault_key: &request.vault_key,
             vault_display_name: request.vault_display_name.as_str(),
             secrets: &secrets,
-            operation_id,
-            device_id: None,
+            operation_id: new.operation_id,
+            device_id: new.device_id,
         })
         .await
         .map_err(|error| {
