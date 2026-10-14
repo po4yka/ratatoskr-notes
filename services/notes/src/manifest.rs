@@ -7,7 +7,9 @@
 //! transaction records exactly the changes that make the files of the connection equal to the
 //! manifest: `deleted` for a present path that the manifest does not name, `renamed` when exactly
 //! one missing path and exactly one new path have the same hash, `updated` for a path whose hash
-//! differs, and `created` for a new path. The committed device sequence does not change.
+//! differs, and `created` for a new path. The committed device sequence does not change. The first
+//! applied manifest of a connection that is `connecting` also makes it `active` and completes its
+//! connect operation, in the same transaction.
 //!
 //! Paths are not logged: a file name is the owner's content.
 
@@ -19,6 +21,7 @@ use uuid::Uuid;
 
 use crate::channel::{BatchOutcome, Sender, admits, vault_path};
 use crate::files::{FileRecorder, RecordError, Revision};
+use crate::operation::Completion;
 
 /// The most entries of one manifest.
 pub const MAX_MANIFEST_ENTRIES: usize = 100_000;
@@ -125,6 +128,22 @@ pub async fn apply_manifest(
         connection_id,
     };
     reconcile.apply(&mut transaction, &plan).await?;
+    // The first applied manifest completes the connect in the same transaction, so that the end
+    // of the manifest bound, which waits for the lock of the row, finds the connection active.
+    if connection.state == "connecting"
+        && let Some(operation_id) = connection.operation_id
+    {
+        Completion {
+            connection_id,
+            owner_id: connection.owner_id,
+            operation_id,
+            channel: connection.channel.clone(),
+            vault_display_name: connection.vault_display_name.clone(),
+            journal_readable: true,
+        }
+        .complete_in(&mut transaction)
+        .await?;
+    }
     transaction.commit().await?;
     Ok(ManifestOutcome::Applied { committed })
 }

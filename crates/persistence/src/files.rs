@@ -24,6 +24,12 @@ pub struct LockedConnection {
     pub excluded_folders: Vec<String>,
     /// The highest device change sequence that is committed; 0 for a `sync` connection.
     pub device_sequence: u64,
+    /// `connecting` or `active`.
+    pub state: String,
+    /// The connect operation that Edge minted.
+    pub operation_id: Option<Uuid>,
+    /// The display name of the vault.
+    pub vault_display_name: String,
 }
 
 /// One file of a connection.
@@ -83,8 +89,18 @@ pub struct FileTransaction {
     connection_id: Uuid,
 }
 
-/// The row of a [`LockedConnection`]: owner, channel, device, excluded folders, device sequence.
-type LockedRow = (Uuid, String, Option<Uuid>, Vec<String>, i64);
+/// The row of a [`LockedConnection`]: owner, channel, device, excluded folders, device sequence,
+/// state, connect operation and display name.
+type LockedRow = (
+    Uuid,
+    String,
+    Option<Uuid>,
+    Vec<String>,
+    i64,
+    String,
+    Option<Uuid>,
+    String,
+);
 
 fn query_error(error: sqlx::Error) -> PersistenceError {
     PersistenceError::Query(error)
@@ -104,7 +120,8 @@ impl Database {
     ) -> Result<Option<(FileTransaction, LockedConnection)>, PersistenceError> {
         let mut transaction = self.pool.begin().await.map_err(query_error)?;
         let row: Option<LockedRow> = sqlx::query_as(
-            "select owner_id, channel, device_id, excluded_folders, device_sequence
+            "select owner_id, channel, device_id, excluded_folders, device_sequence, state,
+                    operation_id, vault_display_name
              from notes.connections
              where connection_id = $1 and state in ('connecting', 'active')
              for update",
@@ -114,7 +131,16 @@ impl Database {
         .await
         .map_err(query_error)?;
         Ok(row.map(
-            |(owner_id, channel, device_id, excluded_folders, device_sequence)| {
+            |(
+                owner_id,
+                channel,
+                device_id,
+                excluded_folders,
+                device_sequence,
+                state,
+                operation_id,
+                vault_display_name,
+            )| {
                 (
                     FileTransaction {
                         transaction,
@@ -127,6 +153,9 @@ impl Database {
                         excluded_folders,
                         // A CHECK keeps the sequence at 0 or more.
                         device_sequence: u64::try_from(device_sequence).unwrap_or_default(),
+                        state,
+                        operation_id,
+                        vault_display_name,
                     },
                 )
             },
@@ -366,6 +395,23 @@ impl FileTransaction {
         .await
         .map_err(query_error)?;
         Ok(())
+    }
+
+    /// Make the connection `active` when it is `connecting`. Returns whether it changed.
+    ///
+    /// # Errors
+    ///
+    /// [`PersistenceError::Query`] when the statement fails.
+    pub async fn activate(&mut self) -> Result<bool, PersistenceError> {
+        let activated = sqlx::query(
+            "update notes.connections set state = 'active', updated_at = now()
+             where connection_id = $1 and state = 'connecting'",
+        )
+        .bind(self.connection_id)
+        .execute(&mut *self.transaction)
+        .await
+        .map_err(query_error)?;
+        Ok(activated.rows_affected() == 1)
     }
 
     /// Record `sequence` as the highest device change sequence that is committed.

@@ -2,8 +2,10 @@
 //! D10).
 //!
 //! The device sends the manifest of its vault at once after its connect. The first applied
-//! manifest makes the connection `active` and completes the operation, as the first full scan does
-//! for a `sync` connection. When no manifest is applied within the bound, the connection becomes
+//! manifest makes the connection `active` and completes the operation in its own transaction (see
+//! `manifest.rs`), as the first full scan does for a `sync` connection. The end of the bound fails
+//! only a connection that is still `connecting`; it waits for the lock of the row, so it cannot
+//! fail a connection whose manifest committed. When no manifest is applied within the bound, the connection becomes
 //! `failed` and the operation fails with `notes.channel.manifest_missing`, so that every connect
 //! reaches a terminal report. The bound is 30 minutes ([`super::DEFAULT_MANIFEST_DEADLINE`]): the
 //! plugin lists and hashes the vault before its first manifest, which takes minutes for a large
@@ -19,7 +21,7 @@ use std::time::Duration;
 use uuid::Uuid;
 
 use super::ApiState;
-use crate::operation::{self, Completion, Report};
+use crate::operation::{self, Report};
 use crate::systemd::SystemdBus;
 
 /// The failure of a device connect whose first manifest did not arrive in time.
@@ -92,34 +94,5 @@ impl<B: SystemdBus> ApiState<B> {
             )
             .await;
         }
-    }
-
-    /// Complete the connect operation of a device connection that is `connecting`, after its
-    /// first applied manifest.
-    pub(super) async fn complete_device_connect(&self, connection_id: Uuid) {
-        let operation = match self.database.connect_operation(connection_id).await {
-            Ok(Some(operation)) => operation,
-            Ok(None) => return,
-            Err(error) => {
-                tracing::error!(%error, %connection_id, "a device connect could not be read");
-                return;
-            }
-        };
-        let Some(operation_id) = operation.operation_id else {
-            return;
-        };
-        if operation.state != "connecting" {
-            return;
-        }
-        Completion {
-            connection_id,
-            owner_id: operation.owner_id,
-            operation_id,
-            channel: operation.channel,
-            vault_display_name: operation.vault_display_name,
-            journal_readable: true,
-        }
-        .complete(&self.database)
-        .await;
     }
 }

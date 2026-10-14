@@ -13,11 +13,12 @@
 use ratatoskr_error_contracts::{ErrorCode, ErrorEnvelope, WarningEnvelope};
 use ratatoskr_event_envelope::{EventEnvelope, EventPayload as _};
 use ratatoskr_identifiers::{Extensions, OperationId, SafeMessage};
-use ratatoskr_notes_persistence::{Database, OutboxEvent};
+use ratatoskr_notes_persistence::{Database, FileTransaction, OutboxEvent};
 use ratatoskr_operation_contracts::{OperationReported, OperationStage, OperationStatus};
 use uuid::Uuid;
 
 use crate::events::{self, EnvelopeBuildError};
+use crate::files::RecordError;
 
 /// The kind of the connect operation.
 pub const OPERATION_KIND: &str = "notes.connection.connect";
@@ -260,5 +261,52 @@ impl Completion {
                 tracing::error!(%error, connection_id = %self.connection_id, "a connection could not be made active");
             }
         }
+    }
+
+    /// Make the connection `active` and write `notes.vault.connected.v1` and the report
+    /// `succeeded` in `transaction`, which holds the lock of the connection row, as the first
+    /// applied manifest of a device connection does. Returns `false` and writes nothing when the
+    /// connection is not `connecting`.
+    ///
+    /// # Errors
+    ///
+    /// [`RecordError`] when an event cannot be built or a statement fails.
+    pub(crate) async fn complete_in(
+        &self,
+        transaction: &mut FileTransaction,
+    ) -> Result<bool, RecordError> {
+        let connected_id = Uuid::now_v7();
+        let report_id = Uuid::now_v7();
+        let connected = outbox_value(events::vault_connected(
+            connected_id,
+            self.owner_id,
+            self.connection_id,
+            &self.channel,
+            &self.vault_display_name,
+        ))?;
+        let reported = outbox_value(report_envelope(
+            report_id,
+            self.owner_id,
+            self.operation_id,
+            Report::Succeeded,
+        ))?;
+        if !transaction.activate().await? {
+            return Ok(false);
+        }
+        let aggregate_id = events::connection_aggregate(self.connection_id);
+        let operation = operation_aggregate(self.operation_id);
+        transaction
+            .write_event(&OutboxEvent {
+                event_id: connected_id,
+                event_type: "notes.vault.connected.v1",
+                aggregate_type: events::CONNECTION_AGGREGATE,
+                aggregate_id: &aggregate_id,
+                envelope: &connected,
+            })
+            .await?;
+        transaction
+            .write_event(&report_event(report_id, &operation, &reported))
+            .await?;
+        Ok(true)
     }
 }
