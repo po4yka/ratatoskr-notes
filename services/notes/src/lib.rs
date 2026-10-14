@@ -19,6 +19,7 @@ pub mod config;
 pub mod events;
 pub mod files;
 mod login;
+pub mod manifest;
 pub mod operation;
 pub mod outbox;
 pub mod secrets;

@@ -246,6 +246,21 @@ impl FileTransaction {
         Ok(())
     }
 
+    /// The paths of the collisions of this connection.
+    ///
+    /// # Errors
+    ///
+    /// [`PersistenceError::Query`] when the statement fails.
+    pub async fn collision_paths(&mut self) -> Result<Vec<String>, PersistenceError> {
+        sqlx::query_scalar(
+            "select path from notes.path_collisions where connection_id = $1 order by path",
+        )
+        .bind(self.connection_id)
+        .fetch_all(&mut *self.transaction)
+        .await
+        .map_err(query_error)
+    }
+
     /// Forget the collision of `path`. Returns whether there was one.
     ///
     /// # Errors

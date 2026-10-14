@@ -100,4 +100,4 @@ The numbers of this group are the numbers of the workspace tasks.
 - [x] 8.5 RED: `services/notes/tests/device_channel.rs::upload_with_wrong_digest_is_refused` asserts `transfer.digest_mismatch` and no registered blob for bytes that do not match the declared SHA-256. Confirm that it fails because the blob route does not exist.
 - [x] 8.6 GREEN: implement the blob receipt of the shared transfer contract. Verify 8.5.
 - [x] 8.7 RED: `services/notes/tests/device_channel.rs::manifest_reconciles_offline_changes` asserts exactly one `updated`, one `deleted`, one `renamed` and one `created` change after a manifest of a vault with four offline changes. Confirm that it fails because the manifest route does not exist.
-- [ ] 8.8 GREEN: implement the manifest reconciliation. Verify 8.7.
+- [x] 8.8 GREEN: implement the manifest reconciliation. Verify 8.7.

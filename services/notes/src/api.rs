@@ -354,6 +354,11 @@ pub fn domain_router<B: SystemdBus>(state: ApiState<B>) -> Router {
             post(blobs::finalize_upload::<B>),
         )
         .route(
+            "/v1/notes/connections/{connection_id}/manifest",
+            post(channel::post_manifest::<B>)
+                .layer(DefaultBodyLimit::max(channel::MAX_MANIFEST_BYTES)),
+        )
+        .route(
             "/v1/notes/connections/{connection_id}/changes",
             post(channel::post_changes::<B>).layer(DefaultBodyLimit::max(channel::MAX_BATCH_BYTES)),
         )

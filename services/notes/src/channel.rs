@@ -269,7 +269,7 @@ fn check(changes: &[DeviceChange]) -> Option<Vec<Checked>> {
 }
 
 /// `path` in NFC when the contract accepts it as a vault path.
-fn vault_path(path: &str) -> Option<String> {
+pub(crate) fn vault_path(path: &str) -> Option<String> {
     let path = nfc_path(path);
     VaultPath::parse(&path).ok()?;
     Some(path)
