@@ -64,6 +64,9 @@ is done when its command started, as for `Type=exec`. A test can hold each login
 first command until it releases it. A stop of a login
 unit that runs ends its start job with `canceled` and kills its command, as systemd does.
 
+`sync_watcher.rs::settled_change_becomes_one_revision` runs under paused tokio time and reads
+inotify, so it runs on Linux only. On macOS it is ignored, and the watcher there only rescans.
+
 `secret_custody.rs::no_secret_in_any_cmdline` reads `/proc/*/cmdline` as the user `nobody` while
 the login runs, so it runs on Linux only. On macOS it is ignored.
 `secret_custody.rs::key_file_of_another_owner_is_refused` gives the key file to `nobody`, so it

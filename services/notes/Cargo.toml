@@ -26,6 +26,7 @@ rustix.workspace                      = true
 secrecy.workspace                     = true
 serde.workspace                       = true
 serde_json.workspace                  = true
+sha2.workspace                        = true
 thiserror.workspace                   = true
 tokio.workspace                       = true
 tokio-util.workspace                  = true
@@ -33,6 +34,9 @@ tracing.workspace                     = true
 tracing-subscriber.workspace          = true
 uuid.workspace                        = true
 zbus.workspace                        = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+inotify.workspace = true
 
 [dev-dependencies]
 ratatoskr-notes-persistence = { workspace = true, features = ["test-support"] }

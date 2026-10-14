@@ -64,7 +64,9 @@ async fn settled_change_becomes_one_revision() {
         "no revision inside the settle window: {early:?}"
     );
 
-    let settled = tokio::time::timeout(Duration::from_secs(5), changes.recv()).await;
+    // The window ends 2 seconds after the last part. The inotify event of the last part starts it:
+    // a watcher that saw only the first part would wait 2 seconds more.
+    let settled = tokio::time::timeout(Duration::from_secs(1), changes.recv()).await;
     assert_eq!(
         settled,
         Ok(Some(TreeChange::Revision {

@@ -155,6 +155,23 @@ are failed and before the listeners accept, the supervisor starts the unit of ea
 connection whose login finished and that is `connecting` or `active`: the unit is not enabled, so a
 restart of the host does not start it.
 
+### 10. The watcher of the working tree and the blob store
+
+`watcher::watch` watches one working tree. On Linux it reads inotify through the tokio reactor
+(the `inotify` crate), with one watch for each directory. It also reads the whole tree at its
+start and every 15 minutes. A file is settled when its size and modification time have not
+changed for 2 seconds after the watcher last saw them change. A settled state that differs from
+the last revision of the path becomes a revision: the bytes are copied to the blob root and hashed
+in one pass, and when the file changed during the copy it waits for a new window. A lost event, a
+full inotify queue (`IN_Q_OVERFLOW`) and a new or removed directory make the watcher read the whole
+tree. The watcher sends `TreeChange::Revision` and `TreeChange::Removed` to a channel. It reads
+regular files only and opens each one without following a symbolic link. Other platforms have no
+inotify, and there the watcher only rescans; the test of the settle window therefore runs on Linux.
+
+`BlobStore` writes `<root>/sha256/<2 hex>/<62 hex>` through `<root>/staging/` and a hard link, as
+the other content-addressed stores of the fleet do. The service does not start a watcher yet: the
+revisions, the outbox and the excluded folders of workspace task 7.6 consume its changes.
+
 ## Risks / Trade-offs
 
 - The D-Bus implementation has no automated test in this change: neither macOS nor the CI runner

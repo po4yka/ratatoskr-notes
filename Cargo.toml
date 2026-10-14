@@ -55,6 +55,13 @@ chacha20poly1305 = { version = "0.11", default-features = false, features = ["al
 # service. rustix makes both calls without `unsafe`; zbus already depends on the same version.
 rustix = { version = "1.1", default-features = false, features = ["std", "fs", "process"] }
 
+# ---- working tree and blob root ----
+# The SHA-256 of a revision (workspace design D7). RustCrypto, pure Rust; sqlx already depends on it.
+sha2 = { version = "0.10", default-features = false, features = ["std"] }
+# The watcher of a working tree reads inotify on Linux (workspace design D3), through the tokio
+# reactor. No second thread and no unsafe code in this repository.
+inotify = { version = "0.11", default-features = false, features = ["stream"] }
+
 # ---- configuration ----
 figment = { version = "0.10", features = ["env"] }
 secrecy = { version = "0.10", features = ["serde"] }
