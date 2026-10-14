@@ -310,3 +310,45 @@ async fn connect_without_operation_id_is_refused() {
         .await
         .expect("the test database is dropped");
 }
+
+#[tokio::test]
+async fn reports_correlate_to_their_operation() {
+    let fixture = TestDatabase::create().await.expect("a test database");
+    let systemd = FakeSystemd::new();
+    let router = router(&fixture, &systemd);
+
+    // A plugin connect reports first_sync; its disconnect before the first manifest fails it.
+    let accepted = crate::support::connect(&router, OWNER, "plugin", "vault-key-correlation").await;
+    let connection_id = crate::support::connection_id(&accepted);
+    let operation_id: Uuid = accepted.body["operation"]["operation_id"]
+        .as_str()
+        .and_then(|raw| Uuid::parse_str(raw).ok())
+        .expect("the answer names the operation");
+    let removed = crate::support::send(
+        &router,
+        Method::DELETE,
+        &format!("/v1/notes/connections/{connection_id}"),
+        OWNER,
+        None,
+    )
+    .await;
+    let found = reports_until_terminal(&fixture, operation_id).await;
+
+    assert_eq!(removed.status, StatusCode::NO_CONTENT, "{:?}", removed.body);
+    assert_eq!(found.len(), 2, "first_sync and the failure: {found:#?}");
+    let correlations: Vec<&str> = found
+        .iter()
+        .map(|report| report["correlation_id"].as_str().unwrap_or_default())
+        .collect();
+    let expected = format!("operation:{operation_id}");
+    assert_eq!(
+        correlations,
+        [expected.as_str(), expected.as_str()],
+        "each report correlates to its operation"
+    );
+
+    fixture
+        .cleanup()
+        .await
+        .expect("the test database is dropped");
+}
