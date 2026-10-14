@@ -11,7 +11,9 @@
 mod support;
 
 use axum::Router;
-use axum::http::{Method, StatusCode};
+use axum::body::Body;
+use axum::http::{Method, Request, StatusCode};
+use http_body_util::BodyExt as _;
 use ratatoskr_notes::api::{ApiState, domain_router};
 use ratatoskr_notes::blobs::BlobStore;
 use ratatoskr_notes_persistence::test_support::TestDatabase;
@@ -21,8 +23,10 @@ use uuid::Uuid;
 
 use crate::support::systemd::FakeSystemd;
 use crate::support::{
-    Answer, DEVICE_ID_HEADER, DEVICE_KIND_HEADER, connect, connection_id, device_of, send_with,
+    Answer, DEVICE_ID_HEADER, DEVICE_KIND_HEADER, USER_HEADER, connect, connection_id, device_of,
+    send_with,
 };
+use tower::ServiceExt as _;
 
 const OWNER: Uuid = Uuid::from_u128(0x0192_0000_0000_7000_8000_0000_0000_0dc1);
 
@@ -399,6 +403,132 @@ async fn second_device_for_one_connection_is_refused() {
         "the connection keeps its first device"
     );
     assert_eq!(channel.events(connection).await, 0, "no change is recorded");
+
+    channel.cleanup().await;
+}
+
+impl Channel {
+    /// A JSON request from the plugin of [`OWNER`] to a route of `connection_id`.
+    async fn device_call(&self, connection_id: Uuid, route: &str, body: Value) -> Answer {
+        let claims = [
+            (DEVICE_ID_HEADER, device_of(OWNER).to_string()),
+            (DEVICE_KIND_HEADER, "obsidian_plugin".to_owned()),
+        ];
+        send_with(
+            &self.router,
+            Method::POST,
+            &format!("/v1/notes/connections/{connection_id}/{route}"),
+            OWNER,
+            &claims,
+            Some(body),
+        )
+        .await
+    }
+
+    /// `PUT .../blobs/{token}/chunks/{index}` with the raw bytes of one chunk.
+    async fn put_chunk(
+        &self,
+        connection_id: Uuid,
+        token: &str,
+        index: u32,
+        bytes: &[u8],
+    ) -> Answer {
+        let request = Request::builder()
+            .method(Method::PUT)
+            .uri(format!(
+                "/v1/notes/connections/{connection_id}/blobs/{token}/chunks/{index}"
+            ))
+            .header(USER_HEADER, OWNER.to_string())
+            .header(DEVICE_ID_HEADER, device_of(OWNER).to_string())
+            .header(DEVICE_KIND_HEADER, "obsidian_plugin")
+            .header("content-type", "application/octet-stream")
+            .body(Body::from(bytes.to_vec()))
+            .expect("a request");
+        let response = self
+            .router
+            .clone()
+            .oneshot(request)
+            .await
+            .expect("the router answers");
+        let status = response.status();
+        let body = response
+            .into_body()
+            .collect()
+            .await
+            .expect("a body")
+            .to_bytes();
+        Answer {
+            status,
+            body: serde_json::from_slice(&body).unwrap_or(Value::Null),
+        }
+    }
+
+    /// Upload `bytes` under the declared SHA-256 `declared` through the transfer routes, in one
+    /// chunk. Returns the answers of the open, the chunk and the finalize.
+    async fn upload(&self, connection_id: Uuid, declared: &str, bytes: &[u8]) -> [Answer; 3] {
+        let opened = self
+            .device_call(
+                connection_id,
+                "blobs",
+                json!({
+                    "declared_size_bytes": bytes.len(),
+                    "media_type": "text/markdown",
+                    "digest": { "algorithm": "sha256", "hex": declared },
+                    "chunk_size_bytes": 65_536,
+                }),
+            )
+            .await;
+        let token = opened.body["resumption_token"]
+            .as_str()
+            .unwrap_or("rst_00000000000000000000000000")
+            .to_owned();
+        let chunk = self.put_chunk(connection_id, &token, 0, bytes).await;
+        let finalized = self
+            .device_call(
+                connection_id,
+                &format!("blobs/{token}/finalize"),
+                json!({ "resumption_token": token }),
+            )
+            .await;
+        [opened, chunk, finalized]
+    }
+}
+
+#[tokio::test]
+async fn upload_with_wrong_digest_is_refused() {
+    let channel = Channel::new().await;
+    let connection = channel.plugin_connection(OWNER, "vault-key-upload").await;
+    let declared_bytes = b"the declared bytes\n";
+    let uploaded_bytes = b"the uploaded bytes\n";
+    let declared = sha256(declared_bytes);
+
+    let [opened, chunk, finalized] = channel.upload(connection, &declared, uploaded_bytes).await;
+    let batch = channel
+        .batch(
+            OWNER,
+            connection,
+            vec![change(1, "created", "Declared.md", declared_bytes)],
+        )
+        .await;
+
+    assert_eq!(opened.status, StatusCode::CREATED, "{:?}", opened.body);
+    assert_eq!(chunk.status, StatusCode::OK, "{:?}", chunk.body);
+    assert_eq!(finalized.status, StatusCode::OK, "{:?}", finalized.body);
+    assert_eq!(
+        finalized.body["outcome"], "digest_mismatch",
+        "the transfer contract answers the mismatch as its outcome"
+    );
+    assert_eq!(finalized.body["declared_sha256_hex"], declared.as_str());
+    assert_eq!(
+        finalized.body["computed_sha256_hex"],
+        sha256(uploaded_bytes).as_str()
+    );
+    for digest in [declared.clone(), sha256(uploaded_bytes)] {
+        let blob = channel.blobs.path_of(&digest).expect("a blob path");
+        assert!(!blob.exists(), "no blob is registered for {digest}");
+    }
+    assert_eq!(batch.status, StatusCode::CONFLICT, "{:?}", batch.body);
+    assert_eq!(batch.body["code"], "notes.channel.bytes_missing");
 
     channel.cleanup().await;
 }
