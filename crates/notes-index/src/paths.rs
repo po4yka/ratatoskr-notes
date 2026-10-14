@@ -11,10 +11,10 @@ use uuid::Uuid;
 
 use crate::text::nfc;
 
-/// The folder of the vault configuration.
+/// The folder of the vault configuration, as a path key.
 const OBSIDIAN_FOLDER: &str = ".obsidian";
 
-/// The folder of the vault trash.
+/// The folder of the vault trash, as a path key.
 const TRASH_FOLDER: &str = ".trash";
 
 /// The condition of a connection that holds two paths with one path key.
@@ -58,15 +58,15 @@ impl PathRules {
     /// Why `path` with `length` bytes is not indexed, or `None` when it is.
     #[must_use]
     ///
-    /// `path` is the NFC path. An excluded folder matches with the comparison of path keys, so
-    /// the case of its name does not matter.
+    /// `path` is the NFC path. `.obsidian/`, `.trash/` and an excluded folder match with the
+    /// comparison of path keys, so the case of their names does not matter.
     pub fn exclusion(&self, path: &str, length: u64) -> Option<Exclusion> {
-        match path.split('/').next() {
+        let key = path_key(path);
+        match key.split('/').next() {
             Some(OBSIDIAN_FOLDER) => return Some(Exclusion::ObsidianConfig),
             Some(TRASH_FOLDER) => return Some(Exclusion::Trash),
             _ => {}
         }
-        let key = path_key(path);
         let excluded = self.excluded_folders.iter().any(|folder| {
             let folder = path_key(folder.trim_matches('/'));
             !folder.is_empty()
