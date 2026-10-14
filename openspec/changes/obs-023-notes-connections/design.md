@@ -162,11 +162,18 @@ restart of the host does not start it.
 start and every 15 minutes. A file is settled when its size and modification time have not
 changed for 2 seconds after the watcher last saw them change. A settled state that differs from
 the last revision of the path becomes a revision: the bytes are copied to the blob root and hashed
-in one pass, and when the file changed during the copy it waits for a new window. A lost event, a
-full inotify queue (`IN_Q_OVERFLOW`) and a new or removed directory make the watcher read the whole
-tree. The watcher sends `TreeChange::Revision` and `TreeChange::Removed` to a channel. It reads
-regular files only and opens each one without following a symbolic link. Other platforms have no
-inotify, and there the watcher only rescans; the test of the settle window therefore runs on Linux.
+in one pass, and when the file changed during the copy it waits for a new window. A full inotify
+queue (`IN_Q_OVERFLOW`) makes the watcher read the whole tree. A new directory makes it read that
+directory only, and a removed directory makes it check the files that it knew under it. Each read
+of the tree runs on the blocking pool. The watcher sends `TreeChange::Revision` and
+`TreeChange::Removed` to a channel. It reads regular files only, and never through a symbolic link
+or outside the tree: `ob` writes the tree, and it can put a link where a watched directory was. On
+Linux the watcher opens each file and each directory with `openat2` and `RESOLVE_BENEATH |
+RESOLVE_NO_SYMLINKS` from the root of the tree; on other platforms it opens each component with
+`O_NOFOLLOW`. The state of a file is the `fstat` of the open file, and the bytes of a revision come
+from the same open file, which must have the settled state before and after the copy. Other
+platforms have no inotify, and there the watcher only rescans; the tests of the watcher therefore
+run on Linux.
 
 `BlobStore` writes `<root>/sha256/<2 hex>/<62 hex>` through `<root>/staging/` and a hard link, as
 the other content-addressed stores of the fleet do. The service does not start a watcher yet: the

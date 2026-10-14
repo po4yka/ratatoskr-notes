@@ -78,7 +78,18 @@ impl BlobStore {
     /// The I/O error when the source cannot be read or the store cannot be written. A part that
     /// was copied is deleted.
     pub fn store_file(&self, source: &Path) -> std::io::Result<StoredBlob> {
-        let input = open_regular_file(source)?;
+        self.store_open_file(&open_regular_file(source)?)
+    }
+
+    /// Copy the bytes of an open file into the store, from its current offset. It blocks, so an
+    /// async caller runs it on the blocking pool. The watcher opens the file itself, so that the
+    /// bytes come from the file whose state it checked.
+    ///
+    /// # Errors
+    ///
+    /// The I/O error when the file cannot be read or the store cannot be written. A part that was
+    /// copied is deleted.
+    pub fn store_open_file(&self, input: &File) -> std::io::Result<StoredBlob> {
         let staging_dir = self.root.join("staging");
         self.create_directories(&staging_dir)?;
         let staging = staging_dir.join(format!("{}.part", Uuid::now_v7()));
@@ -163,7 +174,7 @@ fn open_regular_file(source: &Path) -> std::io::Result<File> {
 
 /// Copy `input` to a new file at `staging` and hash it in the same pass. Returns the lowercase hex
 /// SHA-256 and the length. The copy is on disk when this returns.
-fn copy_and_hash(mut input: File, staging: &Path) -> std::io::Result<(String, u64)> {
+fn copy_and_hash(mut input: &File, staging: &Path) -> std::io::Result<(String, u64)> {
     let mut output = OpenOptions::new()
         .write(true)
         .create_new(true)
