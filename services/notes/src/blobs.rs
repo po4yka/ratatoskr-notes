@@ -138,6 +138,61 @@ impl BlobStore {
         Ok(StoredBlob { digest, length })
     }
 
+    /// Create an empty staged copy for an upload, with the mode of a blob. Its chunks are written
+    /// with [`Self::write_part`], and [`Self::seal_part`] gives it its content name. A stop of the
+    /// service leaves it in `<root>/staging/`, and the next [`Self::open`] deletes it. It blocks.
+    ///
+    /// # Errors
+    ///
+    /// The I/O error when the staging directory or the file cannot be created.
+    pub fn create_part(&self) -> std::io::Result<PathBuf> {
+        let staging_dir = self.root.join("staging");
+        self.create_directories(&staging_dir)?;
+        let part = staging_dir.join(format!("{}.{PART}", Uuid::now_v7()));
+        OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(BLOB_MODE)
+            .open(&part)?;
+        set_mode_if_different(&part, BLOB_MODE)?;
+        Ok(part)
+    }
+
+    /// Write `bytes` into the staged copy `part` at `offset`, and write them to disk. It blocks.
+    ///
+    /// # Errors
+    ///
+    /// The I/O error when the copy cannot be written.
+    pub fn write_part(part: &Path, offset: u64, bytes: &[u8]) -> std::io::Result<()> {
+        use std::os::unix::fs::FileExt as _;
+        let file = OpenOptions::new().write(true).open(part)?;
+        file.write_all_at(bytes, offset)?;
+        file.sync_data()
+    }
+
+    /// Hash the staged copy `part`. When its SHA-256 is `declared`, give it its content name,
+    /// unless a blob with that name exists already. The staged copy is deleted in every case.
+    /// Returns the lowercase hex SHA-256 and the length of the bytes. It blocks.
+    ///
+    /// # Errors
+    ///
+    /// The I/O error when the copy cannot be read or the store cannot be written.
+    pub fn seal_part(&self, part: &Path, declared: &str) -> std::io::Result<StoredBlob> {
+        let sealed = hash_file(part).and_then(|(digest, length)| {
+            if digest == declared {
+                self.link(part, &digest)?;
+            }
+            Ok(StoredBlob { digest, length })
+        });
+        let _ = std::fs::remove_file(part);
+        sealed
+    }
+
+    /// Delete a staged copy that is not needed any more.
+    pub fn discard_part(part: &Path) {
+        let _ = std::fs::remove_file(part);
+    }
+
     /// Delete each staged copy in `<root>/staging/`. Only one process writes the store.
     fn remove_stale_parts(&self) -> std::io::Result<()> {
         let entries = match std::fs::read_dir(self.root.join("staging")) {
@@ -259,6 +314,26 @@ fn open_regular_file(source: &Path) -> std::io::Result<File> {
         return Err(std::io::Error::other("the source is not a regular file"));
     }
     Ok(file)
+}
+
+/// The lowercase hex SHA-256 and the length of the file at `path`, read in bounded chunks.
+fn hash_file(path: &Path) -> std::io::Result<(String, u64)> {
+    let mut input = File::open(path)?;
+    let mut hasher = Sha256::new();
+    let mut length: u64 = 0;
+    let mut chunk = vec![0_u8; CHUNK_BYTES];
+    loop {
+        let read = input.read(&mut chunk)?;
+        let Some(bytes) = chunk.get(..read) else {
+            return Err(std::io::Error::other("a read exceeded its buffer"));
+        };
+        if bytes.is_empty() {
+            break;
+        }
+        hasher.update(bytes);
+        length += u64::try_from(read).map_err(std::io::Error::other)?;
+    }
+    Ok((format!("{:x}", hasher.finalize()), length))
 }
 
 /// Copy `input` to a new file at `staging` and hash it in the same pass. Returns the lowercase hex

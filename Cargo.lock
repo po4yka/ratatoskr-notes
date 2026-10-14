@@ -1913,6 +1913,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "ratatoskr-blob-transfer-contracts"
+version = "0.1.0"
+source = "git+https://github.com/po4yka/ratatoskr-contracts.git?rev=a9289e27bcf53f496b5917889580965d97ff2358#a9289e27bcf53f496b5917889580965d97ff2358"
+dependencies = [
+ "ratatoskr-error-contracts",
+ "ratatoskr-identifiers",
+ "regex",
+ "schemars",
+ "serde",
+ "serde_json",
+ "sha2 0.11.1",
+ "thiserror",
+]
+
+[[package]]
 name = "ratatoskr-error-contracts"
 version = "0.1.0"
 source = "git+https://github.com/po4yka/ratatoskr-contracts.git?rev=a9289e27bcf53f496b5917889580965d97ff2358#a9289e27bcf53f496b5917889580965d97ff2358"
@@ -1967,7 +1982,9 @@ dependencies = [
  "futures-util",
  "http-body-util",
  "inotify",
+ "jiff",
  "metrics-exporter-prometheus",
+ "ratatoskr-blob-transfer-contracts",
  "ratatoskr-error-contracts",
  "ratatoskr-event-envelope",
  "ratatoskr-identifiers",

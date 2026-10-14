@@ -25,6 +25,7 @@ pub mod secrets;
 mod supervisor;
 pub mod systemd;
 mod tree_sync;
+pub mod uploads;
 pub mod watcher;
 
 use std::future::Future;

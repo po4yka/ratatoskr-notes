@@ -3,11 +3,35 @@
 use axum::Json;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
+use ratatoskr_blob_transfer_contracts::TransferErrorCode;
 use ratatoskr_error_contracts::{ErrorCode, ErrorEnvelope};
 use ratatoskr_identifiers::SafeMessage;
 use uuid::Uuid;
 
 use crate::login::LoginFailure;
+
+/// The message of a refused step of an upload.
+const fn transfer_message(code: TransferErrorCode) -> &'static str {
+    match code {
+        TransferErrorCode::SessionUnknown => "No open upload session answers this token.",
+        TransferErrorCode::SessionExpired => {
+            "The upload session has expired. Open a new upload session."
+        }
+        TransferErrorCode::ChunkIndexOutOfRange => {
+            "The chunk index is outside the chunks of the declaration."
+        }
+        TransferErrorCode::ChunkLengthInvalid => {
+            "The chunk does not have the length that its index requires."
+        }
+        TransferErrorCode::ChunkConflict => {
+            "Other bytes were already recorded for this chunk index."
+        }
+        TransferErrorCode::FinalizeIncomplete => {
+            "Send the missing chunks, then finalize the upload again."
+        }
+        _ => "The upload step is refused.",
+    }
+}
 
 /// Every failure a domain route answers with. Each one renders as the contract error envelope.
 #[derive(Debug)]
@@ -28,6 +52,7 @@ pub(super) enum ApiFault {
     BytesMissing {
         missing: Vec<String>,
     },
+    Transfer(TransferErrorCode),
     Login(LoginFailure),
     CleanupFailed,
     Unavailable,
@@ -37,13 +62,20 @@ impl ApiFault {
     const fn status(&self) -> StatusCode {
         match self {
             Self::Unauthenticated => StatusCode::UNAUTHORIZED,
-            Self::InvalidRequest => StatusCode::BAD_REQUEST,
+            // No open session answers the token, as for a connection that does not exist.
+            Self::NotFound
+            | Self::FileNotFound
+            | Self::Transfer(
+                TransferErrorCode::SessionUnknown | TransferErrorCode::SessionExpired,
+            ) => StatusCode::NOT_FOUND,
+            // A step of an upload that does not match the declared plan, as the Edge contract
+            // answers it for the other upload routes.
+            Self::InvalidRequest | Self::Transfer(_) => StatusCode::BAD_REQUEST,
             Self::VaultAlreadyConnected { .. }
             | Self::ChannelMismatch
             | Self::SequenceGap { .. }
             | Self::BytesMissing { .. } => StatusCode::CONFLICT,
             Self::BatchTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
-            Self::NotFound | Self::FileNotFound => StatusCode::NOT_FOUND,
             Self::Login(_) => StatusCode::UNPROCESSABLE_ENTITY,
             Self::CleanupFailed | Self::Unavailable => StatusCode::SERVICE_UNAVAILABLE,
         }
@@ -95,6 +127,7 @@ impl ApiFault {
                 "The file does not exist at this revision.",
                 false,
             ),
+            Self::Transfer(code) => (code.as_str(), transfer_message(*code), code.retryable()),
             Self::Login(failure) => {
                 let (code, message) = failure.fields();
                 (code, message, false)

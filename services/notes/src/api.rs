@@ -28,9 +28,11 @@ use crate::files::{self, ExcludedFoldersSet, FileRecorder};
 use crate::operation::{self, Report};
 use crate::supervisor::Supervisor;
 use crate::tree_sync::Pipeline;
+use crate::uploads::Uploads;
 
 pub use connect::OPERATION_HEADER;
 
+mod blobs;
 mod channel;
 mod connect;
 mod fault;
@@ -89,6 +91,7 @@ pub struct ApiState<B> {
     blobs: BlobStore,
     trees_root: PathBuf,
     max_file_bytes: u64,
+    uploads: Uploads,
 }
 
 impl<B> Clone for ApiState<B> {
@@ -107,6 +110,7 @@ impl<B> Clone for ApiState<B> {
             blobs: self.blobs.clone(),
             trees_root: self.trees_root.clone(),
             max_file_bytes: self.max_file_bytes,
+            uploads: self.uploads.clone(),
         }
     }
 }
@@ -134,6 +138,7 @@ impl<B: SystemdBus> ApiState<B> {
             blobs,
             trees_root,
             max_file_bytes,
+            uploads: Uploads::default(),
         }
     }
 
@@ -331,6 +336,22 @@ pub fn domain_router<B: SystemdBus>(state: ApiState<B>) -> Router {
         .route(
             "/v1/notes/connections/{connection_id}/excluded-folders",
             put(set_excluded_folders::<B>),
+        )
+        .route(
+            "/v1/notes/connections/{connection_id}/blobs",
+            post(blobs::open_upload::<B>),
+        )
+        .route(
+            "/v1/notes/connections/{connection_id}/blobs/{token}/chunks/{index}",
+            put(blobs::put_chunk::<B>).layer(DefaultBodyLimit::max(blobs::MAX_CHUNK_BYTES)),
+        )
+        .route(
+            "/v1/notes/connections/{connection_id}/blobs/{token}/status",
+            get(blobs::upload_status::<B>),
+        )
+        .route(
+            "/v1/notes/connections/{connection_id}/blobs/{token}/finalize",
+            post(blobs::finalize_upload::<B>),
         )
         .route(
             "/v1/notes/connections/{connection_id}/changes",

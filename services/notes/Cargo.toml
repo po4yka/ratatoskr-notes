@@ -13,6 +13,8 @@ path = "src/main.rs"
 
 [dependencies]
 ratatoskr-notes-index.workspace       = true
+ratatoskr-blob-transfer-contracts.workspace = true
+jiff.workspace                        = true
 async-nats.workspace                  = true
 ratatoskr-error-contracts.workspace   = true
 ratatoskr-event-envelope.workspace    = true

@@ -155,6 +155,8 @@ pub struct ConnectionRecord {
     pub logged_in: bool,
     /// The connect operation.
     pub operation_id: Option<Uuid>,
+    /// The device of a `plugin` or `cli` connection.
+    pub device_id: Option<Uuid>,
 }
 
 /// The connect operation of one connection.
@@ -173,6 +175,17 @@ pub struct ConnectOperation {
     /// Its state.
     pub state: String,
 }
+
+/// The row of a [`ConnectionRecord`].
+type RecordRow = (
+    Uuid,
+    String,
+    String,
+    String,
+    bool,
+    Option<Uuid>,
+    Option<Uuid>,
+);
 
 /// One event for the outbox.
 #[derive(Debug, Clone, Copy)]
@@ -203,20 +216,27 @@ impl Database {
         owner_id: Uuid,
         connection_id: Uuid,
     ) -> Result<Option<ConnectionRecord>, PersistenceError> {
-        let row: Option<(Uuid, String, String, String, bool, Option<Uuid>)> =
-            sqlx::query_as(&format!(
-                "select connection_id, channel, vault_display_name, state,
-                        logged_in_at is not null, operation_id
+        let row: Option<RecordRow> = sqlx::query_as(&format!(
+            "select connection_id, channel, vault_display_name, state,
+                        logged_in_at is not null, operation_id, device_id
                  from notes.connections
                  where connection_id = $1 and owner_id = $2 and {HOLDS_VAULT_KEY}"
-            ))
-            .bind(connection_id)
-            .bind(owner_id)
-            .fetch_optional(&self.pool)
-            .await
-            .map_err(PersistenceError::Query)?;
+        ))
+        .bind(connection_id)
+        .bind(owner_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(PersistenceError::Query)?;
         Ok(row.map(
-            |(connection_id, channel, vault_display_name, state, logged_in, operation_id)| {
+            |(
+                connection_id,
+                channel,
+                vault_display_name,
+                state,
+                logged_in,
+                operation_id,
+                device_id,
+            )| {
                 ConnectionRecord {
                     connection_id,
                     channel,
@@ -224,6 +244,7 @@ impl Database {
                     state,
                     logged_in,
                     operation_id,
+                    device_id,
                 }
             },
         ))
