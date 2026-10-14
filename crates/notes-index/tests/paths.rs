@@ -111,3 +111,31 @@ fn nfd_path_is_published_as_nfc() {
         "one file_id for the NFD and the NFC path"
     );
 }
+
+#[test]
+fn obsidian_and_trash_match_by_path_key() {
+    let rules = PathRules {
+        excluded_folders: vec!["Private".to_owned()],
+        ..PathRules::default()
+    };
+
+    let config = rules.exclusion(".Obsidian/plugins/x/data.json", 10);
+    let trash = rules.exclusion(".TRASH/old.md", 10);
+    let owner_folder = rules.exclusion("PRIVATE/a.md", 10);
+
+    assert_eq!(
+        config,
+        Some(Exclusion::ObsidianConfig),
+        "the vault configuration matches by its path key"
+    );
+    assert_eq!(
+        trash,
+        Some(Exclusion::Trash),
+        "the trash matches by its path key"
+    );
+    assert_eq!(
+        owner_folder,
+        Some(Exclusion::ExcludedFolder),
+        "as an excluded folder of the owner does"
+    );
+}
