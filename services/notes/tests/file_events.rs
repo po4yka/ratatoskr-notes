@@ -403,3 +403,63 @@ async fn outbox_relay_publishes_each_event_once_on_its_subject() {
 
     vault.cleanup().await;
 }
+
+#[tokio::test]
+async fn case_only_rename_indexes_the_new_path() {
+    let vault = Vault::new().await;
+    let bytes = b"one note, renamed in Finder\n";
+
+    // A rename that changes only the case arrives as the new path, a collision while the old path
+    // is present, and then the removal of the old path.
+    vault.save("Note.md", bytes).await;
+    vault.save("note.md", bytes).await;
+    vault.remove("Note.md").await;
+
+    let present: Vec<(String, String)> = sqlx::query_as(
+        "select path, revision from notes.files
+         where connection_id = $1 and state = 'present'",
+    )
+    .bind(vault.connection_id)
+    .fetch_all(vault.fixture.pool())
+    .await
+    .expect("the files can be read");
+    let collisions: i64 =
+        sqlx::query_scalar("select count(*) from notes.path_collisions where connection_id = $1")
+            .bind(vault.connection_id)
+            .fetch_one(vault.fixture.pool())
+            .await
+            .expect("the collisions can be counted");
+    let events: Vec<(String, String)> = vault
+        .events()
+        .await
+        .iter()
+        .map(|event| {
+            (
+                event["payload"]["change_kind"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_owned(),
+                event["payload"]["path"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_owned(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        present,
+        [("note.md".to_owned(), sha256(bytes))],
+        "the new path is indexed with its revision"
+    );
+    assert_eq!(collisions, 0, "no collision is left");
+    assert_eq!(
+        events,
+        [
+            ("created".to_owned(), "Note.md".to_owned()),
+            ("deleted".to_owned(), "Note.md".to_owned()),
+            ("created".to_owned(), "note.md".to_owned()),
+        ]
+    );
+
+    vault.cleanup().await;
+}
