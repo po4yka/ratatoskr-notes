@@ -31,7 +31,8 @@ use crate::watcher::TreeChange;
 pub const MAX_EXCLUDED_FOLDERS: usize = 64;
 
 /// The SHA-256 of no bytes.
-const EMPTY_SHA256: &str = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+pub(crate) const EMPTY_SHA256: &str =
+    "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
 
 /// The event type of a file change.
 const FILE_CHANGED: &str = "notes.file.changed.v1";
@@ -197,6 +198,21 @@ impl FileRecorder {
     /// Whether the blob store holds the bytes with the SHA-256 `digest`.
     pub(crate) async fn holds(&self, digest: &str) -> bool {
         self.blob_length(digest).await.is_some()
+    }
+
+    /// The number of bytes of the blob with the SHA-256 `digest` when a change of the connection of
+    /// `transaction` may name it, or `None` when it is missing for that connection: the connection
+    /// did not upload it and holds no revision with it, or the store does not hold it. Any
+    /// connection may name the blob of no bytes.
+    pub(crate) async fn usable_length(
+        &self,
+        transaction: &mut FileTransaction,
+        digest: &str,
+    ) -> Result<Option<u64>, RecordError> {
+        if digest != EMPTY_SHA256 && !transaction.may_use(digest).await? {
+            return Ok(None);
+        }
+        Ok(self.blob_length(digest).await)
     }
 
     /// The number of bytes of the blob with the SHA-256 `digest`, or `None` when the store does

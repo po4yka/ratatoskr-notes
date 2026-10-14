@@ -10,164 +10,13 @@
 
 mod support;
 
-use std::time::Duration;
-
-use axum::Router;
-use axum::body::Body;
-use axum::http::{Method, Request, StatusCode};
-use http_body_util::BodyExt as _;
-use ratatoskr_notes::api::{ApiState, domain_router};
-use ratatoskr_notes::blobs::BlobStore;
-use ratatoskr_notes_persistence::test_support::TestDatabase;
+use axum::http::StatusCode;
 use serde_json::{Value, json};
-use sha2::{Digest as _, Sha256};
-use uuid::Uuid;
 
-use crate::support::systemd::FakeSystemd;
-use crate::support::{
-    Answer, DEVICE_ID_HEADER, DEVICE_KIND_HEADER, USER_HEADER, connect, connection_id, device_of,
-    send_with, terminal_report,
+use crate::support::channel::{
+    Channel, OTHER_OWNER, OWNER, SECOND_DEVICE, SHORT_DEADLINE, SYNC_HINT, change, entry, sha256,
 };
-use tower::ServiceExt as _;
-
-const OWNER: Uuid = Uuid::from_u128(0x0192_0000_0000_7000_8000_0000_0000_0dc1);
-
-/// The domain router of one test database, with its blob store.
-struct Channel {
-    fixture: TestDatabase,
-    systemd: FakeSystemd,
-    router: Router,
-    blobs: BlobStore,
-    scratch: tempfile::TempDir,
-}
-
-impl Channel {
-    async fn new() -> Self {
-        Self::with(|state| state).await
-    }
-
-    /// A router whose state `settings` adjusts.
-    async fn with(settings: impl FnOnce(ApiState<FakeSystemd>) -> ApiState<FakeSystemd>) -> Self {
-        let fixture = TestDatabase::create().await.expect("a test database");
-        let systemd = FakeSystemd::new();
-        let root = systemd.blob_root();
-        std::fs::create_dir_all(&root).expect("the blob root");
-        let blobs = BlobStore::new(root);
-        let mut channel = Self {
-            fixture,
-            systemd,
-            router: Router::new(),
-            blobs,
-            scratch: tempfile::tempdir().expect("a scratch directory"),
-        };
-        channel.router = domain_router(settings(channel.state()));
-        channel
-    }
-
-    /// The state of the domain routes of this test database, as the service builds it at start.
-    fn state(&self) -> ApiState<FakeSystemd> {
-        ApiState::new(self.fixture.database.clone(), self.systemd.clone())
-            .with_key_file(self.systemd.key_file())
-            .with_credentials_dir(self.systemd.credentials_root())
-            .with_blobs(self.blobs.clone())
-    }
-
-    /// A `plugin` connection of `owner`, from the device of `owner`.
-    async fn plugin_connection(&self, owner: Uuid, vault_key: &str) -> Uuid {
-        connection_id(&connect(&self.router, owner, "plugin", vault_key).await)
-    }
-
-    /// Put `bytes` in the blob store, as a finished upload does.
-    fn hold(&self, bytes: &[u8]) {
-        let source = self.scratch.path().join(Uuid::now_v7().to_string());
-        std::fs::write(&source, bytes).expect("the source file");
-        self.blobs.store_file(&source).expect("the blob is stored");
-    }
-
-    /// `POST /v1/notes/connections/{id}/changes` from `device` of the kind `kind`.
-    async fn batch_from(
-        &self,
-        owner: Uuid,
-        device: Uuid,
-        kind: &str,
-        connection_id: Uuid,
-        changes: Vec<Value>,
-    ) -> Answer {
-        let claims = [
-            (DEVICE_ID_HEADER, device.to_string()),
-            (DEVICE_KIND_HEADER, kind.to_owned()),
-        ];
-        send_with(
-            &self.router,
-            Method::POST,
-            &format!("/v1/notes/connections/{connection_id}/changes"),
-            owner,
-            &claims,
-            Some(json!({ "changes": changes })),
-        )
-        .await
-    }
-
-    /// A batch from the plugin of `owner`.
-    async fn batch(&self, owner: Uuid, connection_id: Uuid, changes: Vec<Value>) -> Answer {
-        self.batch_from(
-            owner,
-            device_of(owner),
-            "obsidian_plugin",
-            connection_id,
-            changes,
-        )
-        .await
-    }
-
-    /// The number of `notes.file.changed.v1` events of a connection.
-    async fn events(&self, connection_id: Uuid) -> i64 {
-        sqlx::query_scalar(
-            "select count(*) from notes.outbox
-             where event_type = 'notes.file.changed.v1'
-               and payload -> 'payload' ->> 'connection_id' = $1",
-        )
-        .bind(connection_id.to_string())
-        .fetch_one(self.fixture.pool())
-        .await
-        .expect("the outbox can be read")
-    }
-
-    /// The number of revisions of the files of a connection.
-    async fn revisions(&self, connection_id: Uuid) -> i64 {
-        sqlx::query_scalar(
-            "select count(*) from notes.revisions r
-             join notes.files f on f.file_id = r.file_id
-             where f.connection_id = $1",
-        )
-        .bind(connection_id)
-        .fetch_one(self.fixture.pool())
-        .await
-        .expect("the revisions can be read")
-    }
-
-    async fn cleanup(self) {
-        self.fixture
-            .cleanup()
-            .await
-            .expect("the test database is dropped");
-    }
-}
-
-fn sha256(bytes: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(bytes))
-}
-
-/// One `created` or `updated` change with the facts of `bytes`.
-fn change(sequence: u64, kind: &str, path: &str, bytes: &[u8]) -> Value {
-    json!({
-        "sequence": sequence,
-        "kind": kind,
-        "path": path,
-        "sha256": sha256(bytes),
-        "length_bytes": bytes.len(),
-    })
-}
+use crate::support::{device_of, terminal_report};
 
 #[tokio::test]
 async fn duplicate_batch_is_idempotent() {
@@ -176,7 +25,7 @@ async fn duplicate_batch_is_idempotent() {
         .plugin_connection(OWNER, "vault-key-duplicate")
         .await;
     for bytes in [&b"alpha v1\n"[..], b"beta v1\n", b"alpha v2\n"] {
-        channel.hold(bytes);
+        channel.hold(OWNER, connection, bytes).await;
     }
     let changes = vec![
         change(1, "created", "Alpha.md", b"alpha v1\n"),
@@ -211,7 +60,7 @@ async fn sequence_gap_commits_nothing() {
     let mut first = Vec::new();
     for sequence in 1..=10_u64 {
         let bytes = format!("note {sequence}\n");
-        channel.hold(bytes.as_bytes());
+        channel.hold(OWNER, connection, bytes.as_bytes()).await;
         first.push(change(
             sequence,
             "created",
@@ -220,7 +69,7 @@ async fn sequence_gap_commits_nothing() {
         ));
     }
     let committed = channel.batch(OWNER, connection, first).await;
-    channel.hold(b"late\n");
+    channel.hold(OWNER, connection, b"late\n").await;
 
     let gap = channel
         .batch(
@@ -255,7 +104,7 @@ async fn oversized_batch_commits_nothing() {
     let connection = channel
         .plugin_connection(OWNER, "vault-key-oversized")
         .await;
-    channel.hold(b"one body\n");
+    channel.hold(OWNER, connection, b"one body\n").await;
     let changes: Vec<Value> = (1..=257_u64)
         .map(|sequence| {
             change(
@@ -282,54 +131,13 @@ async fn oversized_batch_commits_nothing() {
     channel.cleanup().await;
 }
 
-const OTHER_OWNER: Uuid = Uuid::from_u128(0x0192_0000_0000_7000_8000_0000_0000_0dc2);
-
-/// A second device of [`OWNER`], for example a phone that holds a copy of the vault folder.
-const SECOND_DEVICE: Uuid = Uuid::from_u128(0x0192_0000_0000_7000_8000_0000_0000_0dc3);
-
-/// The words of the hint that points the owner to Obsidian Sync.
-const SYNC_HINT: &str = "Obsidian Sync";
-
-impl Channel {
-    /// `POST /v1/notes/connections` with `channel = plugin` from `device`.
-    async fn connect_from(&self, owner: Uuid, device: Uuid, vault_key: &str) -> Answer {
-        let claims = [
-            (DEVICE_ID_HEADER, device.to_string()),
-            (DEVICE_KIND_HEADER, "obsidian_plugin".to_owned()),
-        ];
-        let body = json!({
-            "channel": "plugin",
-            "vault_key": vault_key,
-            "vault_display_name": "Personal",
-        });
-        send_with(
-            &self.router,
-            Method::POST,
-            "/v1/notes/connections",
-            owner,
-            &claims,
-            Some(body),
-        )
-        .await
-    }
-
-    /// The device that a connection records.
-    async fn device(&self, connection_id: Uuid) -> Option<Uuid> {
-        sqlx::query_scalar("select device_id from notes.connections where connection_id = $1")
-            .bind(connection_id)
-            .fetch_one(self.fixture.pool())
-            .await
-            .expect("the connection exists")
-    }
-}
-
 #[tokio::test]
 async fn foreign_connection_changes_are_not_found() {
     let channel = Channel::new().await;
     let foreign = channel
         .plugin_connection(OTHER_OWNER, "vault-key-foreign")
         .await;
-    channel.hold(b"intruder\n");
+    channel.hold(OTHER_OWNER, foreign, b"intruder\n").await;
 
     let answer = channel
         .batch(
@@ -354,7 +162,7 @@ async fn foreign_connection_changes_are_not_found() {
 async fn export_agent_on_plugin_connection_is_channel_mismatch() {
     let channel = Channel::new().await;
     let connection = channel.plugin_connection(OWNER, "vault-key-kind").await;
-    channel.hold(b"from the agent\n");
+    channel.hold(OWNER, connection, b"from the agent\n").await;
 
     let answer = channel
         .batch_from(
@@ -377,7 +185,7 @@ async fn export_agent_on_plugin_connection_is_channel_mismatch() {
 async fn second_device_for_one_connection_is_refused() {
     let channel = Channel::new().await;
     let connection = channel.plugin_connection(OWNER, "vault-key-copied").await;
-    channel.hold(b"from the copy\n");
+    channel.hold(OWNER, connection, b"from the copy\n").await;
 
     let connect = channel
         .connect_from(OWNER, SECOND_DEVICE, "vault-key-copied")
@@ -416,118 +224,6 @@ async fn second_device_for_one_connection_is_refused() {
     assert_eq!(channel.events(connection).await, 0, "no change is recorded");
 
     channel.cleanup().await;
-}
-
-impl Channel {
-    /// A JSON request from the plugin of [`OWNER`] to a route of `connection_id`.
-    async fn device_call(&self, connection_id: Uuid, route: &str, body: Value) -> Answer {
-        self.device_call_as(OWNER, connection_id, route, body).await
-    }
-
-    /// A JSON request from the plugin of `owner` to a route of `connection_id`.
-    async fn device_call_as(
-        &self,
-        owner: Uuid,
-        connection_id: Uuid,
-        route: &str,
-        body: Value,
-    ) -> Answer {
-        let claims = [
-            (DEVICE_ID_HEADER, device_of(owner).to_string()),
-            (DEVICE_KIND_HEADER, "obsidian_plugin".to_owned()),
-        ];
-        send_with(
-            &self.router,
-            Method::POST,
-            &format!("/v1/notes/connections/{connection_id}/{route}"),
-            owner,
-            &claims,
-            Some(body),
-        )
-        .await
-    }
-
-    /// `PUT .../blobs/{token}/chunks/{index}` with the raw bytes of one chunk.
-    async fn put_chunk(
-        &self,
-        owner: Uuid,
-        connection_id: Uuid,
-        token: &str,
-        index: u32,
-        bytes: &[u8],
-    ) -> Answer {
-        let request = Request::builder()
-            .method(Method::PUT)
-            .uri(format!(
-                "/v1/notes/connections/{connection_id}/blobs/{token}/chunks/{index}"
-            ))
-            .header(USER_HEADER, owner.to_string())
-            .header(DEVICE_ID_HEADER, device_of(owner).to_string())
-            .header(DEVICE_KIND_HEADER, "obsidian_plugin")
-            .header("content-type", "application/octet-stream")
-            .body(Body::from(bytes.to_vec()))
-            .expect("a request");
-        let response = self
-            .router
-            .clone()
-            .oneshot(request)
-            .await
-            .expect("the router answers");
-        let status = response.status();
-        let body = response
-            .into_body()
-            .collect()
-            .await
-            .expect("a body")
-            .to_bytes();
-        Answer {
-            status,
-            body: serde_json::from_slice(&body).unwrap_or(Value::Null),
-        }
-    }
-
-    /// Upload `bytes` under the declared SHA-256 `declared` through the transfer routes, in one
-    /// chunk. Returns the answers of the open, the chunk and the finalize.
-    async fn upload(&self, connection_id: Uuid, declared: &str, bytes: &[u8]) -> [Answer; 3] {
-        self.upload_as(OWNER, connection_id, declared, bytes).await
-    }
-
-    /// [`Self::upload`] from the plugin of `owner`.
-    async fn upload_as(
-        &self,
-        owner: Uuid,
-        connection_id: Uuid,
-        declared: &str,
-        bytes: &[u8],
-    ) -> [Answer; 3] {
-        let opened = self
-            .device_call_as(
-                owner,
-                connection_id,
-                "blobs",
-                json!({
-                    "declared_size_bytes": bytes.len(),
-                    "media_type": "text/markdown",
-                    "digest": { "algorithm": "sha256", "hex": declared },
-                    "chunk_size_bytes": 65_536,
-                }),
-            )
-            .await;
-        let token = opened.body["resumption_token"]
-            .as_str()
-            .unwrap_or("rst_00000000000000000000000000")
-            .to_owned();
-        let chunk = self.put_chunk(owner, connection_id, &token, 0, bytes).await;
-        let finalized = self
-            .device_call_as(
-                owner,
-                connection_id,
-                &format!("blobs/{token}/finalize"),
-                json!({ "resumption_token": token }),
-            )
-            .await;
-        [opened, chunk, finalized]
-    }
 }
 
 #[tokio::test]
@@ -569,27 +265,6 @@ async fn upload_with_wrong_digest_is_refused() {
     channel.cleanup().await;
 }
 
-impl Channel {
-    /// The payloads of the `notes.file.changed.v1` events of a connection, in order.
-    async fn changes(&self, connection_id: Uuid) -> Vec<Value> {
-        sqlx::query_scalar(
-            "select payload -> 'payload' from notes.outbox
-             where event_type = 'notes.file.changed.v1'
-               and payload -> 'payload' ->> 'connection_id' = $1
-             order by position",
-        )
-        .bind(connection_id.to_string())
-        .fetch_all(self.fixture.pool())
-        .await
-        .expect("the outbox can be read")
-    }
-}
-
-/// One manifest entry with the facts of `bytes`.
-fn entry(path: &str, bytes: &[u8]) -> Value {
-    json!({ "path": path, "sha256": sha256(bytes), "length_bytes": bytes.len() })
-}
-
 #[tokio::test]
 async fn manifest_reconciles_offline_changes() {
     let channel = Channel::new().await;
@@ -597,7 +272,9 @@ async fn manifest_reconciles_offline_changes() {
     let original = |n: u32| format!("file {n:02} as it was\n");
     let mut first = Vec::new();
     for n in 1..=20_u32 {
-        channel.hold(original(n).as_bytes());
+        channel
+            .hold(OWNER, connection, original(n).as_bytes())
+            .await;
         first.push(change(
             u64::from(n),
             "created",
@@ -688,40 +365,13 @@ async fn manifest_reconciles_offline_changes() {
     channel.cleanup().await;
 }
 
-impl Channel {
-    /// The state of a connection.
-    async fn connection_state(&self, connection_id: Uuid) -> String {
-        sqlx::query_scalar("select state from notes.connections where connection_id = $1")
-            .bind(connection_id)
-            .fetch_one(self.fixture.pool())
-            .await
-            .expect("the connection exists")
-    }
-
-    /// The number of `notes.vault.connected.v1` events of a connection.
-    async fn connected_events(&self, connection_id: Uuid) -> i64 {
-        sqlx::query_scalar(
-            "select count(*) from notes.outbox
-             where event_type = 'notes.vault.connected.v1'
-               and payload -> 'payload' ->> 'connection_id' = $1",
-        )
-        .bind(connection_id.to_string())
-        .fetch_one(self.fixture.pool())
-        .await
-        .expect("the outbox can be read")
-    }
-}
-
-/// A short bound for the first manifest, so that a test sees its end.
-const SHORT_DEADLINE: Duration = Duration::from_millis(200);
-
 #[tokio::test]
 async fn first_manifest_completes_the_device_connect() {
     let channel = Channel::new().await;
     let connection = channel
         .plugin_connection(OWNER, "vault-key-first-manifest")
         .await;
-    channel.hold(b"the first note\n");
+    channel.hold(OWNER, connection, b"the first note\n").await;
 
     let applied = channel
         .device_call(
@@ -830,39 +480,6 @@ async fn empty_file_needs_no_upload() {
     assert_eq!(changes[0]["blob"]["length_bytes"], 0);
 
     channel.cleanup().await;
-}
-
-impl Channel {
-    /// `GET /v1/notes/connections/{id}/files/{path}` for `owner`: the status and the bytes.
-    async fn read_file(
-        &self,
-        owner: Uuid,
-        connection_id: Uuid,
-        path: &str,
-    ) -> (StatusCode, Vec<u8>) {
-        let request = Request::builder()
-            .method(Method::GET)
-            .uri(format!(
-                "/v1/notes/connections/{connection_id}/files/{path}"
-            ))
-            .header(USER_HEADER, owner.to_string())
-            .body(Body::empty())
-            .expect("a request");
-        let response = self
-            .router
-            .clone()
-            .oneshot(request)
-            .await
-            .expect("the router answers");
-        let status = response.status();
-        let body = response
-            .into_body()
-            .collect()
-            .await
-            .expect("a body")
-            .to_bytes();
-        (status, body.to_vec())
-    }
 }
 
 #[tokio::test]

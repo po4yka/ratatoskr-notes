@@ -92,7 +92,10 @@ pub async fn apply_manifest(
         .collect();
     let mut needed = BTreeSet::new();
     for entry in &indexed {
-        match recorder.blob_length(&entry.digest).await {
+        match recorder
+            .usable_length(&mut transaction, &entry.digest)
+            .await?
+        {
             None => {
                 needed.insert(entry.digest.clone());
             }

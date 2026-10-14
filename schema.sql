@@ -185,6 +185,28 @@ comment on table notes.revisions is
     'Each revision of a file; the bytes are in the notes blob root under the SHA-256.';
 
 -- ---------------------------------------------------------------------------------------------
+-- connection_blobs: the bytes that a device uploaded through an upload session of a connection
+-- ---------------------------------------------------------------------------------------------
+
+-- A batch or a manifest of a `plugin` or `cli` connection may name only bytes of that connection:
+-- a row here, a revision of one of its files, or the bytes of no bytes. A hash alone is not a
+-- right to read the bytes that another connection stored (workspace spec notes-device-channels).
+create table notes.connection_blobs (
+    connection_id uuid        not null references notes.connections (connection_id),
+    revision      text        not null,
+    length_bytes  bigint      not null,
+    received_at   timestamptz not null,
+
+    primary key (connection_id, revision),
+
+    constraint connection_blobs_revision_is_sha256 check (revision ~ '^[0-9a-f]{64}$'),
+    constraint connection_blobs_length_is_not_negative check (length_bytes >= 0)
+);
+
+comment on table notes.connection_blobs is
+    'The bytes that a device uploaded for one connection; the bytes are in the notes blob root.';
+
+-- ---------------------------------------------------------------------------------------------
 -- path_collisions: a path whose key another present file of the connection holds
 -- ---------------------------------------------------------------------------------------------
 

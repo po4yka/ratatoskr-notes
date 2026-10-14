@@ -137,8 +137,10 @@ The connection keeps the highest device sequence that it committed. The answer i
 - A change at or below the committed sequence is a repeat. It changes nothing, so a batch that is
   sent again gets the same answer.
 - More than 256 changes answer `413` with `notes.channel.batch_too_large` and `max_changes`.
-- A change whose bytes Notes does not hold answers `409` with `notes.channel.bytes_missing` and
-  `missing_sha256`. Nothing is committed. An excluded path and a file over the size limit need no
+- A change may name only bytes of its own connection: bytes that the device uploaded through an
+  upload session of that connection (`notes.connection_blobs`), or a revision of one of its files.
+  Other bytes, also bytes that another connection stored, answer `409` with
+  `notes.channel.bytes_missing` and `missing_sha256`, and the device uploads them itself. Nothing is committed. An excluded path and a file over the size limit need no
   bytes. An empty file needs no upload either: the transfer contract refuses 0 bytes, so Notes
   puts the blob of no bytes in its store itself.
 - Otherwise the changes after the committed sequence, and the new committed sequence, are one
@@ -158,7 +160,8 @@ sessions; the device opens a new one.
 `POST /v1/notes/connections/{id}/manifest` with `{"entries": [{"path", "sha256",
 "length_bytes"}]}`, every file of the vault, at most 100 000 entries. The answer is
 `{"needed_sha256": [...], "committed_sequence": n}`. When Notes does not hold the bytes of an
-indexed entry, `needed_sha256` lists their hashes and nothing is recorded. The device uploads them
+indexed entry that its connection may name, `needed_sha256` lists their hashes and nothing is
+recorded. The device uploads them
 and sends the manifest again. Then one transaction records `deleted` for each file that the
 manifest does not name, `renamed` when exactly one missing path and exactly one new path have the
 same hash, `updated` for each changed hash, and `created` for each new path. A manifest does not

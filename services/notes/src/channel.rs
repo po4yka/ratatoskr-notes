@@ -166,7 +166,7 @@ pub async fn apply_batch(
         if rules.exclusion(&change.path, *length).is_some() {
             continue;
         }
-        match recorder.blob_length(digest).await {
+        match recorder.usable_length(&mut transaction, digest).await? {
             None => {
                 missing.insert(digest.clone());
             }

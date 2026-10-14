@@ -294,6 +294,28 @@ impl FileTransaction {
         }))
     }
 
+    /// Whether a change of this connection may name the bytes with the SHA-256 `revision`: they
+    /// were uploaded through an upload session of this connection, or they are a revision of one
+    /// of its files.
+    ///
+    /// # Errors
+    ///
+    /// [`PersistenceError::Query`] when the statement fails.
+    pub async fn may_use(&mut self, revision: &str) -> Result<bool, PersistenceError> {
+        sqlx::query_scalar(
+            "select exists (select 1 from notes.connection_blobs
+                            where connection_id = $1 and revision = $2)
+                 or exists (select 1 from notes.revisions r
+                            join notes.files f on f.file_id = r.file_id
+                            where f.connection_id = $1 and r.revision = $2)",
+        )
+        .bind(self.connection_id)
+        .bind(revision)
+        .fetch_one(&mut *self.transaction)
+        .await
+        .map_err(query_error)
+    }
+
     /// The paths of the collisions of this connection.
     ///
     /// # Errors

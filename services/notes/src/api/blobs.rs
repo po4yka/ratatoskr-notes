@@ -142,8 +142,26 @@ pub(super) async fn finalize_upload<B: SystemdBus>(
         .finalize(&state.blobs, connection_id, &token)
         .await
         .map_err(fault)?;
-    if matches!(outcome, UploadCompletionOutcome::DigestMismatch { .. }) {
-        tracing::info!(%connection_id, "an upload ended with bytes that do not match their declared SHA-256");
+    match &outcome {
+        UploadCompletionOutcome::Stored { blob_ref, .. } => {
+            // From now on a batch or a manifest of this connection may name these bytes.
+            state
+                .database
+                .record_connection_blob(
+                    connection_id,
+                    blob_ref.digest.hex.as_str(),
+                    blob_ref.length_bytes,
+                )
+                .await
+                .map_err(|error| {
+                    tracing::error!(%error, %connection_id, "a finished upload could not be recorded");
+                    ApiFault::Unavailable
+                })?;
+        }
+        UploadCompletionOutcome::DigestMismatch { .. } => {
+            tracing::info!(%connection_id, "an upload ended with bytes that do not match their declared SHA-256");
+        }
+        _ => {}
     }
     Ok(Json(outcome))
 }

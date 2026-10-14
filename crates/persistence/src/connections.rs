@@ -482,6 +482,32 @@ impl Database {
             .collect())
     }
 
+    /// Record that a device uploaded the bytes with the SHA-256 `revision` through an upload
+    /// session of `connection_id`. A second record changes nothing.
+    ///
+    /// # Errors
+    ///
+    /// [`PersistenceError::Query`] when the statement fails.
+    pub async fn record_connection_blob(
+        &self,
+        connection_id: Uuid,
+        revision: &str,
+        length_bytes: u64,
+    ) -> Result<(), PersistenceError> {
+        sqlx::query(
+            "insert into notes.connection_blobs (connection_id, revision, length_bytes, received_at)
+             values ($1, $2, $3, now())
+             on conflict (connection_id, revision) do nothing",
+        )
+        .bind(connection_id)
+        .bind(revision)
+        .bind(i64::try_from(length_bytes).unwrap_or(i64::MAX))
+        .execute(&self.pool)
+        .await
+        .map_err(PersistenceError::Query)?;
+        Ok(())
+    }
+
     /// Write one event to the outbox.
     ///
     /// # Errors

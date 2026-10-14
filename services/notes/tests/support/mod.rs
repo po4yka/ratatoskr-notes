@@ -7,6 +7,7 @@
     reason = "test scaffolding; not every test binary uses every helper"
 )]
 
+pub(crate) mod channel;
 #[cfg(unix)]
 pub(crate) mod cmdline;
 pub(crate) mod journal;
