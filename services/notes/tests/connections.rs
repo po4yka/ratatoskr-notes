@@ -1,6 +1,7 @@
 //! Vault connections (workspace spec `notes-vault-connections`): the one-channel rule
-//! (requirement "A vault connection has exactly one channel") and disconnect (requirement
-//! "Connection events name the connection and never its secrets").
+//! (requirement "A vault connection has exactly one channel"), disconnect (requirement
+//! "Connection events name the connection and never its secrets"), and a connect request that
+//! the client drops while the login runs (workspace task 5.14).
 
 #![allow(
     clippy::expect_used,
@@ -9,6 +10,8 @@
 )]
 
 mod support;
+
+use std::time::{Duration, Instant};
 
 use axum::Router;
 use axum::http::{Method, StatusCode};
@@ -139,11 +142,13 @@ async fn disconnect_removes_unit_tree_state_and_secrets() {
     .await;
     assert_eq!(answer.status, StatusCode::NO_CONTENT, "{:?}", answer.body);
 
-    // The sync unit is stopped, then the cleanup unit runs, through the bus and nothing else.
+    // The sync unit and a login that still runs are stopped, then the cleanup unit runs, through
+    // the bus and nothing else.
     assert_eq!(
         systemd.calls()[calls_of_connect..],
         [
             Call::Stop(format!("ratatoskr-notes-sync@{id}.service")),
+            Call::Stop(format!("ratatoskr-notes-login@{id}.service")),
             Call::Start(format!("ratatoskr-notes-cleanup@{id}.service")),
         ]
     );
@@ -176,6 +181,92 @@ async fn disconnect_removes_unit_tree_state_and_secrets() {
     assert_eq!(payload.connection_id.0, id);
     assert_eq!(payload.channel, VaultChannel::Sync);
     assert_eq!(payload.vault_display_name.as_str(), "Personal");
+
+    fixture
+        .cleanup()
+        .await
+        .expect("the test database is dropped");
+}
+
+/// How long a test waits for what a dropped connect request leaves to finish.
+const SETTLE: Duration = Duration::from_secs(10);
+
+/// The connection id of the first login unit that the service started, once it started.
+async fn first_login_started(systemd: &FakeSystemd) -> Option<Uuid> {
+    let deadline = Instant::now() + SETTLE;
+    loop {
+        let started = systemd.calls().iter().find_map(|call| match call {
+            Call::Start(unit) => unit
+                .strip_prefix("ratatoskr-notes-login@")
+                .and_then(|rest| rest.strip_suffix(".service"))
+                .and_then(|id| Uuid::parse_str(id).ok()),
+            Call::Stop(_) => None,
+        });
+        if started.is_some() || Instant::now() >= deadline {
+            return started;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
+/// The state of a connection once it is no longer `connecting`, or `connecting` after [`SETTLE`].
+async fn settled_state(fixture: &TestDatabase, connection_id: Uuid) -> String {
+    let deadline = Instant::now() + SETTLE;
+    loop {
+        let state: String =
+            sqlx::query_scalar("select state from notes.connections where connection_id = $1")
+                .bind(connection_id)
+                .fetch_one(fixture.pool())
+                .await
+                .expect("the connection can be read");
+        if state != "connecting" || Instant::now() >= deadline {
+            return state;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+#[tokio::test]
+async fn cancelled_connect_releases_the_vault() {
+    let fixture = TestDatabase::create().await.expect("a test database");
+    // The stub ob sleeps in each step, so the login unit still runs when the request is dropped.
+    let systemd = FakeSystemd::new().ob_sleeps();
+    let router = router(&fixture, &systemd);
+
+    let request = tokio::spawn({
+        let router = router.clone();
+        async move { connect(&router, OWNER_A, "sync", REMOTE_VAULT_ID).await }
+    });
+    let id = first_login_started(&systemd)
+        .await
+        .expect("the connect request starts the login unit");
+    // The client goes away: the request future is dropped while the login unit runs.
+    request.abort();
+    assert!(
+        request.await.is_err_and(|error| error.is_cancelled()),
+        "the request was dropped before it answered"
+    );
+
+    assert_eq!(
+        settled_state(&fixture, id).await,
+        "failed",
+        "a dropped connect request does not leave its connection connecting"
+    );
+    let calls = systemd.calls();
+    for call in [
+        Call::Stop(format!("ratatoskr-notes-login@{id}.service")),
+        Call::Start(format!("ratatoskr-notes-cleanup@{id}.service")),
+    ] {
+        assert!(calls.contains(&call), "{call:?} is missing from {calls:?}");
+    }
+    assert_eq!(secrets_of(&fixture, id).await, 0, "the ciphertext is gone");
+    assert!(
+        !systemd.credentials_root().join(id.to_string()).exists(),
+        "the credential files of the login are gone"
+    );
+
+    // The failed connection does not hold the vault key: the owner can connect the vault again.
+    connection_id(&connect(&router, OWNER_A, "sync", REMOTE_VAULT_ID).await);
 
     fixture
         .cleanup()

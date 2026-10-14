@@ -15,6 +15,8 @@
 //! The tests after them check the review follow-ups of workspace task 5.12: each login failure has
 //! its stable code, a key file that is open to others, has the wrong length, is a symbolic link or
 //! has another owner is refused, and no value that reaches the argv of `ob` starts with `-`.
+//! `start_removes_stale_credentials` (workspace task 5.14) checks that the start of the service
+//! removes the credential files that a crash left behind.
 
 #![allow(
     clippy::expect_used,
@@ -459,6 +461,28 @@ async fn no_secret_in_any_cmdline() {
             "a command line holds the password marker {marker}: {holding:?}"
         );
     }
+
+    fixture
+        .cleanup()
+        .await
+        .expect("the test database is dropped");
+}
+
+#[tokio::test]
+async fn start_removes_stale_credentials() {
+    let fixture = TestDatabase::create().await.expect("a test database");
+    let systemd = FakeSystemd::new();
+    // What a crash of the service during a login leaves on the tmpfs.
+    let stale = systemd.credentials_root().join(Uuid::now_v7().to_string());
+    std::fs::create_dir(&stale).expect("a credentials directory is created");
+    std::fs::write(stale.join("password"), ACCOUNT_PASSWORD).expect("a credential file is written");
+
+    // The service builds its domain router once, at start.
+    let _router = router(&fixture, &systemd);
+    assert!(
+        !stale.exists(),
+        "the start removes the credential files that a crash left behind"
+    );
 
     fixture
         .cleanup()
