@@ -139,7 +139,8 @@ The connection keeps the highest device sequence that it committed. The answer i
 - More than 256 changes answer `413` with `notes.channel.batch_too_large` and `max_changes`.
 - A change whose bytes Notes does not hold answers `409` with `notes.channel.bytes_missing` and
   `missing_sha256`. Nothing is committed. An excluded path and a file over the size limit need no
-  bytes.
+  bytes. An empty file needs no upload either: the transfer contract refuses 0 bytes, so Notes
+  puts the blob of no bytes in its store itself.
 - Otherwise the changes after the committed sequence, and the new committed sequence, are one
   transaction. A rename keeps the file id and publishes one `renamed` event with `previous_path`.
 

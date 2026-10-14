@@ -30,6 +30,9 @@ use crate::watcher::TreeChange;
 /// The most excluded folders of one connection; `schema.sql` holds the same bound.
 pub const MAX_EXCLUDED_FOLDERS: usize = 64;
 
+/// The SHA-256 of no bytes.
+const EMPTY_SHA256: &str = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+
 /// The event type of a file change.
 const FILE_CHANGED: &str = "notes.file.changed.v1";
 
@@ -197,11 +200,31 @@ impl FileRecorder {
     }
 
     /// The number of bytes of the blob with the SHA-256 `digest`, or `None` when the store does
-    /// not hold it.
+    /// not hold it. The blob of no bytes is put in the store when it is not there: the transfer
+    /// contract refuses an upload of 0 bytes, so a device cannot send it.
     pub(crate) async fn blob_length(&self, digest: &str) -> Option<u64> {
         let blob = self.blobs.path_of(digest)?;
-        let metadata = tokio::fs::metadata(&blob).await.ok()?;
-        metadata.is_file().then_some(metadata.len())
+        if let Ok(metadata) = tokio::fs::metadata(&blob).await {
+            return metadata.is_file().then_some(metadata.len());
+        }
+        if digest != EMPTY_SHA256 {
+            return None;
+        }
+        let store = self.blobs.clone();
+        let stored = tokio::task::spawn_blocking(move || {
+            let part = store.create_part()?;
+            store.seal_part(&part, EMPTY_SHA256)
+        })
+        .await
+        .ok()?;
+        match stored {
+            Ok(stored) if stored.digest == EMPTY_SHA256 => Some(0),
+            Ok(_) => None,
+            Err(error) => {
+                tracing::error!(%error, "the blob of no bytes could not be stored");
+                None
+            }
+        }
     }
 
     /// The index of the revision `digest` of `path` when it is a Markdown note that is not too

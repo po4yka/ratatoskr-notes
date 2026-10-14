@@ -122,4 +122,4 @@ The shared transfer contract refuses a declaration of 0 bytes, so a device canno
 file, and a batch or a manifest that names one could never be committed.
 
 - [x] 8.17 RED: `services/notes/tests/device_channel.rs::empty_file_needs_no_upload` asserts that an upload of 0 bytes is refused with `400`, that a batch with a `created` change of 0 bytes is committed without an upload, and that a manifest with two empty files names no needed hash and records both. Confirm that it fails by assertion, because the batch answers `notes.channel.bytes_missing`.
-- [ ] 8.18 GREEN: put the blob of no bytes in the blob store when a batch or a manifest names its SHA-256. Verify 8.17.
+- [x] 8.18 GREEN: put the blob of no bytes in the blob store when a batch or a manifest names its SHA-256. Verify 8.17.
