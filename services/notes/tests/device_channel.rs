@@ -266,3 +266,139 @@ async fn oversized_batch_commits_nothing() {
 
     channel.cleanup().await;
 }
+
+const OTHER_OWNER: Uuid = Uuid::from_u128(0x0192_0000_0000_7000_8000_0000_0000_0dc2);
+
+/// A second device of [`OWNER`], for example a phone that holds a copy of the vault folder.
+const SECOND_DEVICE: Uuid = Uuid::from_u128(0x0192_0000_0000_7000_8000_0000_0000_0dc3);
+
+/// The words of the hint that points the owner to Obsidian Sync.
+const SYNC_HINT: &str = "Obsidian Sync";
+
+impl Channel {
+    /// `POST /v1/notes/connections` with `channel = plugin` from `device`.
+    async fn connect_from(&self, owner: Uuid, device: Uuid, vault_key: &str) -> Answer {
+        let claims = [
+            (DEVICE_ID_HEADER, device.to_string()),
+            (DEVICE_KIND_HEADER, "obsidian_plugin".to_owned()),
+        ];
+        let body = json!({
+            "channel": "plugin",
+            "vault_key": vault_key,
+            "vault_display_name": "Personal",
+        });
+        send_with(
+            &self.router,
+            Method::POST,
+            "/v1/notes/connections",
+            owner,
+            &claims,
+            Some(body),
+        )
+        .await
+    }
+
+    /// The device that a connection records.
+    async fn device(&self, connection_id: Uuid) -> Option<Uuid> {
+        sqlx::query_scalar("select device_id from notes.connections where connection_id = $1")
+            .bind(connection_id)
+            .fetch_one(self.fixture.pool())
+            .await
+            .expect("the connection exists")
+    }
+}
+
+#[tokio::test]
+async fn foreign_connection_changes_are_not_found() {
+    let channel = Channel::new().await;
+    let foreign = channel
+        .plugin_connection(OTHER_OWNER, "vault-key-foreign")
+        .await;
+    channel.hold(b"intruder\n");
+
+    let answer = channel
+        .batch(
+            OWNER,
+            foreign,
+            vec![change(1, "created", "Intruder.md", b"intruder\n")],
+        )
+        .await;
+
+    assert_eq!(answer.status, StatusCode::NOT_FOUND, "{:?}", answer.body);
+    assert_eq!(answer.body["code"], "notes.connection.not_found");
+    assert_eq!(
+        channel.events(foreign).await,
+        0,
+        "no change is recorded for the connection of the other owner"
+    );
+
+    channel.cleanup().await;
+}
+
+#[tokio::test]
+async fn export_agent_on_plugin_connection_is_channel_mismatch() {
+    let channel = Channel::new().await;
+    let connection = channel.plugin_connection(OWNER, "vault-key-kind").await;
+    channel.hold(b"from the agent\n");
+
+    let answer = channel
+        .batch_from(
+            OWNER,
+            device_of(OWNER),
+            "export_agent",
+            connection,
+            vec![change(1, "created", "Agent.md", b"from the agent\n")],
+        )
+        .await;
+
+    assert_eq!(answer.status, StatusCode::CONFLICT, "{:?}", answer.body);
+    assert_eq!(answer.body["code"], "notes.channel_mismatch");
+    assert_eq!(channel.events(connection).await, 0, "no change is recorded");
+
+    channel.cleanup().await;
+}
+
+#[tokio::test]
+async fn second_device_for_one_connection_is_refused() {
+    let channel = Channel::new().await;
+    let connection = channel.plugin_connection(OWNER, "vault-key-copied").await;
+    channel.hold(b"from the copy\n");
+
+    let connect = channel
+        .connect_from(OWNER, SECOND_DEVICE, "vault-key-copied")
+        .await;
+    let batch = channel
+        .batch_from(
+            OWNER,
+            SECOND_DEVICE,
+            "obsidian_plugin",
+            connection,
+            vec![change(1, "created", "Copy.md", b"from the copy\n")],
+        )
+        .await;
+
+    for (step, answer) in [("connect", &connect), ("batch", &batch)] {
+        assert_eq!(
+            answer.status,
+            StatusCode::CONFLICT,
+            "{step}: {:?}",
+            answer.body
+        );
+        assert_eq!(answer.body["code"], "notes.channel_mismatch", "{step}");
+        assert!(
+            answer.body["message"]
+                .as_str()
+                .is_some_and(|message| message.contains(SYNC_HINT)),
+            "{step}: the message points the owner to Obsidian Sync: {:?}",
+            answer.body
+        );
+    }
+    assert_eq!(
+        channel.device(connection).await,
+        Some(device_of(OWNER)),
+        "the connection keeps its first device"
+    );
+    assert_eq!(channel.events(connection).await, 0, "no change is recorded");
+
+    channel.cleanup().await;
+}
