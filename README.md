@@ -5,9 +5,10 @@ vaults, keeps a complete and current copy of each vault, records a revision for 
 file, and indexes each Markdown file. Knowledge reads the note bytes and the file events to search
 and analyse the notes.
 
-> **Status:** scaffolding. The service starts, applies the `notes` schema, and serves its operator
-> plane. Connections, the Sync supervisor, the index and the device channels are planned in the
-> workspace change `add-notes-vault-connections` (OBS-023), groups 5 to 8.
+> **Status:** in development. The service starts, applies the `notes` schema, serves its operator
+> plane, connects and removes vaults, and runs the first Obsidian login of a `sync` connection. The
+> Sync supervisor, the index and the device channels are planned in the workspace change
+> `add-notes-vault-connections` (OBS-023), groups 6 to 8.
 
 > [!IMPORTANT]
 > **Ratatoskr is in development.** No database holds data that has to survive a schema change.
@@ -47,11 +48,68 @@ The design is in `ratatoskr-workspace`: ADR-0010, `docs/NOTES_AND_SITES.md`, and
 
 The domain API serves `POST /v1/notes/connections` and `DELETE /v1/notes/connections/{id}`.
 
+## Connections
+
+`POST /v1/notes/connections` takes `channel`, `vault_key` and `vault_display_name`. The owner is
+the claim that Edge mints. One vault of one owner has one connection that is not removed: a second
+connection for the same vault key answers `409` with `notes.connection.vault_already_connected`,
+whatever its channel. Two owners can connect the same remote vault.
+
+A `sync` connection also needs `sync_login`: `email`, `password`, and the optional `mfa_code` and
+`e2e_password`. Its vault key is the remote vault id. The service runs the first login before it
+answers:
+
+- `202` with the state `connecting` when the login and the setup succeed;
+- `422` with one of the stable codes `notes.sync.login_failed`, `notes.sync.mfa_required`,
+  `notes.sync.e2e_password_wrong` or `notes.sync.vault_not_found` when they fail. The connection
+  then becomes `failed`, keeps no ciphertext, and does not hold the vault key, so the owner can try
+  again.
+
+`DELETE /v1/notes/connections/{id}` stops the sync unit, runs the cleanup unit, and then, in one
+transaction, marks the connection removed, deletes its ciphertext, and writes
+`notes.vault.disconnected.v1` to the outbox. When the cleanup fails, nothing is committed and the
+owner can send the request again.
+
+## Template units
+
+The service starts and stops the units through the systemd D-Bus API as the user
+`ratatoskr-notes`. The instance name of each unit is the connection id. Each unit runs `ob` as
+`ratatoskr-notes-sync`, which owns the client state (`ob-home`) and the working tree under
+`/mnt/nvme/ratatoskr/notes/connections/<id>/`.
+
+| Unit | Type | Started | Does |
+|---|---|---|---|
+| `ratatoskr-notes-login@.service` | oneshot | at the connect of a `sync` connection | `ob login`, then `ob sync-setup`. The exit status names the failure: 10 login failed, 11 MFA code needed, 12 end-to-end password wrong, 13 no such remote vault. |
+| `ratatoskr-notes-sync@.service` | long-running | by the Sync supervisor (planned, group 6) | `ob sync --continuous`. It is stopped at a disconnect. |
+| `ratatoskr-notes-cleanup@.service` | oneshot | at a disconnect, and after a failed login | `ob sync-unlink`, then removes the working tree and `ob-home`. |
+
+The login and cleanup units are in `deploy/systemd/`. The sync unit ships with group 6.
+
+## Secret custody
+
+The Obsidian account password and the end-to-end password stay in this service. The MFA code is a
+one-time code and is never stored.
+
+- **At rest:** each password is sealed with XChaCha20-Poly1305 under the key in
+  `/etc/ratatoskr/notes-secrets.key` (32 bytes, mode 0400, owner `ratatoskr-notes`), with a random
+  nonce and the connection id and the kind as associated data. `notes.connection_secrets` holds
+  only the ciphertext. A failed login or a disconnect deletes it.
+- **To the login:** the service writes the email, the two passwords, the MFA code and the vault id
+  to files in `/run/ratatoskr-notes/credentials/<id>/` (directory 0700, files 0600), starts the
+  login unit, and deletes the files when the unit stops, whatever its result. The unit loads them
+  with `LoadCredential=`. `ob` reads each password on standard input from
+  `$CREDENTIALS_DIRECTORY`. No password is in the command line of a process. Only the email, the
+  vault id and the MFA code are in the arguments of `ob`.
+- **In output:** no secret is in a log line, an event, an error envelope or the journal of a unit.
+  Each secret is a `SecretString`, and a refused request body is not logged.
+
+`services/notes/tests/secret_custody.rs` checks each of these points with marker secrets.
+
 ## Project status
 
 - [x] Service skeleton: strict configuration, logging, operator plane, embedded schema, CI gate.
-- [ ] Connections and the one-channel rule (tasks 5.2 to 5.5).
-- [ ] Secret custody and the login unit (tasks 5.6 to 5.9).
+- [x] Connections and the one-channel rule (tasks 5.2 to 5.5).
+- [x] Secret custody and the login unit (tasks 5.6 to 5.9).
 - [ ] Sync supervisor and blob root (group 6).
 - [ ] Index, file events and the read API (group 7).
 - [ ] Device channel routes (group 8).

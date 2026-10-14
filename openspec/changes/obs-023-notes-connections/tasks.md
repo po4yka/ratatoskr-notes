@@ -17,4 +17,4 @@
 
 ## 4. Documentation (workspace task 5.10)
 
-- [ ] 4.1 Write the README and `DEVELOPMENT.md` sections on connections, the three template units and secret custody. No test: documentation.
+- [x] 4.1 Write the README and `DEVELOPMENT.md` sections on connections, the three template units and secret custody. No test: documentation.

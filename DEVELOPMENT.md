@@ -50,6 +50,28 @@ Notes on the steps:
 - The tests need the database above. They fail when it is unreachable; they do not skip.
 - `openspec validate --all --strict` checks the OpenSpec changes and specs of this repository.
 
+## Tests of the template units
+
+The tests do not use a real systemd. `services/notes/tests/support/systemd.rs` is a fake systemd
+bus. When the service starts a login or cleanup unit, the fake reads the shipped file in
+`deploy/systemd/` and runs its `ExecStart=` lines with `%i` replaced, `$$` read as `$`, the host
+paths moved into a temporary directory, and `/usr/bin/ob` replaced by a stub. It reads
+`Environment=`, `EnvironmentFile=` and `LoadCredential=`, and gives the unit a
+`$CREDENTIALS_DIRECTORY` that it removes after the run. A test therefore checks the shipped unit
+file. Keep each command of a unit on one line, write `$$` for each shell `$`, and use no backslash.
+
+`secret_custody.rs::no_secret_in_any_cmdline` reads `/proc/*/cmdline` as the user `nobody` while
+the login runs, so it runs on Linux only. On macOS it is ignored. When the test runs as root, the
+reader drops to `nobody` itself; otherwise it starts with `sudo -n -u nobody`, which the GitHub
+runner allows. To run it on a Mac, use a Linux container in the network namespace of the compose
+database, so that the default database URL reaches it:
+
+```bash
+docker run --rm --network container:ratatoskr-notes-postgres -v "$PWD":/src -w /src \
+  -e CARGO_TARGET_DIR=/src/target/linux \
+  rust:1.97 cargo test --locked -p ratatoskr-notes --test secret_custody
+```
+
 ## Running the service
 
 ```bash
@@ -88,7 +110,14 @@ in place, and the next test database has it.
 | `deploy/postgres/role.sql` | Creates the role `ratatoskr_notes` in the shared database. |
 | `deploy/nats/identity.conf` | A copy of the `NOTES` stanza of Platform's NATS authorization file. |
 | `deploy/systemd/notes.conf.example` | The environment file of the service on the host. |
-| `deploy/systemd/ratatoskr-notes-cleanup@.service` | The oneshot unit that removes the Sync client, the working tree and the client state of a removed `sync` connection. |
+| `deploy/systemd/ratatoskr-notes-login@.service` | The oneshot unit that runs the first `ob login` and `ob sync-setup` of a `sync` connection. It reads the secrets with `LoadCredential=` from `/run/ratatoskr-notes/credentials/<id>/`. |
+| `deploy/systemd/ratatoskr-notes-cleanup@.service` | The oneshot unit that removes the Sync client, the working tree and the client state of a removed `sync` connection, and of a connection whose login failed. |
+
+The host needs, before the first `sync` connect: the user `ratatoskr-notes-sync`; the directory
+`/mnt/nvme/ratatoskr/notes/connections` with that owner and mode 0700; `/run/ratatoskr-notes`
+owned by `ratatoskr-notes` (`RuntimeDirectory=` of the service unit); the key file; and `ob` at
+`/usr/bin/ob`. The deploy role of `ratatoskr-workspace` installs the units and the polkit rule that
+lets `ratatoskr-notes` start and stop them.
 
 ## Workflow
 
