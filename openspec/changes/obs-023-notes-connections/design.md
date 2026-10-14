@@ -172,6 +172,16 @@ inotify, and there the watcher only rescans; the test of the settle window there
 the other content-addressed stores of the fleet do. The service does not start a watcher yet: the
 revisions, the outbox and the excluded folders of workspace task 7.6 consume its changes.
 
+### 11. The read group of the blob root
+
+`BlobStore` creates each blob with mode 0640 and each directory with mode 2750, and sets the mode
+again only when the umask removed a bit. On Linux a directory that is made in a setgid directory
+gets the setgid bit and the group from the kernel. The store does not run `chmod` on it then,
+because a `chmod` by an owner that is not in the group removes the setgid bit; `ratatoskr-notes`
+is not in `ratatoskr-notes-blobs`. This repository ships no unit for the service, so `UMask=0027`
+belongs to the service unit that the deploy role of `ratatoskr-workspace` installs. The explicit
+modes make the blob store independent of that umask.
+
 ## Risks / Trade-offs
 
 - The D-Bus implementation has no automated test in this change: neither macOS nor the CI runner

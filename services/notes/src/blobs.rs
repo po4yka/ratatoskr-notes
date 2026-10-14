@@ -5,10 +5,18 @@
 //! content-addressed stores of the fleet. The bytes are first copied to `<root>/staging/` and
 //! hashed in the same pass, then linked to their content path, so that a reader never sees a part
 //! of a blob under its content name. A blob that exists already is not written again.
+//!
+//! The read group (workspace design D12): the deploy role gives the root the group
+//! `ratatoskr-notes-blobs` and the mode 2750. Each blob is mode 0640 and each directory is mode
+//! 2750, whatever the umask, and the setgid bit gives each new file and directory the group of the
+//! root. So the read group can read a blob, and no other user can. On Linux a new directory in a
+//! setgid directory gets the bit from the kernel, and the store changes its mode only when it
+//! differs: a `chmod` by a user that is not in the group would remove the bit.
 
-use std::fs::File;
+use std::fs::{DirBuilder, File, OpenOptions};
 use std::io::{Read as _, Write as _};
 use std::os::fd::OwnedFd;
+use std::os::unix::fs::{DirBuilderExt as _, OpenOptionsExt as _, PermissionsExt as _};
 use std::path::{Path, PathBuf};
 
 use rustix::fs::{Mode, OFlags};
@@ -17,6 +25,12 @@ use uuid::Uuid;
 
 /// The size of one read while a file is copied, so that memory stays bounded for any file size.
 const CHUNK_BYTES: usize = 64 * 1024;
+
+/// The mode of each blob: the owner writes, the read group reads.
+const BLOB_MODE: u32 = 0o640;
+
+/// The mode of each directory: the setgid bit keeps the group of the root.
+const DIRECTORY_MODE: u32 = 0o2750;
 
 /// The content-addressed store under one blob root.
 #[derive(Debug, Clone)]
@@ -66,7 +80,7 @@ impl BlobStore {
     pub fn store_file(&self, source: &Path) -> std::io::Result<StoredBlob> {
         let input = open_regular_file(source)?;
         let staging_dir = self.root.join("staging");
-        std::fs::create_dir_all(&staging_dir)?;
+        self.create_directories(&staging_dir)?;
         let staging = staging_dir.join(format!("{}.part", Uuid::now_v7()));
         let copied = copy_and_hash(input, &staging);
         let (digest, length) = match copied {
@@ -91,7 +105,7 @@ impl BlobStore {
             return Ok(());
         }
         if let Some(parent) = target.parent() {
-            std::fs::create_dir_all(parent)?;
+            self.create_directories(parent)?;
         }
         match std::fs::hard_link(staging, &target) {
             Ok(()) => Ok(()),
@@ -100,6 +114,36 @@ impl BlobStore {
             Err(error) => Err(error),
         }
     }
+
+    /// Create each missing directory from the root down to `directory`, with [`DIRECTORY_MODE`].
+    fn create_directories(&self, directory: &Path) -> std::io::Result<()> {
+        let below_root = directory
+            .strip_prefix(&self.root)
+            .map_err(std::io::Error::other)?;
+        let mut current = self.root.clone();
+        for component in below_root.components() {
+            current.push(component);
+            match DirBuilder::new()
+                .mode(DIRECTORY_MODE & 0o777)
+                .create(&current)
+            {
+                Ok(()) => set_mode_if_different(&current, DIRECTORY_MODE)?,
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+                Err(error) => return Err(error),
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Give `path` the mode `mode` unless it has it already. The kernel gives a new directory in a
+/// setgid directory the setgid bit; a `chmod` by an owner outside the group would remove it.
+fn set_mode_if_different(path: &Path, mode: u32) -> std::io::Result<()> {
+    let current = std::fs::metadata(path)?.permissions().mode() & 0o7777;
+    if current != mode {
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode))?;
+    }
+    Ok(())
 }
 
 /// Open a regular file for reading without following a symbolic link. `O_NONBLOCK` keeps the open
@@ -120,7 +164,13 @@ fn open_regular_file(source: &Path) -> std::io::Result<File> {
 /// Copy `input` to a new file at `staging` and hash it in the same pass. Returns the lowercase hex
 /// SHA-256 and the length. The copy is on disk when this returns.
 fn copy_and_hash(mut input: File, staging: &Path) -> std::io::Result<(String, u64)> {
-    let mut output = File::create_new(staging)?;
+    let mut output = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(BLOB_MODE)
+        .open(staging)?;
+    // A stricter umask than 0027 removes the group bit at the create.
+    set_mode_if_different(staging, BLOB_MODE)?;
     let mut hasher = Sha256::new();
     let mut length: u64 = 0;
     let mut chunk = vec![0_u8; CHUNK_BYTES];

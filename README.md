@@ -99,6 +99,22 @@ The service starts and stops the units through the systemd D-Bus API as the user
 The three units are in `deploy/systemd/`. None of them is enabled: only the service starts them.
 The sync unit runs in pull-only mode, so Notes never writes into a vault.
 
+## Blob root and its read group
+
+The bytes of each revision are in the blob root `/mnt/nvme/ratatoskr/blobs/ratatoskr-notes`, at
+`sha256/<first two hex digits>/<other 62 hex digits>` of their SHA-256. Knowledge reads them there,
+read-only, as the fleet spec `blob-references` allows. No other service may read them.
+
+- The deploy role of `ratatoskr-workspace` creates the system group `ratatoskr-notes-blobs`, makes
+  the Knowledge service user its only member, and creates the root with the owner
+  `ratatoskr-notes`, that group, and mode 2750.
+- The service writes each blob with mode 0640 and each new directory with mode 2750, whatever its
+  umask. The setgid bit gives each new file and directory the group of the root, so the read group
+  can read a blob and no other user can. The service unit runs the service with `UMask=0027`.
+- A later consumer, for example `ratatoskr-sites`, joins the group in its own change.
+
+`services/notes/tests/blob_root.rs` checks the modes and the group of a new blob.
+
 ## Secret custody
 
 The Obsidian account password and the end-to-end password stay in this service. The MFA code is a
