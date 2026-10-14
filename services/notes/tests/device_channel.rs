@@ -532,3 +532,122 @@ async fn upload_with_wrong_digest_is_refused() {
 
     channel.cleanup().await;
 }
+
+impl Channel {
+    /// The payloads of the `notes.file.changed.v1` events of a connection, in order.
+    async fn changes(&self, connection_id: Uuid) -> Vec<Value> {
+        sqlx::query_scalar(
+            "select payload -> 'payload' from notes.outbox
+             where event_type = 'notes.file.changed.v1'
+               and payload -> 'payload' ->> 'connection_id' = $1
+             order by position",
+        )
+        .bind(connection_id.to_string())
+        .fetch_all(self.fixture.pool())
+        .await
+        .expect("the outbox can be read")
+    }
+}
+
+/// One manifest entry with the facts of `bytes`.
+fn entry(path: &str, bytes: &[u8]) -> Value {
+    json!({ "path": path, "sha256": sha256(bytes), "length_bytes": bytes.len() })
+}
+
+#[tokio::test]
+async fn manifest_reconciles_offline_changes() {
+    let channel = Channel::new().await;
+    let connection = channel.plugin_connection(OWNER, "vault-key-manifest").await;
+    let original = |n: u32| format!("file {n:02} as it was\n");
+    let mut first = Vec::new();
+    for n in 1..=20_u32 {
+        channel.hold(original(n).as_bytes());
+        first.push(change(
+            u64::from(n),
+            "created",
+            &format!("f{n:02}.md"),
+            original(n).as_bytes(),
+        ));
+    }
+    let committed = channel.batch(OWNER, connection, first).await;
+    // While the plugin was disabled: f01 is edited, f02 is deleted, f03 is renamed and new.md is
+    // created. The new bytes are only on the device.
+    let edited = b"file 01 edited offline\n";
+    let created = b"a note made offline\n";
+    let mut entries: Vec<Value> = (4..=20_u32)
+        .map(|n| entry(&format!("f{n:02}.md"), original(n).as_bytes()))
+        .collect();
+    entries.push(entry("f01.md", edited));
+    entries.push(entry("Moved/f03.md", original(3).as_bytes()));
+    entries.push(entry("new.md", created));
+    let manifest = json!({ "entries": entries });
+
+    let asked = channel
+        .device_call(connection, "manifest", manifest.clone())
+        .await;
+    let uploads = [
+        channel.upload(connection, &sha256(edited), edited).await,
+        channel.upload(connection, &sha256(created), created).await,
+    ];
+    let applied = channel.device_call(connection, "manifest", manifest).await;
+
+    assert_eq!(committed.status, StatusCode::OK, "{:?}", committed.body);
+    assert_eq!(asked.status, StatusCode::OK, "{:?}", asked.body);
+    let mut needed = vec![sha256(edited), sha256(created)];
+    needed.sort();
+    assert_eq!(
+        asked.body["needed_sha256"],
+        json!(needed),
+        "the first answer names the bytes that the service needs"
+    );
+    assert_eq!(asked.body["committed_sequence"], 20);
+    for [_, _, finalized] in &uploads {
+        assert_eq!(finalized.body["outcome"], "stored", "{:?}", finalized.body);
+    }
+    assert_eq!(applied.status, StatusCode::OK, "{:?}", applied.body);
+    assert_eq!(applied.body["needed_sha256"], json!([]));
+    let changes = channel.changes(connection).await;
+    let offline: Vec<(String, String, Value)> = changes
+        .iter()
+        .skip(20)
+        .map(|change| {
+            (
+                change["change_kind"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_owned(),
+                change["path"].as_str().unwrap_or_default().to_owned(),
+                change["previous_path"].clone(),
+            )
+        })
+        .collect();
+    let mut kinds: Vec<&str> = offline.iter().map(|(kind, _, _)| kind.as_str()).collect();
+    kinds.sort_unstable();
+    assert_eq!(
+        kinds,
+        ["created", "deleted", "renamed", "updated"],
+        "exactly one change of each kind: {offline:#?}"
+    );
+    assert!(
+        offline.contains(&("updated".to_owned(), "f01.md".to_owned(), Value::Null)),
+        "{offline:#?}"
+    );
+    assert!(
+        offline.contains(&("deleted".to_owned(), "f02.md".to_owned(), Value::Null)),
+        "{offline:#?}"
+    );
+    assert!(
+        offline.contains(&(
+            "renamed".to_owned(),
+            "Moved/f03.md".to_owned(),
+            json!("f03.md")
+        )),
+        "{offline:#?}"
+    );
+    assert!(
+        offline.contains(&("created".to_owned(), "new.md".to_owned(), Value::Null)),
+        "{offline:#?}"
+    );
+
+    channel.cleanup().await;
+}
