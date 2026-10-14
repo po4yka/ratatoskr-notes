@@ -9,8 +9,10 @@
 //! into a fresh directory that it names in `$CREDENTIALS_DIRECTORY` and removes after the run.
 //!
 //! The stub `ob` records its arguments and what it reads on standard input. Its `login` writes a
-//! token to the client state, and its `sync-setup` exits 2 when the fake Obsidian account refuses
-//! the end-to-end password.
+//! token to the client state. It exits 1 when the fake Obsidian account refuses the login, and it
+//! ends without a token when the account needs an MFA code and the call gives none. Its
+//! `sync-setup` exits 2 when the account refuses the end-to-end password, and 3 when the account
+//! has no remote vault with the id.
 //!
 //! The temporary directory of the fake also stands for the host files that the service reads and
 //! writes: the secrets key file and the credentials root. The output of each unit command goes to
@@ -52,6 +54,11 @@ case "$1" in
 login)
     cat > "$dir/stdin.login"
     if [ -e "$dir/ob-sleeps" ]; then sleep 1; fi
+    if [ -e "$dir/refuse-login" ]; then echo "Login failed." >&2; exit 1; fi
+    case " $* " in
+    *" --mfa "*) ;;
+    *) if [ -e "$dir/need-mfa" ]; then echo "MFA code:"; exit 0; fi ;;
+    esac
     mkdir -p "$XDG_CONFIG_HOME/obsidian-headless"
     printf 'FAKE-TOKEN\n' > "$XDG_CONFIG_HOME/obsidian-headless/auth_token"
     echo "Logged in"
@@ -60,6 +67,7 @@ sync-setup)
     cat > "$dir/stdin.sync-setup"
     if [ -e "$dir/ob-sleeps" ]; then sleep 1; fi
     if [ -e "$dir/refuse-e2e" ]; then echo "Failed to validate password." >&2; exit 2; fi
+    if [ -e "$dir/no-vault" ]; then echo "Vault not found." >&2; exit 3; fi
     echo "Setting up..."
     ;;
 esac
@@ -128,6 +136,25 @@ impl FakeSystemd {
     /// The fake Obsidian account refuses the end-to-end password that the owner gives.
     pub(crate) fn refuse_e2e_password(self) -> Self {
         self.flag("refuse-e2e");
+        self
+    }
+
+    /// The fake Obsidian account refuses the login: `ob login` exits 1.
+    pub(crate) fn refuse_login(self) -> Self {
+        self.flag("refuse-login");
+        self
+    }
+
+    /// The fake Obsidian account needs an MFA code: `ob login` without `--mfa` ends without a
+    /// token.
+    pub(crate) fn need_mfa(self) -> Self {
+        self.flag("need-mfa");
+        self
+    }
+
+    /// The fake Obsidian account has no remote vault: `ob sync-setup` exits 3.
+    pub(crate) fn find_no_vault(self) -> Self {
+        self.flag("no-vault");
         self
     }
 

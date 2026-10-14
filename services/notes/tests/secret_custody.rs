@@ -11,6 +11,10 @@
 //! `login_unit_gets_secrets_only_as_credentials` and `no_secret_in_any_cmdline` run the shipped
 //! login unit through the fake systemd bus (requirement "The login runs as a oneshot unit that
 //! receives secrets as credentials"). The second one needs `/proc`, so it runs on Linux only.
+//!
+//! The tests after them check the review follow-ups of workspace task 5.12: each login failure has
+//! its stable code, a key file that is open to others, has the wrong length, is a symbolic link or
+//! has another owner is refused, and no value that reaches the argv of `ob` starts with `-`.
 
 #![allow(
     clippy::expect_used,
@@ -19,6 +23,9 @@
 )]
 
 mod support;
+
+use std::os::unix::fs::PermissionsExt as _;
+use std::path::Path;
 
 use axum::Router;
 use axum::http::{Method, StatusCode};
@@ -31,7 +38,7 @@ use uuid::Uuid;
 use crate::support::cmdline::{CmdlineReader, own_uid};
 use crate::support::logs::CapturedLogs;
 use crate::support::systemd::{FakeSystemd, KEY_BYTES};
-use crate::support::{SyncSecrets, connect_sync, connection_id, send};
+use crate::support::{OBSIDIAN_EMAIL, SyncSecrets, connect_sync, connection_id, send};
 
 const OWNER: Uuid = Uuid::from_u128(0x0192_0000_0000_7000_8000_0000_0000_00c1);
 const REMOTE_VAULT_ID: &str = "remote-vault-0042";
@@ -452,6 +459,244 @@ async fn no_secret_in_any_cmdline() {
             "a command line holds the password marker {marker}: {holding:?}"
         );
     }
+
+    fixture
+        .cleanup()
+        .await
+        .expect("the test database is dropped");
+}
+
+/// A `sync` connect body with the marker passwords and the given email, vault id and MFA code.
+fn sync_body(email: &str, vault_id: &str, mfa_code: Option<&str>) -> serde_json::Value {
+    let mut sync_login = serde_json::json!({
+        "email": email,
+        "password": ACCOUNT_PASSWORD,
+        "e2e_password": E2E_PASSWORD,
+    });
+    if let Some(mfa_code) = mfa_code {
+        sync_login["mfa_code"] = mfa_code.into();
+    }
+    serde_json::json!({
+        "channel": "sync",
+        "vault_key": vault_id,
+        "vault_display_name": "Personal",
+        "sync_login": sync_login,
+    })
+}
+
+async fn count(fixture: &TestDatabase, query: &str) -> i64 {
+    sqlx::query_scalar(query)
+        .fetch_one(fixture.pool())
+        .await
+        .expect("the rows can be counted")
+}
+
+#[tokio::test]
+async fn each_login_failure_has_its_code() {
+    let fixture = TestDatabase::create().await.expect("a test database");
+    let cases = [
+        (
+            "notes.sync.login_failed",
+            FakeSystemd::new().refuse_login(),
+            Some(MFA_CODE),
+        ),
+        (
+            "notes.sync.mfa_required",
+            FakeSystemd::new().need_mfa(),
+            None,
+        ),
+        (
+            "notes.sync.vault_not_found",
+            FakeSystemd::new().find_no_vault(),
+            Some(MFA_CODE),
+        ),
+    ];
+
+    let mut wrong = Vec::new();
+    for (index, (code, systemd, mfa_code)) in cases.into_iter().enumerate() {
+        let router = router(&fixture, &systemd);
+        let body = sync_body(
+            OBSIDIAN_EMAIL,
+            &format!("remote-vault-010{index}"),
+            mfa_code,
+        );
+        let answer = send(
+            &router,
+            Method::POST,
+            "/v1/notes/connections",
+            OWNER,
+            Some(body),
+        )
+        .await;
+        assert_no_marker_in("the error envelope", &answer.body.to_string());
+        if answer.status != StatusCode::UNPROCESSABLE_ENTITY || answer.body["code"] != code {
+            wrong.push(format!("{code}: {} {}", answer.status, answer.body));
+        }
+    }
+    assert!(
+        wrong.is_empty(),
+        "a login failure has the wrong answer: {wrong:#?}"
+    );
+    assert_eq!(
+        count(&fixture, "select count(*) from notes.connection_secrets").await,
+        0,
+        "a failed login keeps no ciphertext"
+    );
+
+    fixture
+        .cleanup()
+        .await
+        .expect("the test database is dropped");
+}
+
+/// Connects with a key file that the service must refuse, and returns why the answer is wrong, or
+/// `None` when the service refused the key file.
+async fn refusal_of_key_file(
+    fixture: &TestDatabase,
+    systemd: &FakeSystemd,
+    vault_id: &str,
+) -> Option<String> {
+    let router = router(fixture, systemd);
+    let answer = connect_sync(&router, OWNER, vault_id, SECRETS).await;
+    let refused = answer.status == StatusCode::SERVICE_UNAVAILABLE
+        && answer.body["code"] == "notes.service.unavailable";
+    let started = systemd.calls();
+    if refused && started.is_empty() {
+        None
+    } else {
+        Some(format!(
+            "{} {}, units {started:?}",
+            answer.status, answer.body
+        ))
+    }
+}
+
+/// Makes the key file of a fake into one that the service must refuse.
+type PrepareKeyFile = fn(&Path);
+
+fn set_mode(path: &Path, mode: u32) {
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode))
+        .expect("the mode of the key file can be set");
+}
+
+#[tokio::test]
+async fn unsafe_key_file_is_refused() {
+    let fixture = TestDatabase::create().await.expect("a test database");
+    let cases: [(&str, PrepareKeyFile); 3] = [
+        ("mode 0644", |key| set_mode(key, 0o644)),
+        ("31 bytes", |key| {
+            set_mode(key, 0o600);
+            std::fs::write(key, &KEY_BYTES[..31]).expect("the key file can be written");
+        }),
+        ("a symbolic link to a good key file", |key| {
+            let target = key.with_extension("target");
+            std::fs::rename(key, &target).expect("the key file can be moved");
+            std::os::unix::fs::symlink(&target, key).expect("a symbolic link can be made");
+        }),
+    ];
+
+    let mut accepted = Vec::new();
+    for (index, (case, prepare)) in cases.into_iter().enumerate() {
+        let systemd = FakeSystemd::new();
+        prepare(&systemd.key_file());
+        let vault_id = format!("remote-vault-020{index}");
+        if let Some(answer) = refusal_of_key_file(&fixture, &systemd, &vault_id).await {
+            accepted.push(format!("{case}: {answer}"));
+        }
+    }
+    assert!(
+        accepted.is_empty(),
+        "the service used a key file that it must refuse: {accepted:#?}"
+    );
+    assert_eq!(
+        count(&fixture, "select count(*) from notes.connections").await,
+        0,
+        "no connection is created without a usable key"
+    );
+
+    fixture
+        .cleanup()
+        .await
+        .expect("the test database is dropped");
+}
+
+/// The uid and gid of `nobody` on Debian and Ubuntu.
+const NOBODY: u32 = 65_534;
+
+#[tokio::test]
+#[cfg_attr(
+    not(target_os = "linux"),
+    ignore = "gives a file to another user, which needs root or `sudo -n`"
+)]
+async fn key_file_of_another_owner_is_refused() {
+    let fixture = TestDatabase::create().await.expect("a test database");
+    let systemd = FakeSystemd::new();
+    let key_file = systemd.key_file();
+    // As root, the service can read a file of any owner, so only the owner check refuses it. That
+    // is the run that this test is for: the Linux container of DEVELOPMENT.md runs it as root.
+    if own_uid() == 0 {
+        std::os::unix::fs::chown(&key_file, Some(NOBODY), Some(NOBODY))
+            .expect("root can give the key file to nobody");
+    } else {
+        let status = std::process::Command::new("sudo")
+            .args(["-n", "chown", &format!("{NOBODY}:{NOBODY}")])
+            .arg(&key_file)
+            .status()
+            .expect("sudo can be started");
+        assert!(status.success(), "sudo -n gives the key file to nobody");
+    }
+
+    let wrong = refusal_of_key_file(&fixture, &systemd, REMOTE_VAULT_ID).await;
+    assert_eq!(wrong, None, "the service used a key file of another owner");
+
+    fixture
+        .cleanup()
+        .await
+        .expect("the test database is dropped");
+}
+
+#[tokio::test]
+async fn leading_dash_is_refused() {
+    let fixture = TestDatabase::create().await.expect("a test database");
+    let systemd = FakeSystemd::new();
+    let router = router(&fixture, &systemd);
+    let dashed_mfa = format!("-{MFA_CODE}");
+    let cases = [
+        (
+            "the email",
+            sync_body("-owner@example.test", "remote-vault-0301", Some(MFA_CODE)),
+        ),
+        (
+            "the vault id",
+            sync_body(OBSIDIAN_EMAIL, "-remote-vault-0302", Some(MFA_CODE)),
+        ),
+        (
+            "the MFA code",
+            sync_body(OBSIDIAN_EMAIL, "remote-vault-0303", Some(&dashed_mfa)),
+        ),
+    ];
+
+    let mut accepted = Vec::new();
+    for (case, body) in cases {
+        let answer = send(
+            &router,
+            Method::POST,
+            "/v1/notes/connections",
+            OWNER,
+            Some(body),
+        )
+        .await;
+        if answer.status != StatusCode::BAD_REQUEST
+            || answer.body["code"] != "notes.request.invalid"
+        {
+            accepted.push(format!("{case}: {} {}", answer.status, answer.body));
+        }
+    }
+    assert!(
+        accepted.is_empty(),
+        "a value that ob could read as an option was not refused: {accepted:#?}"
+    );
+    assert_eq!(systemd.calls(), [], "no unit starts for an invalid request");
 
     fixture
         .cleanup()

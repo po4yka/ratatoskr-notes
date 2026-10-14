@@ -18,3 +18,10 @@
 ## 4. Documentation (workspace task 5.10)
 
 - [x] 4.1 Write the README and `DEVELOPMENT.md` sections on connections, the three template units and secret custody. No test: documentation.
+
+## 5. Review follow-ups (workspace tasks 5.12 to 5.15)
+
+- [x] 5.1 RED: in `services/notes/tests/secret_custody.rs`, add `each_login_failure_has_its_code` (the stub `ob` refuses the login, needs an MFA code, or finds no vault: `notes.sync.login_failed`, `notes.sync.mfa_required`, `notes.sync.vault_not_found`), `unsafe_key_file_is_refused` (mode 0644, 31 bytes, a symbolic link), `key_file_of_another_owner_is_refused` (Linux only, as root) and `leading_dash_is_refused` (the email, the vault id and the MFA code), as workspace task 5.12 words them. Confirm that the symbolic link, the owner and the leading `-` cases fail.
+- [ ] 5.2 GREEN: open the key file once without following a link, and check the mode and the owner on the open file; refuse a leading `-` in the email, the vault id and the MFA code (workspace task 5.13). Verify 5.1.
+- [ ] 5.3 RED: add `start_removes_stale_credentials` and `cancelled_connect_releases_the_vault`, as workspace task 5.14 words them, and make `disconnect_removes_unit_tree_state_and_secrets` expect that a disconnect also stops the login unit. Confirm that the three fail.
+- [ ] 5.4 GREEN: remove the credentials root at start, finish a connect whose request is dropped in a task that the request does not own, and stop the login unit at a disconnect and after a failed login (workspace task 5.15). Verify 5.3.
