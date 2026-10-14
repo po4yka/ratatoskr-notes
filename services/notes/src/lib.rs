@@ -19,6 +19,8 @@ mod login;
 pub mod secrets;
 pub mod systemd;
 
+use std::future::Future;
+use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::Arc;
 
@@ -31,9 +33,9 @@ use tracing_subscriber::layer::SubscriberExt as _;
 use tracing_subscriber::util::SubscriberInitExt as _;
 
 use crate::admin::{RuntimeState, admin_router};
-use crate::api::{ApiState, domain_router};
+use crate::api::{ApiState, DEFAULT_CREDENTIALS_DIR, domain_router};
 use crate::config::{LogFormat, NotesConfig, TelemetryConfig};
-use crate::systemd::DbusSystemd;
+use crate::systemd::{DbusSystemd, SystemdBus};
 
 /// The whole process lifecycle.
 ///
@@ -62,7 +64,15 @@ pub async fn run() -> ExitCode {
     };
     tracing::info!(config = ?config, version = env!("CARGO_PKG_VERSION"), "effective configuration");
 
-    match serve(&config, metrics).await {
+    let served = serve(
+        &config,
+        metrics,
+        DbusSystemd::new(),
+        PathBuf::from(DEFAULT_CREDENTIALS_DIR),
+        shutdown_signal(),
+    )
+    .await;
+    match served {
         Ok(()) => ExitCode::SUCCESS,
         Err(reason) => {
             tracing::error!(%reason, "the process stopped with a failure");
@@ -111,7 +121,25 @@ fn init_telemetry(telemetry: &TelemetryConfig) -> Result<PrometheusHandle, Strin
         .map_err(|_| "the metrics recorder could not be installed".to_owned())
 }
 
-async fn serve(config: &NotesConfig, metrics: PrometheusHandle) -> Result<(), String> {
+/// Serve with a loaded configuration until `shutdown` completes, then stop within the grace window.
+///
+/// Steps 3 to 6 of [`run`]. [`run`] gives it the systemd manager on the system bus,
+/// [`DEFAULT_CREDENTIALS_DIR`] and the arrival of SIGTERM or SIGINT. A test gives it a fake bus, a
+/// temporary directory and a future that the test completes.
+///
+/// # Errors
+///
+/// The reason, when the database, the schema or a listener cannot be used.
+pub async fn serve<B: SystemdBus>(
+    config: &NotesConfig,
+    metrics: PrometheusHandle,
+    systemd: B,
+    credentials_dir: PathBuf,
+    shutdown: impl Future<Output = ()> + Send,
+) -> Result<(), String> {
+    // Not connected yet: the next change uses the three values.
+    drop((systemd, credentials_dir));
+    drop(shutdown);
     let database = Database::connect(
         &config.database.url,
         config.database.max_connections,

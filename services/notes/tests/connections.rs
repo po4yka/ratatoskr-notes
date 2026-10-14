@@ -2,7 +2,8 @@
 //! (requirement "A vault connection has exactly one channel"), disconnect (requirement
 //! "Connection events name the connection and never its secrets"), a connect request that
 //! the client drops while the login runs (workspace task 5.14), and a connect that a stop of the
-//! service, a disconnect or the limit of concurrent logins meets (workspace task 5.16).
+//! service, a disconnect or the limit of concurrent logins meets (workspace tasks 5.16 and 5.18,
+//! the stop and the start also through `serve`).
 
 #![allow(
     clippy::expect_used,
@@ -12,22 +13,29 @@
 
 mod support;
 
+use std::future::Future;
+use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use axum::Router;
 use axum::http::{Method, StatusCode};
+use metrics_exporter_prometheus::PrometheusBuilder;
 use ratatoskr_event_envelope::{EventEnvelope, EventPayload as _};
 use ratatoskr_notes::api::{ApiState, domain_router};
+use ratatoskr_notes::config::{
+    AdminConfig, ApiConfig, ConnectionsConfig, DatabaseConfig, NotesConfig, SecretsConfig,
+    ShutdownConfig, TelemetryConfig,
+};
 use ratatoskr_notes_contracts::{VaultChannel, VaultDisconnected};
 use ratatoskr_notes_persistence::test_support::TestDatabase;
 use ratatoskr_notes_persistence::{NewConnection, NewSecret};
-use tokio::sync::{Notify, mpsc};
+use tokio::sync::{Notify, mpsc, oneshot};
 use uuid::Uuid;
 
 use crate::support::systemd::{Call, FakeSystemd};
-use crate::support::{connect, connection_id, send};
+use crate::support::{connect, connection_id, send, send_tcp};
 
 const OWNER_A: Uuid = Uuid::from_u128(0x0192_0000_0000_7000_8000_0000_0000_000a);
 const OWNER_B: Uuid = Uuid::from_u128(0x0192_0000_0000_7000_8000_0000_0000_000b);
@@ -376,18 +384,9 @@ async fn shutdown_during_login_fails_the_connection() {
         .expect("the test database is dropped");
 }
 
-#[tokio::test]
-async fn next_start_fails_an_interrupted_login() {
-    let fixture = TestDatabase::create().await.expect("a test database");
-    let systemd = FakeSystemd::new();
-    let router = router(&fixture, &systemd);
-    // A `sync` connection whose login finished stays `connecting` until its first scan, and so
-    // does a `plugin` connection. The start leaves both alone.
-    let logged_in = connection_id(&connect(&router, OWNER_A, "sync", "remote-vault-0002").await);
-    let plugin = connection_id(&connect(&router, OWNER_A, "plugin", "plugin-vault-0001").await);
-
-    // What a stop that the grace window cut short leaves: a `sync` connection with its ciphertext
-    // whose login never finished, and what the login wrote on the host.
+/// Inserts a `sync` connection of [`OWNER_A`] for [`REMOTE_VAULT_ID`] with its ciphertext whose
+/// login never finished, as a stop of the service leaves it when the grace window ends first.
+async fn insert_interrupted_login(fixture: &TestDatabase) -> Uuid {
     let interrupted = Uuid::now_v7();
     let nonce = [7_u8; 24];
     let ciphertext = [9_u8; 32];
@@ -407,6 +406,22 @@ async fn next_start_fails_an_interrupted_login() {
         })
         .await
         .expect("the interrupted connection is inserted");
+    interrupted
+}
+
+#[tokio::test]
+async fn next_start_fails_an_interrupted_login() {
+    let fixture = TestDatabase::create().await.expect("a test database");
+    let systemd = FakeSystemd::new();
+    let router = router(&fixture, &systemd);
+    // A `sync` connection whose login finished stays `connecting` until its first scan, and so
+    // does a `plugin` connection. The start leaves both alone.
+    let logged_in = connection_id(&connect(&router, OWNER_A, "sync", "remote-vault-0002").await);
+    let plugin = connection_id(&connect(&router, OWNER_A, "plugin", "plugin-vault-0001").await);
+
+    // What a stop that the grace window cut short leaves: a `sync` connection with its ciphertext
+    // whose login never finished, and what the login wrote on the host.
+    let interrupted = insert_interrupted_login(&fixture).await;
     let (tree, ob_home) = leave_sync_state(&systemd, interrupted);
     let calls_before = systemd.calls().len();
 
@@ -553,6 +568,205 @@ async fn logins_are_bounded() {
         first_id
     );
     connection_id(&connect(&router, OWNER_B, "sync", REMOTE_VAULT_ID).await);
+
+    fixture
+        .cleanup()
+        .await
+        .expect("the test database is dropped");
+}
+
+/// Runs `steps` beside the real service, as `serve` runs it with the fake bus and the test
+/// database, then sends the stop signal, as SIGTERM does in production. Returns what the steps
+/// returned, and whether `serve` then ended without a failure in [`SETTLE`].
+///
+/// The future of `serve` is not `Send`, so the test polls it beside the steps instead of in a
+/// spawned task.
+async fn run_service<T>(
+    fixture: &TestDatabase,
+    systemd: &FakeSystemd,
+    steps: impl Future<Output = T>,
+    api: SocketAddr,
+) -> (T, bool) {
+    let config = NotesConfig {
+        admin: AdminConfig {
+            bind: support::free_address(),
+        },
+        api: ApiConfig {
+            listen_address: api,
+        },
+        connections: ConnectionsConfig { max_logins: 2 },
+        database: DatabaseConfig {
+            url: fixture.secret_url(),
+            max_connections: 2,
+            acquire_timeout_seconds: 5,
+        },
+        secrets: SecretsConfig {
+            key_file: systemd.key_file(),
+        },
+        shutdown: ShutdownConfig { grace_seconds: 5 },
+        telemetry: TelemetryConfig::default(),
+    };
+    let metrics = PrometheusBuilder::new().build_recorder().handle();
+    let (stop, stopped) = oneshot::channel::<()>();
+    let serve = ratatoskr_notes::serve(
+        &config,
+        metrics,
+        systemd.clone(),
+        systemd.credentials_root(),
+        async move {
+            let _ = stopped.await;
+        },
+    );
+    tokio::pin!(serve, steps);
+    let output = tokio::select! {
+        ended = &mut serve => unreachable!("serve ended before its stop signal: {ended:?}"),
+        output = &mut steps => output,
+    };
+    let _ = stop.send(());
+    let ended = tokio::time::timeout(SETTLE, serve).await;
+    (output, matches!(ended, Ok(Ok(()))))
+}
+
+#[tokio::test]
+async fn serve_shuts_down_logins_on_stop() {
+    let fixture = TestDatabase::create().await.expect("a test database");
+    // The login unit runs until the service stops it.
+    let systemd = FakeSystemd::new().hold_logins();
+    let api = support::free_address();
+
+    let steps = async {
+        let body = support::sync_body(REMOTE_VAULT_ID, support::MARKER_SECRETS);
+        let request = tokio::spawn(send_tcp(
+            api,
+            Method::POST,
+            "/v1/notes/connections",
+            OWNER_A,
+            Some(body),
+        ));
+        let id = first_login_started(&systemd).await;
+        assert!(
+            id.is_some(),
+            "a connect to the listener of serve starts the login unit through the given bus: {:?}",
+            systemd.calls()
+        );
+        (id.expect("checked above"), request)
+    };
+    // The stop signal arrives while the login runs.
+    let ((id, request), stopped) = run_service(&fixture, &systemd, steps, api).await;
+
+    assert!(
+        stopped,
+        "serve stops in the grace window when its stop signal arrives"
+    );
+    assert_eq!(
+        state_of(&fixture, id).await,
+        "failed",
+        "a stop of the service does not leave its connection connecting"
+    );
+    assert_login_stopped_then_cleaned_up(&systemd, id);
+    assert_eq!(secrets_of(&fixture, id).await, 0, "the ciphertext is gone");
+    let answer = request.await.expect("the connect request answers");
+    assert_eq!(
+        answer.status,
+        StatusCode::SERVICE_UNAVAILABLE,
+        "{:?}",
+        answer.body
+    );
+    assert_eq!(answer.body["code"], "notes.service.unavailable");
+
+    fixture
+        .cleanup()
+        .await
+        .expect("the test database is dropped");
+}
+
+#[tokio::test]
+async fn serve_reconciles_before_it_accepts() {
+    let fixture = TestDatabase::create().await.expect("a test database");
+    let systemd = FakeSystemd::new();
+    let interrupted = insert_interrupted_login(&fixture).await;
+    let api = support::free_address();
+
+    // The first request connects the same remote vault again. The interrupted connection holds
+    // the vault key until the start fails it, so the request is accepted only when the start
+    // failed it before the listener accepted the request.
+    let body = support::sync_body(REMOTE_VAULT_ID, support::MARKER_SECRETS);
+    let first = send_tcp(
+        api,
+        Method::POST,
+        "/v1/notes/connections",
+        OWNER_A,
+        Some(body),
+    );
+    let (first, stopped) = run_service(&fixture, &systemd, first, api).await;
+
+    assert_eq!(
+        first.status,
+        StatusCode::ACCEPTED,
+        "the start fails the interrupted login before the first request: {:?}",
+        first.body
+    );
+    let id = connection_id(&first);
+    assert_eq!(state_of(&fixture, interrupted).await, "failed");
+    assert_eq!(
+        secrets_of(&fixture, interrupted).await,
+        0,
+        "the ciphertext is gone"
+    );
+    assert_eq!(
+        systemd.calls(),
+        [
+            Call::Stop(format!("ratatoskr-notes-sync@{interrupted}.service")),
+            Call::Stop(format!("ratatoskr-notes-login@{interrupted}.service")),
+            Call::Start(format!("ratatoskr-notes-cleanup@{interrupted}.service")),
+            Call::Start(format!("ratatoskr-notes-login@{id}.service")),
+        ],
+        "the start reconciles through the given bus before the first request starts its login"
+    );
+    assert!(stopped, "serve stops without a failure");
+
+    fixture
+        .cleanup()
+        .await
+        .expect("the test database is dropped");
+}
+
+#[tokio::test]
+async fn delete_during_login_answers_not_found() {
+    let fixture = TestDatabase::create().await.expect("a test database");
+    // The login unit runs until the disconnect stops it.
+    let systemd = FakeSystemd::new().hold_logins();
+    let router = router(&fixture, &systemd);
+
+    let request = tokio::spawn({
+        let router = router.clone();
+        async move { connect(&router, OWNER_A, "sync", REMOTE_VAULT_ID).await }
+    });
+    let id = first_login_started(&systemd)
+        .await
+        .expect("the connect request starts the login unit");
+
+    // The owner removes the connection while its login runs.
+    let removed = send(
+        &router,
+        Method::DELETE,
+        &format!("/v1/notes/connections/{id}"),
+        OWNER_A,
+        None,
+    )
+    .await;
+    assert_eq!(removed.status, StatusCode::NO_CONTENT, "{:?}", removed.body);
+
+    let answer = request.await.expect("the connect request answers");
+    assert_eq!(
+        answer.status,
+        StatusCode::NOT_FOUND,
+        "the login that the disconnect stopped did not fail; its connection is gone: {:?}",
+        answer.body
+    );
+    assert_eq!(answer.body["code"], "notes.connection.not_found");
+    assert_eq!(state_of(&fixture, id).await, "removed");
+    assert_eq!(secrets_of(&fixture, id).await, 0, "the ciphertext is gone");
 
     fixture
         .cleanup()
