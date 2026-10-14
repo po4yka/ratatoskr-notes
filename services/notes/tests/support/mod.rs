@@ -12,6 +12,7 @@ pub(crate) mod cmdline;
 pub(crate) mod logs;
 pub(crate) mod systemd;
 
+use std::future::Future;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::time::{Duration, Instant};
 
@@ -19,11 +20,20 @@ use axum::Router;
 use axum::body::Body;
 use axum::http::{Method, Request, StatusCode};
 use http_body_util::BodyExt as _;
+use metrics_exporter_prometheus::PrometheusBuilder;
+use ratatoskr_notes::config::{
+    AdminConfig, ApiConfig, ConnectionsConfig, DatabaseConfig, NotesConfig, SecretsConfig,
+    ShutdownConfig, TelemetryConfig,
+};
+use ratatoskr_notes_persistence::test_support::TestDatabase;
 use serde_json::Value;
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use tokio::net::TcpStream;
+use tokio::sync::oneshot;
 use tower::ServiceExt as _;
 use uuid::Uuid;
+
+use crate::support::systemd::FakeSystemd;
 
 /// The claim header that Edge mints for the owner.
 pub(crate) const USER_HEADER: &str = "x-ratatoskr-user-id";
@@ -228,4 +238,59 @@ pub(crate) fn connection_id(answer: &Answer) -> Uuid {
         .as_str()
         .and_then(|raw| Uuid::parse_str(raw).ok())
         .expect("the answer names the connection id")
+}
+
+/// How long [`run_service`] waits until `serve` ends after its stop signal.
+const SERVICE_STOP_DEADLINE: Duration = Duration::from_secs(10);
+
+/// Runs `steps` beside the real service, as `serve` runs it with the fake bus and the test
+/// database, then sends the stop signal, as SIGTERM does in production. Returns what the steps
+/// returned, and whether `serve` then ended without a failure in [`SERVICE_STOP_DEADLINE`].
+///
+/// The future of `serve` is not `Send`, so the test polls it beside the steps instead of in a
+/// spawned task.
+pub(crate) async fn run_service<T>(
+    fixture: &TestDatabase,
+    systemd: &FakeSystemd,
+    steps: impl Future<Output = T>,
+    api: SocketAddr,
+) -> (T, bool) {
+    let config = NotesConfig {
+        admin: AdminConfig {
+            bind: free_address(),
+        },
+        api: ApiConfig {
+            listen_address: api,
+        },
+        connections: ConnectionsConfig { max_logins: 2 },
+        database: DatabaseConfig {
+            url: fixture.secret_url(),
+            max_connections: 2,
+            acquire_timeout_seconds: 5,
+        },
+        secrets: SecretsConfig {
+            key_file: systemd.key_file(),
+        },
+        shutdown: ShutdownConfig { grace_seconds: 5 },
+        telemetry: TelemetryConfig::default(),
+    };
+    let metrics = PrometheusBuilder::new().build_recorder().handle();
+    let (stop, stopped) = oneshot::channel::<()>();
+    let serve = ratatoskr_notes::serve(
+        &config,
+        metrics,
+        systemd.clone(),
+        systemd.credentials_root(),
+        async move {
+            let _ = stopped.await;
+        },
+    );
+    tokio::pin!(serve, steps);
+    let output = tokio::select! {
+        ended = &mut serve => unreachable!("serve ended before its stop signal: {ended:?}"),
+        output = &mut steps => output,
+    };
+    let _ = stop.send(());
+    let ended = tokio::time::timeout(SERVICE_STOP_DEADLINE, serve).await;
+    (output, matches!(ended, Ok(Ok(()))))
 }

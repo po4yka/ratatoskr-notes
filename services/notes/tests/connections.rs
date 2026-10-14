@@ -13,29 +13,22 @@
 
 mod support;
 
-use std::future::Future;
-use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use axum::Router;
 use axum::http::{Method, StatusCode};
-use metrics_exporter_prometheus::PrometheusBuilder;
 use ratatoskr_event_envelope::{EventEnvelope, EventPayload as _};
 use ratatoskr_notes::api::{ApiState, domain_router};
-use ratatoskr_notes::config::{
-    AdminConfig, ApiConfig, ConnectionsConfig, DatabaseConfig, NotesConfig, SecretsConfig,
-    ShutdownConfig, TelemetryConfig,
-};
 use ratatoskr_notes_contracts::{VaultChannel, VaultDisconnected};
 use ratatoskr_notes_persistence::test_support::TestDatabase;
 use ratatoskr_notes_persistence::{NewConnection, NewSecret};
-use tokio::sync::{Notify, mpsc, oneshot};
+use tokio::sync::{Notify, mpsc};
 use uuid::Uuid;
 
 use crate::support::systemd::{Call, FakeSystemd};
-use crate::support::{connect, connection_id, send, send_tcp};
+use crate::support::{connect, connection_id, run_service, send, send_tcp};
 
 const OWNER_A: Uuid = Uuid::from_u128(0x0192_0000_0000_7000_8000_0000_0000_000a);
 const OWNER_B: Uuid = Uuid::from_u128(0x0192_0000_0000_7000_8000_0000_0000_000b);
@@ -573,58 +566,6 @@ async fn logins_are_bounded() {
         .cleanup()
         .await
         .expect("the test database is dropped");
-}
-
-/// Runs `steps` beside the real service, as `serve` runs it with the fake bus and the test
-/// database, then sends the stop signal, as SIGTERM does in production. Returns what the steps
-/// returned, and whether `serve` then ended without a failure in [`SETTLE`].
-///
-/// The future of `serve` is not `Send`, so the test polls it beside the steps instead of in a
-/// spawned task.
-async fn run_service<T>(
-    fixture: &TestDatabase,
-    systemd: &FakeSystemd,
-    steps: impl Future<Output = T>,
-    api: SocketAddr,
-) -> (T, bool) {
-    let config = NotesConfig {
-        admin: AdminConfig {
-            bind: support::free_address(),
-        },
-        api: ApiConfig {
-            listen_address: api,
-        },
-        connections: ConnectionsConfig { max_logins: 2 },
-        database: DatabaseConfig {
-            url: fixture.secret_url(),
-            max_connections: 2,
-            acquire_timeout_seconds: 5,
-        },
-        secrets: SecretsConfig {
-            key_file: systemd.key_file(),
-        },
-        shutdown: ShutdownConfig { grace_seconds: 5 },
-        telemetry: TelemetryConfig::default(),
-    };
-    let metrics = PrometheusBuilder::new().build_recorder().handle();
-    let (stop, stopped) = oneshot::channel::<()>();
-    let serve = ratatoskr_notes::serve(
-        &config,
-        metrics,
-        systemd.clone(),
-        systemd.credentials_root(),
-        async move {
-            let _ = stopped.await;
-        },
-    );
-    tokio::pin!(serve, steps);
-    let output = tokio::select! {
-        ended = &mut serve => unreachable!("serve ended before its stop signal: {ended:?}"),
-        output = &mut steps => output,
-    };
-    let _ = stop.send(());
-    let ended = tokio::time::timeout(SETTLE, serve).await;
-    (output, matches!(ended, Ok(Ok(()))))
 }
 
 #[tokio::test]
