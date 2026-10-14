@@ -19,4 +19,4 @@ concurrency:
 
 jobs:
   openspec:
-    uses: po4yka/ratatoskr-workspace/.github/workflows/reusable-openspec.yml@b7bd2a15b4ed75371a6471c0c5de90d7ba342b46 # main
+    uses: po4yka/ratatoskr-workspace/.github/workflows/reusable-openspec.yml@75b3ed8cb5f1e0bd638db99126f887b65fa73eb8 # main
