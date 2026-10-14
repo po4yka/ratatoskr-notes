@@ -8,6 +8,11 @@
 //! The fake reads `Environment=` and `EnvironmentFile=`, and copies each `LoadCredential=` file
 //! into a fresh directory that it names in `$CREDENTIALS_DIRECTORY` and removes after the run.
 //!
+//! When the service starts `ratatoskr-notes-sync@<id>.service`, the fake runs the `ExecStartPre=`
+//! and `ExecStart=` lines of the shipped sync template in the same way. The stub `ob` records
+//! `ob sync --continuous` and returns at once, so the start job of the unit is done when its
+//! command started, as for a unit of `Type=exec`.
+//!
 //! The stub `ob` records its arguments and what it reads on standard input. Its `login` writes a
 //! token to the client state. It exits 1 when the fake Obsidian account refuses the login, and it
 //! ends without a token when the account needs an MFA code and the call gives none. Its
@@ -57,6 +62,8 @@ pub(crate) const KEY_BYTES: [u8; 32] = *b"test-key-of-32-bytes-for-notes!!";
 const STUB_OB: &str = r#"#!/bin/sh
 dir='@DIR@'
 printf '%s\n' "$*" >> "$dir/ob.log"
+printf '%s\037' "$@" >> "$dir/ob.args"
+printf '\n' >> "$dir/ob.args"
 case "$1" in
 login)
     cat > "$dir/stdin.login"
@@ -222,6 +229,24 @@ impl FakeSystemd {
     pub(crate) fn ob_invocations(&self) -> Vec<String> {
         std::fs::read_to_string(self.directory.path().join("ob.log"))
             .map(|log| log.lines().map(str::to_owned).collect())
+            .unwrap_or_default()
+    }
+
+    /// The arguments that the stub `ob` received, one list for each call, in order. Unlike
+    /// [`Self::ob_invocations`], an empty argument stays an empty word.
+    pub(crate) fn ob_arguments(&self) -> Vec<Vec<String>> {
+        std::fs::read_to_string(self.directory.path().join("ob.args"))
+            .map(|log| {
+                log.lines()
+                    .map(|line| {
+                        line.strip_suffix('\u{1f}')
+                            .unwrap_or(line)
+                            .split('\u{1f}')
+                            .map(str::to_owned)
+                            .collect()
+                    })
+                    .collect()
+            })
             .unwrap_or_default()
     }
 
@@ -545,13 +570,15 @@ impl SystemdBus for FakeSystemd {
         if let Some(instance) = instance_of(unit, "ratatoskr-notes-login@.service") {
             return self.run_login(unit, instance).await;
         }
-        match instance_of(unit, "ratatoskr-notes-cleanup@.service") {
-            Some(instance) => {
-                self.run_template("ratatoskr-notes-cleanup@.service", instance)
-                    .await
+        for template in [
+            "ratatoskr-notes-cleanup@.service",
+            "ratatoskr-notes-sync@.service",
+        ] {
+            if let Some(instance) = instance_of(unit, template) {
+                return self.run_template(template, instance).await;
             }
-            None => Ok(JobResult::Done),
         }
+        Ok(JobResult::Done)
     }
 
     async fn stop_unit(&self, unit: &UnitName) -> Result<JobResult, BusError> {

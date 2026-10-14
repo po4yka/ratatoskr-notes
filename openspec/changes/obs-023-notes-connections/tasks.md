@@ -29,3 +29,18 @@
 - [x] 5.6 GREEN: track the connect tasks and fail them in the grace window, fail each interrupted login at start before the listeners accept, check the row state before the login starts and again after it, and limit concurrent logins with a semaphore, `RATATOSKR__CONNECTIONS__MAX_LOGINS` (workspace task 5.17). Verify 5.5.
 - [x] 5.7 RED: in `services/notes/tests/connections.rs`, add `serve_shuts_down_logins_on_stop` (the real `serve()` with the fake bus and the compose database: a stop signal while a login is held fails the connection, stops the login unit and runs the cleanup unit), `serve_reconciles_before_it_accepts` (an interrupted login is failed before `serve()` accepts the first request) and `delete_during_login_answers_not_found` (a disconnect while the login unit runs: the connect answers `404` with `notes.connection.not_found`, not `422` with `notes.sync.login_failed`), as workspace task 5.18 words them. `serve()` takes the bus, the credentials directory and the stop signal, but does not use them yet. Confirm that the three fail by assertion.
 - [x] 5.8 GREEN: connect the bus, the credentials directory and the stop signal of `serve()`, and keep SIGTERM and SIGINT in production; answer `404` when a disconnect stopped the login of its connection; state in `DEVELOPMENT.md` that a database made before the `logged_in_at` column needs its `notes` schema dropped and made again (workspace task 5.19). Verify 5.7.
+
+## 6. Sync channel and blob root (workspace tasks 6.1 to 6.10)
+
+The numbers of this group are the numbers of the workspace tasks.
+
+- [ ] 6.1 RED: `services/notes/tests/sync_supervisor.rs::connect_starts_one_unit_in_pull_only_mode`, as workspace task 6.1 words it: with a stub `ob` that records its calls, a connect calls `sync-config --mode pull-only --configs ""` with the device name `ratatoskr-<id>` and starts `ratatoskr-notes-sync@<id>.service`, and the next start of the service starts the same unit again. Confirm that it fails because the supervisor does not exist.
+- [ ] 6.2 GREEN: implement the supervisor through the systemd D-Bus API, and ship `deploy/systemd/ratatoskr-notes-sync@.service` with a provisional `MemoryMax=` until spike 3.1 measures it. The polkit rule is in the deploy role of `ratatoskr-workspace`, which must add the sync unit to `ratatoskr_template_units`. Verify 6.1.
+- [ ] 6.3 RED: `services/notes/tests/sync_watcher.rs::settled_change_becomes_one_revision`, as workspace task 6.3 words it. Confirm that it fails because the watcher does not exist.
+- [ ] 6.4 GREEN: implement the inotify watcher, the settle window and the 15-minute rescan. Verify 6.3.
+- [ ] 6.5 RED: workspace task 6.5. It waits for the pull-only session that spike 3.3 records.
+- [ ] 6.6 GREEN: workspace task 6.6. It waits for 6.5.
+- [ ] 6.7 RED: `services/notes/tests/blob_root.rs::new_blob_is_group_readable_and_not_world_readable`, as workspace task 6.7 words it. Confirm that it fails because the service writes with the default umask.
+- [ ] 6.8 GREEN: write each blob with mode 0640 and each directory with mode 2750, and keep the setgid bit on new directories. Verify 6.7, and document the read group in the README.
+- [ ] 6.9 RED: `services/notes/tests/sync_supervisor.rs::auth_failure_stops_the_unit_and_waits_for_the_owner`, as workspace task 6.9 words it. Confirm that it fails because the connection stays `active`.
+- [ ] 6.10 GREEN: read the journal of the sync unit for the line `Failed to authenticate:` only, stop the unit after 5 minutes of repeats, and set the state. Verify 6.9.
