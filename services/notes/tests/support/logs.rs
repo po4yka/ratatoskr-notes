@@ -1,4 +1,9 @@
-//! Captures every log line that the service writes while a test runs, at every level.
+//! Captures every log line that the service writes while a test binary runs, at every level.
+//!
+//! The subscriber is the global default of the test binary, not a per-thread default: with a
+//! per-thread default, a callsite that another test thread reaches first can keep the interest of a
+//! thread without a subscriber, and the capture then misses its events (seen on macOS with five
+//! tests in parallel). The buffer therefore holds the lines of every test in the binary.
 
 #![allow(
     clippy::expect_used,
@@ -7,27 +12,34 @@
 )]
 
 use std::io::Write;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 
-use tracing::subscriber::DefaultGuard;
 use tracing_subscriber::fmt::MakeWriter;
+
+/// The one capture of this test binary.
+static GLOBAL: OnceLock<CapturedLogs> = OnceLock::new();
 
 /// The captured log output. Clones share one buffer.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct CapturedLogs(Arc<Mutex<Vec<u8>>>);
 
 impl CapturedLogs {
-    /// Installs a subscriber at `TRACE` for the current thread. The capture stops when the guard
-    /// is dropped. A `#[tokio::test]` runs on one thread, so it captures the routes too.
-    pub(crate) fn install() -> (Self, DefaultGuard) {
-        let logs = Self::default();
-        let subscriber = tracing_subscriber::fmt()
-            .with_writer(logs.clone())
-            .with_max_level(tracing::Level::TRACE)
-            .with_ansi(false)
-            .finish();
-        let guard = tracing::subscriber::set_default(subscriber);
-        (logs, guard)
+    /// Installs a subscriber at `TRACE` as the global default of the test binary, once, and
+    /// returns its buffer.
+    pub(crate) fn install() -> Self {
+        GLOBAL
+            .get_or_init(|| {
+                let logs = Self::default();
+                let subscriber = tracing_subscriber::fmt()
+                    .with_writer(logs.clone())
+                    .with_max_level(tracing::Level::TRACE)
+                    .with_ansi(false)
+                    .finish();
+                tracing::subscriber::set_global_default(subscriber)
+                    .expect("no other global subscriber in this test binary");
+                logs
+            })
+            .clone()
     }
 
     /// Everything written so far.

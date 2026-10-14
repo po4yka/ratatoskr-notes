@@ -36,12 +36,17 @@ const MAX_VAULT_KEY_CHARS: usize = 255;
 /// Where the host keeps the key that encrypts the Obsidian secrets (workspace design D4).
 pub const DEFAULT_KEY_FILE: &str = "/etc/ratatoskr/notes-secrets.key";
 
+/// Where the service writes the credential files of a login, on tmpfs (workspace design D4). The
+/// login unit names the same path in its `LoadCredential=` lines.
+pub const DEFAULT_CREDENTIALS_DIR: &str = "/run/ratatoskr-notes/credentials";
+
 /// What the domain handlers share.
 #[derive(Debug)]
 pub struct ApiState<B> {
     database: Database,
     systemd: Arc<B>,
     key_file: PathBuf,
+    credentials_dir: PathBuf,
 }
 
 impl<B> Clone for ApiState<B> {
@@ -50,6 +55,7 @@ impl<B> Clone for ApiState<B> {
             database: self.database.clone(),
             systemd: Arc::clone(&self.systemd),
             key_file: self.key_file.clone(),
+            credentials_dir: self.credentials_dir.clone(),
         }
     }
 }
@@ -62,6 +68,7 @@ impl<B: SystemdBus> ApiState<B> {
             database,
             systemd: Arc::new(systemd),
             key_file: PathBuf::from(DEFAULT_KEY_FILE),
+            credentials_dir: PathBuf::from(DEFAULT_CREDENTIALS_DIR),
         }
     }
 
@@ -69,6 +76,14 @@ impl<B: SystemdBus> ApiState<B> {
     #[must_use]
     pub fn with_key_file(mut self, path: impl Into<PathBuf>) -> Self {
         self.key_file = path.into();
+        self
+    }
+
+    /// Write the credential files of a login under `path` instead of [`DEFAULT_CREDENTIALS_DIR`].
+    /// For tests: the login unit reads [`DEFAULT_CREDENTIALS_DIR`] on the host.
+    #[must_use]
+    pub fn with_credentials_dir(mut self, path: impl Into<PathBuf>) -> Self {
+        self.credentials_dir = path.into();
         self
     }
 }

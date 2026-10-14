@@ -7,6 +7,8 @@
     reason = "test scaffolding; not every test binary uses every helper"
 )]
 
+#[cfg(unix)]
+pub(crate) mod cmdline;
 pub(crate) mod logs;
 pub(crate) mod systemd;
 

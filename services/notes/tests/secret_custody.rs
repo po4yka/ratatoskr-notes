@@ -7,6 +7,10 @@
 //! output of the units. The ciphertext column is the one place that holds a form of a secret: the
 //! encrypted form. The search reads that column too, and asserts that the plaintext marker is not
 //! in it. `stored_secret_is_ciphertext_without_mfa` then checks the ciphertext itself.
+//!
+//! `login_unit_gets_secrets_only_as_credentials` and `no_secret_in_any_cmdline` run the shipped
+//! login unit through the fake systemd bus (requirement "The login runs as a oneshot unit that
+//! receives secrets as credentials"). The second one needs `/proc`, so it runs on Linux only.
 
 #![allow(
     clippy::expect_used,
@@ -24,6 +28,7 @@ use ratatoskr_notes::api::{ApiState, domain_router};
 use ratatoskr_notes_persistence::test_support::TestDatabase;
 use uuid::Uuid;
 
+use crate::support::cmdline::{CmdlineReader, own_uid};
 use crate::support::logs::CapturedLogs;
 use crate::support::systemd::{FakeSystemd, KEY_BYTES};
 use crate::support::{SyncSecrets, connect_sync, connection_id, send};
@@ -46,7 +51,9 @@ const SECRETS: SyncSecrets<'static> = SyncSecrets {
 
 fn router(fixture: &TestDatabase, systemd: &FakeSystemd) -> Router {
     domain_router(
-        ApiState::new(fixture.database.clone(), systemd.clone()).with_key_file(systemd.key_file()),
+        ApiState::new(fixture.database.clone(), systemd.clone())
+            .with_key_file(systemd.key_file())
+            .with_credentials_dir(systemd.credentials_root()),
     )
 }
 
@@ -118,7 +125,7 @@ fn assert_no_marker_in(place: &str, text: &str) {
 
 #[tokio::test]
 async fn marker_secrets_appear_nowhere_in_notes() {
-    let (logs, _capture) = CapturedLogs::install();
+    let logs = CapturedLogs::install();
     let fixture = TestDatabase::create().await.expect("a test database");
     let systemd = FakeSystemd::new();
     let router = router(&fixture, &systemd);
@@ -289,6 +296,162 @@ async fn stored_secret_is_ciphertext_without_mfa() {
         columns_holding(&fixture, MFA_CODE).await.is_empty(),
         "the MFA code is stored nowhere"
     );
+
+    fixture
+        .cleanup()
+        .await
+        .expect("the test database is dropped");
+}
+
+/// The shipped login unit, as the host installs it.
+const LOGIN_UNIT: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../deploy/systemd/ratatoskr-notes-login@.service"
+);
+
+/// The directives of the login unit, `(key, value)`, without comments.
+fn directives(unit: &str) -> Vec<(String, String)> {
+    unit.lines()
+        .map(str::trim)
+        .filter(|line| !line.starts_with('#'))
+        .filter_map(|line| line.split_once('='))
+        .map(|(key, value)| (key.to_owned(), value.to_owned()))
+        .collect()
+}
+
+#[tokio::test]
+async fn login_unit_gets_secrets_only_as_credentials() {
+    let fixture = TestDatabase::create().await.expect("a test database");
+    let systemd = FakeSystemd::new();
+    let refusing = FakeSystemd::new().refuse_e2e_password();
+    let refusing_router = router(&fixture, &refusing);
+    let router = router(&fixture, &systemd);
+
+    let id = connection_id(&connect_sync(&router, OWNER, REMOTE_VAULT_ID, SECRETS).await);
+
+    // The service wrote one file for each value of the login, readable by its own user only.
+    let snapshot = systemd
+        .credential_snapshot(id)
+        .expect("the service wrote the credential files before it started the login unit");
+    assert_eq!(snapshot.directory_mode, 0o700, "{snapshot:?}");
+    for file in &snapshot.files {
+        assert_eq!(file.mode, 0o600, "{}: {snapshot:?}", file.name);
+    }
+    let contents = |name: &str| {
+        snapshot
+            .files
+            .iter()
+            .find(|file| file.name == name)
+            .map(|file| file.contents.as_str())
+    };
+    assert_eq!(contents("password"), Some(ACCOUNT_PASSWORD), "{snapshot:?}");
+    assert_eq!(contents("e2e"), Some(E2E_PASSWORD), "{snapshot:?}");
+
+    // The unit loads every file of that directory with LoadCredential=, and nothing else names a
+    // password.
+    let unit = std::fs::read_to_string(LOGIN_UNIT).expect("the login unit ships");
+    let directives = directives(&unit);
+    let credentials: Vec<(&str, &str)> = directives
+        .iter()
+        .filter(|(key, _)| key == "LoadCredential")
+        .map(|(_, value)| value.split_once(':').expect("LoadCredential=name:path"))
+        .collect();
+    for file in &snapshot.files {
+        let source = format!("/run/ratatoskr-notes/credentials/%i/{}", file.name);
+        assert!(
+            credentials.contains(&(file.name.as_str(), source.as_str())),
+            "the unit loads {source} as the credential {}: {credentials:?}",
+            file.name
+        );
+    }
+    assert!(
+        directives
+            .iter()
+            .any(|(key, value)| key == "User" && value == "ratatoskr-notes-sync"),
+        "the login unit runs as the owner of ob-home"
+    );
+    assert!(
+        !unit.contains("--password"),
+        "no password is given to ob in argv"
+    );
+
+    // ob read each password on standard input.
+    assert_eq!(systemd.ob_stdin("login").as_deref(), Some(ACCOUNT_PASSWORD));
+    assert_eq!(
+        systemd.ob_stdin("sync-setup").as_deref(),
+        Some(E2E_PASSWORD)
+    );
+
+    // The files are gone after the unit stopped, also after a failed login.
+    assert!(
+        !systemd.credentials_root().join(id.to_string()).exists(),
+        "the credential files of a login are deleted when the unit stops"
+    );
+    let failed = connect_sync(&refusing_router, OWNER, "remote-vault-0043", SECRETS).await;
+    assert_eq!(
+        failed.status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "{:?}",
+        failed.body
+    );
+    let left: Vec<_> = std::fs::read_dir(refusing.credentials_root())
+        .expect("the credentials root can be listed")
+        .collect();
+    assert!(
+        left.is_empty(),
+        "the credential files of a failed login are deleted: {left:?}"
+    );
+
+    fixture
+        .cleanup()
+        .await
+        .expect("the test database is dropped");
+}
+
+/// The two passwords. The MFA code is a one-time code, and it may be in argv (workspace spec
+/// `notes-vault-connections`, requirement "The login runs as a oneshot unit that receives secrets
+/// as credentials").
+const PASSWORD_MARKERS: [&str; 2] = [ACCOUNT_PASSWORD, E2E_PASSWORD];
+
+#[tokio::test]
+#[cfg_attr(
+    not(target_os = "linux"),
+    ignore = "reads /proc/*/cmdline, which only Linux has"
+)]
+async fn no_secret_in_any_cmdline() {
+    let reader = CmdlineReader::start().await;
+    let fixture = TestDatabase::create().await.expect("a test database");
+    // The stub ob sleeps in each step, so that the reader sees its processes.
+    let systemd = FakeSystemd::new().ob_sleeps();
+    let router = router(&fixture, &systemd);
+
+    let connected = connect_sync(&router, OWNER, REMOTE_VAULT_ID, SECRETS).await;
+    let seen = reader.stop().await;
+    connection_id(&connected);
+
+    assert_ne!(
+        seen.reader_uid,
+        own_uid(),
+        "the reader runs as another user than the login"
+    );
+    // The reader saw both steps of the login while they ran.
+    for step in [" login --email ", " sync-setup --vault "] {
+        assert!(
+            seen.lines.iter().any(|line| line.contains(step)),
+            "the reader saw the process of `ob{step}` while it ran"
+        );
+    }
+    for marker in PASSWORD_MARKERS {
+        let holding: Vec<&String> = seen
+            .lines
+            .iter()
+            .filter(|line| line.contains(marker))
+            .collect();
+        assert!(
+            holding.is_empty(),
+            "a command line holds the password marker {marker}: {holding:?}"
+        );
+    }
 
     fixture
         .cleanup()

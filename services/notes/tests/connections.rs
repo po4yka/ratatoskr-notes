@@ -27,7 +27,9 @@ const REMOTE_VAULT_ID: &str = "remote-vault-0001";
 
 fn router(fixture: &TestDatabase, systemd: &FakeSystemd) -> Router {
     domain_router(
-        ApiState::new(fixture.database.clone(), systemd.clone()).with_key_file(systemd.key_file()),
+        ApiState::new(fixture.database.clone(), systemd.clone())
+            .with_key_file(systemd.key_file())
+            .with_credentials_dir(systemd.credentials_root()),
     )
 }
 
