@@ -9,6 +9,9 @@
 //!
 //! [`paths`] holds the rules for the paths of a vault: NFC, path keys, collisions and exclusions.
 //!
+//! [`rewrite_links`] gives the notes whose links a rename or a move changes, as Obsidian changes
+//! them (workspace change `add-notes-write-back`).
+//!
 //! The oracle is the golden output of the real Obsidian engine under
 //! `tests/fixtures/obsidian-<version>/`. A new Obsidian version adds a new directory there.
 
@@ -17,7 +20,9 @@ mod index;
 mod markdown;
 pub mod paths;
 mod resolve;
+mod rewrite;
 mod text;
 
 pub use crate::index::{FrontmatterLink, Heading, Link, LinkForm, NoteIndex, parse};
 pub use crate::resolve::{LinkCounts, LinkGraph, Vault};
+pub use crate::rewrite::{NewLinkFormat, rewrite_links};
