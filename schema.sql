@@ -263,3 +263,11 @@ comment on table notes.outbox is
     'Transactional outbox. The relay to JetStream under the NOTES identity reads it.';
 
 create index outbox_unpublished_idx on notes.outbox (position) where published_at is null;
+
+-- One end per connect operation: at most one terminal report (`succeeded`, `partially_succeeded`
+-- or `failed`) of an operation is in the outbox. A second end, for example a connect that finds
+-- its connection already `login_expired`, is not written (workspace design D10).
+create unique index outbox_one_terminal_report
+    on notes.outbox ((payload -> 'payload' ->> 'operation_id'))
+    where event_type = 'platform.operation.reported.v1'
+      and payload -> 'payload' ->> 'status' in ('succeeded', 'partially_succeeded', 'failed');

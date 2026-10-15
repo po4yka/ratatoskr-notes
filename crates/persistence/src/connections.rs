@@ -313,7 +313,8 @@ impl Database {
     }
 }
 
-/// Write `event` to the outbox in `transaction`.
+/// Write `event` to the outbox in `transaction`. A second terminal report of one operation is not
+/// written: the index `outbox_one_terminal_report` keeps the first end.
 pub(crate) async fn insert_outbox(
     transaction: &mut sqlx::Transaction<'static, sqlx::Postgres>,
     event: &OutboxEvent<'_>,
@@ -321,7 +322,8 @@ pub(crate) async fn insert_outbox(
     sqlx::query(
         "insert into notes.outbox
              (event_id, event_type, aggregate_type, aggregate_id, payload, created_at)
-         values ($1, $2, $3, $4, $5, now())",
+         values ($1, $2, $3, $4, $5, now())
+         on conflict do nothing",
     )
     .bind(event.event_id)
     .bind(event.event_type)
