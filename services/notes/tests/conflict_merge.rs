@@ -299,3 +299,137 @@ async fn resolution_is_published_on_acknowledgement() {
 
     writer.cleanup().await;
 }
+
+/// `lines` lines of `width` bytes each, with `first` and `last` as the first and the last line.
+fn note(lines: usize, width: usize, first: &str, last: &str) -> String {
+    let mut text = format!("{first}\n");
+    for index in 1..lines - 1 {
+        let line = format!("line {index:07} ");
+        text.push_str(&line);
+        text.push_str(&"x".repeat(width.saturating_sub(line.len() + 1)));
+        text.push('\n');
+    }
+    text.push_str(last);
+    text.push('\n');
+    text
+}
+
+/// A stale update of `Big.md` whose three sides are notes of `lines` lines of `width` bytes:
+/// the phone changed the first line and the writer the last one. Returns the connection and the
+/// hash of the merge of the two disjoint edits.
+async fn disjoint_big_edits(writer: &Writer, lines: usize, width: usize) -> (Uuid, String) {
+    let base = note(lines, width, "# Big", "The end.");
+    let phone = note(lines, width, "# Big, edited on the phone", "The end.");
+    let mine = note(lines, width, "# Big", "The end, edited by the owner.");
+    let merged = note(
+        lines,
+        width,
+        "# Big, edited on the phone",
+        "The end, edited by the owner.",
+    );
+    let connection = stale_update(
+        writer,
+        "Big.md",
+        "text/markdown",
+        [base.as_bytes(), phone.as_bytes(), mine.as_bytes()],
+        "platform",
+    )
+    .await;
+    (connection, sha256(merged.as_bytes()))
+}
+
+#[tokio::test]
+async fn oversized_sides_get_no_proposal() {
+    let writer = Writer::new().await;
+    // 1 000 lines of 1 200 bytes: more than 1 MiB per side, fewer than 20 000 lines.
+    let (connection, merged) = disjoint_big_edits(&writer, 1_000, 1_200).await;
+
+    let raised = writer.events_of(connection, RAISED).await;
+
+    assert_eq!(raised.len(), 1, "the conflict is raised");
+    assert_eq!(
+        raised[0].get("merge_proposal"),
+        None,
+        "no proposal over the size cap"
+    );
+    assert!(
+        writer
+            .channel
+            .blobs
+            .path_of(&merged)
+            .is_none_or(|blob| !blob.exists()),
+        "no merge was attempted"
+    );
+
+    writer.cleanup().await;
+}
+
+#[tokio::test]
+async fn long_sides_get_no_proposal() {
+    let writer = Writer::new().await;
+    // 25 000 lines of 8 bytes: less than 1 MiB per side, more than 20 000 lines.
+    let (connection, merged) = disjoint_big_edits(&writer, 25_000, 8).await;
+
+    let raised = writer.events_of(connection, RAISED).await;
+
+    assert_eq!(raised.len(), 1, "the conflict is raised");
+    assert_eq!(
+        raised[0].get("merge_proposal"),
+        None,
+        "no proposal over the line cap"
+    );
+    assert!(
+        writer
+            .channel
+            .blobs
+            .path_of(&merged)
+            .is_none_or(|blob| !blob.exists()),
+        "no merge was attempted"
+    );
+
+    writer.cleanup().await;
+}
+
+#[tokio::test]
+async fn unannounced_conflict_is_announced_later() {
+    let writer = Writer::new().await;
+    let base: &[u8] = b"# Plan\n\nThe first paragraph.\n\nThe last paragraph.\n";
+    let phone: &[u8] = b"# Plan\n\nThe first paragraph, from the phone.\n\nThe last paragraph.\n";
+    let mine: &[u8] = b"# Plan\n\nThe first paragraph.\n\nThe last paragraph, from the owner.\n";
+    let connection = stale_update(
+        &writer,
+        "Plan.md",
+        "text/markdown",
+        [base, phone, mine],
+        "platform",
+    )
+    .await;
+    // A stop of the process after the conflict was recorded and before it was announced.
+    sqlx::query("update notes.conflicts set announced = false")
+        .execute(writer.channel.fixture.pool())
+        .await
+        .expect("the conflict is marked unannounced");
+    sqlx::query("delete from notes.outbox where event_type = $1")
+        .bind(RAISED)
+        .execute(writer.channel.fixture.pool())
+        .await
+        .expect("the raised event is removed");
+
+    let first = writer
+        .writes
+        .announce_pending()
+        .await
+        .expect("the pending conflicts are announced");
+    let second = writer
+        .writes
+        .announce_pending()
+        .await
+        .expect("a second pass runs");
+    let raised = writer.events_of(connection, RAISED).await;
+
+    assert_eq!((first, second), (1, 0));
+    assert_eq!(raised.len(), 1, "the conflict is announced once");
+    assert_eq!(raised[0]["merge_proposal"]["has_overlapping_hunks"], false);
+
+    writer.cleanup().await;
+}

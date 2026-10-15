@@ -436,4 +436,15 @@ impl Writes {
             _ => Outcome::Pending,
         }))
     }
+
+    /// Announce every conflict that is recorded and not announced yet: compute its merge proposal
+    /// and write `notes.conflict.raised.v1`. Returns how many it announced. Announces nothing yet.
+    ///
+    /// # Errors
+    ///
+    /// [`WriteError`] when the database fails.
+    pub async fn announce_pending(&self) -> Result<usize, WriteError> {
+        let _ = &self.recorder;
+        Ok(0)
+    }
 }

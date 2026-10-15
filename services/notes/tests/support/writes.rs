@@ -48,7 +48,7 @@ impl Writer {
             .await;
         for (_, bytes) in files {
             if !bytes.is_empty() {
-                self.channel.hold(owner, connection, bytes).await;
+                self.keep(owner, connection, bytes).await;
             }
         }
         let entries: Vec<Value> = files
@@ -69,6 +69,28 @@ impl Writer {
         connection
     }
 
+    /// Let `connection_id` of `owner` name `bytes`: an upload of the device for up to one chunk of
+    /// 64 KiB, and for larger bytes the blob store and the row that a finished upload writes.
+    pub(crate) async fn keep(&self, owner: Uuid, connection_id: Uuid, bytes: &[u8]) {
+        if bytes.len() <= 65_536 {
+            self.channel.hold(owner, connection_id, bytes).await;
+            return;
+        }
+        let scratch = tempfile::NamedTempFile::new().expect("a scratch file");
+        std::fs::write(scratch.path(), bytes).expect("the scratch file is written");
+        let stored = self
+            .channel
+            .blobs
+            .store_file(scratch.path())
+            .expect("the blob is stored");
+        self.channel
+            .fixture
+            .database
+            .record_connection_blob(connection_id, &stored.digest, stored.length)
+            .await
+            .expect("the blob is registered");
+    }
+
     /// [`Self::vault_of`] for [`OWNER`].
     pub(crate) async fn vault(&self, files: &[(&str, &[u8])]) -> Uuid {
         self.vault_of(OWNER, files).await
@@ -86,7 +108,7 @@ impl Writer {
 
     /// The device of [`OWNER`] reports that `path` of `connection_id` has `bytes` now.
     pub(crate) async fn vault_change(&self, connection_id: Uuid, path: &str, bytes: &[u8]) {
-        self.channel.hold(OWNER, connection_id, bytes).await;
+        self.keep(OWNER, connection_id, bytes).await;
         let committed: i64 = sqlx::query_scalar(
             "select device_sequence from notes.connections where connection_id = $1",
         )
@@ -120,7 +142,7 @@ impl Writer {
         bytes: &[u8],
         media_type: &str,
     ) -> Value {
-        self.channel.hold(owner, connection_id, bytes).await;
+        self.keep(owner, connection_id, bytes).await;
         blob_ref(bytes, media_type)
     }
 

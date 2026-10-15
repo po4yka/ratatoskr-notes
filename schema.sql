@@ -353,6 +353,8 @@ create table notes.conflicts (
     -- the hash of the merged bytes in the blob root, and whether the merge has overlapping hunks.
     merged_hash       text,
     has_overlapping_hunks boolean,
+    -- Whether `notes.conflict.raised.v1` is in the outbox.
+    announced         boolean     not null default true,
     -- `open`, or `resolved` after a resolution that the channel acknowledged.
     state             text        not null,
     created_at        timestamptz not null,
