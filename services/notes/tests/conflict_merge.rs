@@ -433,3 +433,25 @@ async fn unannounced_conflict_is_announced_later() {
 
     writer.cleanup().await;
 }
+
+#[tokio::test]
+async fn oversized_texts_are_left_out() {
+    let writer = Writer::new().await;
+    let (connection, _) = disjoint_big_edits(&writer, 1_000, 1_200).await;
+    let conflict_id = last_conflict(&writer, connection).await;
+
+    let read = writer.conflict(OWNER, &conflict_id).await;
+
+    assert_eq!(read.status, axum::http::StatusCode::OK, "{:?}", read.body);
+    let texts: Vec<String> = read.body["texts"]
+        .as_object()
+        .map(|texts| texts.keys().cloned().collect())
+        .unwrap_or_default();
+    assert_eq!(texts, Vec::<String>::new(), "no side over the cap is read");
+    assert_eq!(
+        read.body["texts_over_limit"],
+        json!(["base", "current", "writer"])
+    );
+
+    writer.cleanup().await;
+}
