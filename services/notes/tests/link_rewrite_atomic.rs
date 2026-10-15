@@ -11,6 +11,7 @@
 mod support;
 
 use axum::http::StatusCode;
+use ratatoskr_notes::sync_write::SyncWriter;
 use ratatoskr_notes::writes::{Handled, Outcome};
 use serde_json::{Value, json};
 
@@ -193,6 +194,105 @@ async fn partial_application_fails_with_a_conflict() {
     assert_eq!(
         raised[0]["conflict_id"],
         json!(conflict_id.map(|id| id.to_string()))
+    );
+
+    writer.cleanup().await;
+}
+
+#[tokio::test]
+async fn sync_writes_the_rewrites_after_the_rename() {
+    let writer = Writer::new().await;
+    let a0 = b"# A\n\n## Part\n\nSee [[A#Part]].\n";
+    let b1 = b"# A\n\n## Part\n\nSee [[B#Part]].\n";
+    let index0 = b"[[A]]\n";
+    let index1 = b"[[B]]\n";
+    let connection = writer
+        .sync_vault(&[("A.md", a0), ("Index.md", index0)])
+        .await;
+    let trees = tempfile::tempdir().expect("a trees root");
+    let tree = trees.path().join(connection.to_string());
+    std::fs::create_dir_all(&tree).expect("the working tree");
+    std::fs::write(tree.join("A.md"), a0).expect("A.md is in the tree");
+    std::fs::write(tree.join("Index.md"), index0).expect("Index.md is in the tree");
+    let renamed = command(connection, &rename("A.md", &sha256(a0), "B.md"));
+    assert!(matches!(
+        writer.send(&renamed).await,
+        Handled::Queued { .. }
+    ));
+    assert_eq!(
+        writer.deliveries(connection).await.len(),
+        2,
+        "the rename and the rewrite of Index.md are delivered together"
+    );
+
+    let sync = SyncWriter::new(writer.recorder(), trees.path());
+    sync.deliver(connection).await.expect("the delivery runs");
+
+    assert!(!tree.join("A.md").exists(), "the file moved");
+    assert_eq!(
+        std::fs::read(tree.join("B.md")).expect("B.md"),
+        b1,
+        "the renamed note gets its own rewritten link"
+    );
+    assert_eq!(
+        std::fs::read(tree.join("Index.md")).expect("Index.md"),
+        index1,
+        "the linking note names the new path"
+    );
+
+    // The next pass finds the rename in the tree, and the watcher reports the rewrite back.
+    sync.deliver(connection).await.expect("the delivery runs");
+    writer.tree_change(connection, "Index.md", index1).await;
+    assert_eq!(
+        writer.outcome(&renamed).await,
+        Some(Outcome::Succeeded {
+            revision: Some(sha256(b1))
+        })
+    );
+    assert_eq!(writer.current(connection, "B.md").await, Some(sha256(b1)));
+    assert_eq!(
+        writer.current(connection, "Index.md").await,
+        Some(sha256(index1))
+    );
+
+    writer.cleanup().await;
+}
+
+#[tokio::test]
+async fn sync_writes_no_rewrite_when_the_rename_fails() {
+    let writer = Writer::new().await;
+    let a0 = b"# A\n";
+    let a_phone = b"# A\n\nChanged on the phone after the queue check.\n";
+    let index0 = b"[[A]]\n";
+    let connection = writer
+        .sync_vault(&[("A.md", a0), ("Index.md", index0)])
+        .await;
+    let trees = tempfile::tempdir().expect("a trees root");
+    let tree = trees.path().join(connection.to_string());
+    std::fs::create_dir_all(&tree).expect("the working tree");
+    std::fs::write(tree.join("Index.md"), index0).expect("Index.md is in the tree");
+    let renamed = command(connection, &rename("A.md", &sha256(a0), "B.md"));
+    assert!(matches!(
+        writer.send(&renamed).await,
+        Handled::Queued { .. }
+    ));
+    // The Headless client changes A.md after the queue check.
+    std::fs::write(tree.join("A.md"), a_phone).expect("the client writes A.md");
+
+    SyncWriter::new(writer.recorder(), trees.path())
+        .deliver(connection)
+        .await
+        .expect("the delivery runs");
+
+    assert_eq!(
+        std::fs::read(tree.join("Index.md")).expect("Index.md"),
+        index0,
+        "no link names B.md while A.md did not move"
+    );
+    let outcome = writer.outcome(&renamed).await;
+    assert!(
+        matches!(&outcome, Some(Outcome::Failed { code, .. }) if code == CONFLICT),
+        "the rename fails with a conflict: {outcome:?}"
     );
 
     writer.cleanup().await;
