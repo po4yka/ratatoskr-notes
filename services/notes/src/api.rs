@@ -690,14 +690,35 @@ const DEVICE_KIND_HEADER: &str = "x-ratatoskr-device-kind";
 /// `browser` (OBS-024: the owner's session uploads the content of a write).
 pub(super) const SESSION_KIND_HEADER: &str = "x-ratatoskr-session-kind";
 
+/// The session kinds that Platform mints (its `SessionKind`). `device` names a paired device, and
+/// each other kind is a session of the owner.
+const SESSION_KINDS: [&str; 6] = [
+    "browser",
+    "device",
+    "telegram_mini_app",
+    "service",
+    "api_token",
+    "site_owner",
+];
+
+/// Whether the request has no session kind claim, or one that names a kind of [`SESSION_KINDS`].
+/// The guard of the session claims answers `401` to any other kind.
+fn session_kind_is_known(headers: &HeaderMap) -> bool {
+    headers.get(SESSION_KIND_HEADER).is_none_or(|value| {
+        value
+            .to_str()
+            .is_ok_and(|kind| SESSION_KINDS.contains(&kind))
+    })
+}
+
 /// Whether the request comes from a session of the owner and not from a paired device: Edge minted
-/// a session kind and no device id.
+/// a session kind of [`SESSION_KINDS`] other than `device`, and no device id.
 fn is_session(headers: &HeaderMap) -> bool {
     headers.get(DEVICE_ID_HEADER).is_none()
         && headers
             .get(SESSION_KIND_HEADER)
             .and_then(|value| value.to_str().ok())
-            .is_some_and(|kind| !kind.is_empty() && kind != "device")
+            .is_some_and(|kind| kind != "device" && SESSION_KINDS.contains(&kind))
 }
 
 /// The device of a request on a device route, from the claims that Edge mints.

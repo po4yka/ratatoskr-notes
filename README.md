@@ -195,8 +195,10 @@ delivered again. The consumer keeps running. When the consumer ends, for any rea
 
 **Content.** A command never carries file bytes. The owner's session uploads the content first,
 through the upload routes of the connection (see Device channels), and the command names the
-notes-owned `BlobRef`. Edge names the session in `x-ratatoskr-session-kind` (any kind except
-`device`) and sends no device id. A session upload registers the bytes for the connection and is no
+notes-owned `BlobRef`. Edge names the session in `x-ratatoskr-session-kind` (a kind that Platform
+mints other than `device`: `browser`, `telegram_mini_app`, `service`, `api_token` or `site_owner`)
+and sends no device id. Any other kind answers `401` `notes.request.unauthenticated` on every
+route. A session upload registers the bytes for the connection and is no
 revision. A session of another owner gets `404` `notes.connection.not_found`. A change batch or a
 manifest from a session answers `409` `notes.channel_mismatch`. A site owner session (session kind
 `site_owner`, SITE-027) uploads the content of an edit from a site in the same way. Its claim must

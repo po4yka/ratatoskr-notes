@@ -2,14 +2,14 @@
 //! `site_owner` only to the blob routes and the conflict read, and notes does not rely on that
 //! alone: a guard on the domain router serves the claim on the routes of [`SITE_OWNER_ROUTES`],
 //! answers `notes.channel_mismatch` on [`DEVICE_CHANNEL_ROUTES`], and answers `401` on every
-//! other route.
+//! other route. The guard also answers `401` to a session kind that Platform does not mint.
 
 use axum::extract::{MatchedPath, Request};
 use axum::http::Method;
 use axum::middleware::Next;
 use axum::response::{IntoResponse as _, Response};
 
-use super::{ApiFault, SESSION_KIND_HEADER};
+use super::{ApiFault, SESSION_KIND_HEADER, session_kind_is_known};
 
 /// The session kind of a site owner session.
 pub(super) const SITE_OWNER_KIND: &str = "site_owner";
@@ -51,9 +51,12 @@ const SITE_OWNER_ROUTES: [(Method, &str); 5] = [
 const DEVICE_CHANNEL_ROUTES: [(Method, &str); 2] =
     [(Method::POST, CHANGES), (Method::POST, MANIFEST)];
 
-/// Serve a request with a site owner claim only on [`SITE_OWNER_ROUTES`]. Every other request
-/// passes unchanged.
+/// Refuse a session kind that Platform does not mint, and serve a request with a site owner claim
+/// only on [`SITE_OWNER_ROUTES`]. Every other request passes unchanged.
 pub(super) async fn guard(request: Request, next: Next) -> Response {
+    if !session_kind_is_known(request.headers()) {
+        return ApiFault::Unauthenticated.into_response();
+    }
     let site_owner = request
         .headers()
         .get(SESSION_KIND_HEADER)
