@@ -24,6 +24,7 @@ use queue::Locked;
 use report::{ReportRow, Step};
 use request::Request;
 
+pub(crate) use conflict::MAX_SIDE_BYTES;
 pub use consumer::{COMMAND_STREAM, DurableError, WRITE_DURABLE, WRITE_FILTER, WriteConsumer};
 
 /// What [`Writes::handle`] did with one command.

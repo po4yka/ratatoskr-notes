@@ -2,8 +2,9 @@
 //!
 //! The answer names the three sides and the merge proposal by hash, as
 //! `notes.conflict.raised.v1` does, and carries the text of each side and of the proposal of a
-//! Markdown or plain-text file, so that a client can show them. The bus never carries this text;
-//! only this route of the owner does.
+//! Markdown or plain-text file, so that a client can show them. A text larger than the cap of a
+//! merge (1 MiB) is not read; `texts_over_limit` names it. The bus never carries this text; only
+//! this route of the owner does.
 
 use axum::Json;
 use axum::extract::rejection::PathRejection;
@@ -14,6 +15,7 @@ use uuid::Uuid;
 
 use super::{ApiFault, ApiState, owner};
 use crate::systemd::SystemdBus;
+use crate::writes::MAX_SIDE_BYTES;
 
 /// The media types whose sides the answer carries as text.
 const TEXT_MEDIA_TYPES: [&str; 2] = ["text/markdown", "text/plain"];
@@ -37,6 +39,7 @@ pub(super) async fn read_conflict<B: SystemdBus>(
         })?
         .ok_or(ApiFault::ConflictNotFound)?;
     let mut texts = Map::new();
+    let mut over_limit = Vec::new();
     if TEXT_MEDIA_TYPES.contains(&conflict.media_type.as_str()) {
         for (side, hash) in [
             ("base", &conflict.base_hash),
@@ -44,8 +47,12 @@ pub(super) async fn read_conflict<B: SystemdBus>(
             ("writer", &conflict.writer_hash),
             ("merged", &conflict.merged_hash),
         ] {
-            if let Some(text) = text_of(&state, hash.as_deref()).await {
-                texts.insert(side.to_owned(), Value::String(text));
+            match text_of(&state, hash.as_deref()).await {
+                Text::Read(text) => {
+                    texts.insert(side.to_owned(), Value::String(text));
+                }
+                Text::OverLimit => over_limit.push(Value::from(side)),
+                Text::Absent => {}
             }
         }
     }
@@ -58,6 +65,7 @@ pub(super) async fn read_conflict<B: SystemdBus>(
         "media_type": conflict.media_type,
         "state": conflict.state,
         "texts": texts,
+        "texts_over_limit": over_limit,
     });
     if let Value::Object(members) = &mut answer {
         for (name, hash) in [
@@ -81,13 +89,31 @@ pub(super) async fn read_conflict<B: SystemdBus>(
     Ok(Json(answer))
 }
 
-/// The UTF-8 text of the blob `hash` when the blob store holds it and it is not larger than the
-/// size limit of the service.
-async fn text_of<B: SystemdBus>(state: &ApiState<B>, hash: Option<&str>) -> Option<String> {
-    let blob = state.blobs.path_of(hash?)?;
-    let metadata = tokio::fs::metadata(&blob).await.ok()?;
-    if metadata.len() > state.max_file_bytes {
-        return None;
+/// The text of one side of a conflict.
+#[derive(Debug)]
+enum Text {
+    /// The UTF-8 text of the side.
+    Read(String),
+    /// The side is larger than [`MAX_SIDE_BYTES`]; it is not read.
+    OverLimit,
+    /// The side does not exist, notes does not hold it, or it is not UTF-8.
+    Absent,
+}
+
+/// The text of the blob `hash`. The length comes from the file system first, so a blob larger
+/// than [`MAX_SIDE_BYTES`], the cap of a merge, is never read into memory.
+async fn text_of<B: SystemdBus>(state: &ApiState<B>, hash: Option<&str>) -> Text {
+    let Some(blob) = hash.and_then(|hash| state.blobs.path_of(hash)) else {
+        return Text::Absent;
+    };
+    let Ok(metadata) = tokio::fs::metadata(&blob).await else {
+        return Text::Absent;
+    };
+    if metadata.len() > MAX_SIDE_BYTES {
+        return Text::OverLimit;
     }
-    String::from_utf8(tokio::fs::read(&blob).await.ok()?).ok()
+    match tokio::fs::read(&blob).await.map(String::from_utf8) {
+        Ok(Ok(text)) => Text::Read(text),
+        _ => Text::Absent,
+    }
 }

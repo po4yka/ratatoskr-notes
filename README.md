@@ -267,7 +267,9 @@ the origin of the resolution, the connection, the path and the revision after it
 `conflict_id`, `operation_id`, `connection_id`, `path`, `origin`, `media_type`, `state` (`open` or
 `resolved`), `base_hash`, `current_hash`, `writer_hash`, `merge_proposal`, and, for Markdown and
 plain text, `texts` with the text of each side (`base`, `current`, `writer`, `merged`) that notes
-holds. Any other id answers `404` `notes.conflict.not_found`.
+holds. A side larger than 1 MiB, the cap of a merge, is not read: `texts_over_limit` names it. A
+base or current side that is a revision of the file stays readable at
+`GET .../files/{path}?revision=<hash>`. Any other id answers `404` `notes.conflict.not_found`.
 
 ## Template units
 

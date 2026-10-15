@@ -39,7 +39,7 @@ const MERGEABLE: [&str; 2] = ["text/markdown", "text/plain"];
 /// 1 MiB and 20 000 lines per side peak at about 11 MiB above the process baseline and take about
 /// 8 ms; 4 MiB and 100 000 lines at about 50 MiB; 16 MiB and 600 000 lines at about 300 MiB, which a
 /// service of the 512 MiB class cannot afford. A Markdown note is rarely larger than 1 MiB.
-pub(super) const MAX_SIDE_BYTES: u64 = 1024 * 1024;
+pub(crate) const MAX_SIDE_BYTES: u64 = 1024 * 1024;
 
 /// The most lines of a side of a merge. The cost of the line diff grows with the lines more than
 /// with the bytes, so a side of short lines also needs a bound: 20 000 lines fit the measurement
