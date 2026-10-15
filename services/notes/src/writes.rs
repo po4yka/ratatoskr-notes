@@ -65,8 +65,13 @@ pub struct Delivery {
     pub target_path: Option<String>,
     /// The revision that the write is based on.
     pub base_hash: Option<String>,
-    /// The SHA-256 of the content that the write puts at the path.
+    /// The SHA-256 of the content that the write puts at the path, or of the JSON value of a
+    /// `set_property`.
     pub content_hash: Option<String>,
+    /// The frontmatter property of a `set_property`.
+    pub property_key: Option<String>,
+    /// `set` or `remove` for a `set_property`.
+    pub property_change: Option<String>,
 }
 
 /// Why a channel did not apply a delivered write.
@@ -425,6 +430,8 @@ impl Writes {
                 target_path: row.target_path,
                 base_hash: row.base_hash,
                 content_hash: row.content_hash,
+                property_key: row.property_key,
+                property_change: row.property_change,
             })
             .collect())
     }

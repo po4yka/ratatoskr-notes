@@ -16,9 +16,11 @@
 //! - otherwise the file changed after the queue check: nothing is written, and the write fails
 //!   with a conflict whose current side is the bytes of the tree.
 //!
-//! A `set_property` needs a change of the frontmatter that notes does not compute on this channel
-//! yet; it fails with `notes.write.unsupported`. Paths are not logged: a file name is the owner's
-//! content.
+//! A `set_property` on a file that has its base: notes changes the one frontmatter key itself
+//! (`property::change`, every other byte stays), stores the new bytes, writes them atomically, and
+//! acknowledges the write with their hash at once, because the write named no file hash for the
+//! echo to match. A file that is not UTF-8 or whose frontmatter has no end fails with
+//! `notes.write.unsupported`. Paths are not logged: a file name is the owner's content.
 //!
 //! The tree belongs to the user of `ob`, who can put a symbolic link anywhere in it. Every file
 //! operation therefore runs relative to a directory descriptor that was opened from the root of the
@@ -274,8 +276,62 @@ fn apply_blocking(
             rustix::fs::renameat(parent.as_fd(), name, target_parent.as_fd(), target_name)?;
             Ok(Step::Applied)
         }
+        "set_property" => {
+            let (Some(parent), Some(file)) = (parent, opened) else {
+                return Ok(Step::Mismatch(None));
+            };
+            if current != base {
+                return mismatch(blobs, Some(file));
+            }
+            set_property(blobs, parent.as_fd(), name, file, delivery)
+        }
         _ => Ok(Step::Unsupported),
     }
+}
+
+/// Change the frontmatter property of `delivery` in `file`, the open file `name` of `folder`,
+/// which has the base of the write.
+fn set_property(
+    blobs: &BlobStore,
+    folder: BorrowedFd<'_>,
+    name: &OsStr,
+    mut file: File,
+    delivery: &Delivery,
+) -> std::io::Result<Step> {
+    let Some(key) = delivery.property_key.as_deref() else {
+        return Ok(Step::Unsupported);
+    };
+    let value = match delivery.property_change.as_deref() {
+        Some("set") => {
+            let Some(source) = delivery
+                .content_hash
+                .as_deref()
+                .and_then(|digest| blobs.path_of(digest))
+            else {
+                return Ok(Step::Unsupported);
+            };
+            let Ok(value) = serde_json::from_slice(&std::fs::read(source)?) else {
+                return Ok(Step::Unsupported);
+            };
+            Some(value)
+        }
+        Some("remove") => None,
+        _ => return Ok(Step::Unsupported),
+    };
+    file.rewind()?;
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes)?;
+    let Some(changed) = crate::property::change(&bytes, key, value.as_ref()) else {
+        return Ok(Step::Unsupported);
+    };
+    let digest = format!("{:x}", Sha256::digest(&changed));
+    if changed != bytes {
+        let part = blobs.create_part()?;
+        std::fs::write(&part, &changed)?;
+        blobs.seal_part(&part, &digest)?;
+        write_at(folder, name, &changed)?;
+    }
+    Ok(Step::Acknowledge(Some(digest)))
 }
 
 /// The tree has other bytes than the base, in the open file `opened` (none: no file): keep them in

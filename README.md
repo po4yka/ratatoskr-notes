@@ -238,8 +238,12 @@ tree go to the blob store, and the write fails with a conflict whose current sid
 Every file operation runs relative to a folder that was opened from the root of the tree one name
 at a time without following a link; a symbolic link (or a file where a folder must be) anywhere in
 the path fails the write with `notes.write.unsafe_path`, so no write, delete, rename or read leaves
-the tree. A `set_property` fails with `notes.write.unsupported` on this channel, because notes does not change
-a frontmatter itself yet. The service must be able to write the working tree on the host, which the
+the tree. A `set_property` on a file with its base changes the one frontmatter key in notes itself: the
+value is written as compact JSON, which is valid YAML (`status: "done"`), a missing key is added at
+the end of the frontmatter, a file without frontmatter gets one, and every other byte stays. Notes
+stores the new bytes, writes them atomically and acknowledges the write with their hash at once.
+A file that is not UTF-8, or whose frontmatter has no end, fails with `notes.write.unsupported`.
+The service must be able to write the working tree on the host, which the
 read-only group access of owner decision B does not give: the deploy role must change that before
 write mode is turned on for a `sync` connection.
 

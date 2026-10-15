@@ -22,6 +22,7 @@ mod login;
 pub mod manifest;
 pub mod operation;
 pub mod outbox;
+mod property;
 pub mod secrets;
 mod supervisor;
 pub mod sync_write;
