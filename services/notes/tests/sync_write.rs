@@ -346,3 +346,64 @@ async fn tree_writes_are_group_writable() {
 
     writer.cleanup().await;
 }
+
+#[tokio::test]
+async fn write_mode_off_fails_a_sync_write_that_did_not_land() {
+    let writer = Writer::new().await;
+    let plan: &[u8] = b"# Plan\n\nIn the vault.\n";
+    let note: &[u8] = b"# Note\n\nIn the vault.\n";
+    let mine: &[u8] = b"# Edit\n\nWritten through Ratatoskr.\n";
+    let connection = writer
+        .sync_vault(&[("Plan.md", plan), ("Note.md", note)])
+        .await;
+    let trees = tempfile::tempdir().expect("a trees root");
+    let tree = trees.path().join(connection.to_string());
+    std::fs::create_dir_all(&tree).expect("the working tree");
+    std::fs::write(tree.join("Plan.md"), plan).expect("the file is in the tree");
+    std::fs::write(tree.join("Note.md"), note).expect("the file is in the tree");
+    writer.keep_for_sync(connection, mine).await;
+    let mine_ref = blob_ref(mine, "text/markdown");
+    let sync = SyncWriter::new(writer.recorder(), trees.path());
+    // The write of Note.md lands in the tree; the write of Plan.md is delivered after that pass.
+    let landed = command(connection, &update("Note.md", &sha256(note), &mine_ref));
+    assert!(matches!(writer.send(&landed).await, Handled::Queued { .. }));
+    sync.deliver(connection).await.expect("the delivery runs");
+    let waiting = command(connection, &update("Plan.md", &sha256(plan), &mine_ref));
+    assert!(matches!(
+        writer.send(&waiting).await,
+        Handled::Queued { .. }
+    ));
+
+    let (operation_id, answer) = writer
+        .put_write_mode(crate::support::channel::OWNER, connection, "off")
+        .await;
+    assert_eq!(
+        answer.status,
+        axum::http::StatusCode::ACCEPTED,
+        "{:?}",
+        answer.body
+    );
+    assert_eq!(writer.terminal(operation_id).await["status"], "succeeded");
+    sync.deliver(connection).await.expect("the delivery runs");
+
+    assert_eq!(
+        writer.outcome(&waiting).await,
+        Some(Outcome::Failed {
+            code: "notes.write.disabled".to_owned(),
+            conflict_id: None,
+        }),
+        "a sync write that did not land is not delivered yet, so off fails it"
+    );
+    assert_eq!(
+        std::fs::read(tree.join("Plan.md")).expect("the file"),
+        plan,
+        "the tree does not get the failed write"
+    );
+    assert_eq!(
+        writer.outcome(&landed).await,
+        Some(Outcome::Pending),
+        "a write that landed finishes with its echo"
+    );
+
+    writer.cleanup().await;
+}
