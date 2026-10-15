@@ -307,6 +307,11 @@ create table notes.writes (
     error_code     text,
     -- The conflict that a write which failed with `notes.write.conflict` raised.
     conflict_id    uuid,
+    -- The write group of a `rename` or a `move` and the link rewrites it needs (OBS-024 spec
+    -- notes-link-rewrite): the `write_id` of the rename, on the rename and on each rewrite, an
+    -- `update` of a linking note. Null for a write outside a group. A group is delivered only when
+    -- it is the head of every queue it touches, and it ends as one operation.
+    group_id       uuid,
     created_at     timestamptz not null,
     updated_at     timestamptz not null,
 
@@ -345,6 +350,9 @@ comment on table notes.writes is
 
 create index writes_open_idx on notes.writes (connection_id, path_key, position)
     where state in ('queued', 'delivering');
+
+create index writes_group_idx on notes.writes (connection_id, group_id, position)
+    where group_id is not null;
 
 create index writes_open_target_idx on notes.writes (connection_id, target_path_key, position)
     where state in ('queued', 'delivering') and target_path_key is not null;
@@ -399,6 +407,9 @@ create table notes.conflicts (
     -- resolution marks its conflict announced, so a conflict resolved before its announcement
     -- gets no raised event.
     announced         boolean     not null,
+    -- Every file of a write group that was stale or not applied, sorted, when the conflict ends a
+    -- rename and its link rewrites; `path` is the first of them. Null for a conflict of one file.
+    stale_paths       text[],
     -- `open`, or `resolved` after a resolution that the channel acknowledged.
     state             text        not null,
     created_at        timestamptz not null,

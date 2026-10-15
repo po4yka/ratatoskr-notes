@@ -12,8 +12,10 @@
 #[cfg(feature = "test-support")]
 pub mod test_support;
 
+mod conflicts;
 mod connections;
 mod files;
+mod groups;
 mod outbox;
 mod reads;
 mod writes;
@@ -27,6 +29,7 @@ pub use crate::connections::{
     ConnectOperation, ConnectionRecord, CreateOutcome, NewConnection, NewSecret, OutboxEvent,
 };
 pub use crate::files::{FileRow, FileTransaction, LockedConnection, NewCollision, NewRevision};
+pub use crate::groups::NoteRow;
 pub use crate::outbox::PendingEvent;
 pub use crate::reads::{ConnectionStatus, FileSummary};
 pub use crate::writes::{ConflictRow, NewConflict, NewWrite, OpenConflict, WriteRow};

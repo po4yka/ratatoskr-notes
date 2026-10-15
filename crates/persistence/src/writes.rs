@@ -42,6 +42,8 @@ pub struct NewWrite<'a> {
     pub resolves: Option<(Uuid, &'a str)>,
     /// The property of a `set_property`, and `set` or `remove`.
     pub property: Option<(&'a str, &'a str)>,
+    /// The write group of a rename and its link rewrites: the `write_id` of the rename.
+    pub group_id: Option<Uuid>,
 }
 
 /// One recorded write.
@@ -94,6 +96,8 @@ pub struct WriteRow {
     /// The number of the delivery of the write in its connection: the cursor of the queue of a
     /// device. `None` until the write is delivering.
     pub delivery_sequence: Option<i64>,
+    /// The write group of a rename and its link rewrites: the `write_id` of the rename.
+    pub group_id: Option<Uuid>,
 }
 
 /// An open conflict of a connection, as a resolution reads it.
@@ -155,13 +159,16 @@ pub struct ConflictRow {
     pub has_overlapping_hunks: Option<bool>,
     /// `open` or `resolved`.
     pub state: String,
+    /// Every stale or unapplied file of the write group that the conflict ends, sorted.
+    pub stale_paths: Option<Vec<String>>,
 }
 
 /// The columns of a [`WriteRow`].
-const WRITE_COLUMNS: &str =
+pub(crate) const WRITE_COLUMNS: &str =
     "write_id, connection_id, operation_id, origin, kind, path, path_key, target_path,
      base_hash, content_hash, content_length, state, revision, error_code, conflict_id, resolves,
-     choice, target_path_key, property_key, property_change, position, delivery_sequence, landed";
+     choice, target_path_key, property_key, property_change, position, delivery_sequence, landed,
+     group_id";
 
 impl<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow> for WriteRow {
     fn from_row(row: &'r sqlx::postgres::PgRow) -> Result<Self, sqlx::Error> {
@@ -192,6 +199,7 @@ impl<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow> for WriteRow {
             position: row.try_get("position")?,
             landed: row.try_get("landed")?,
             delivery_sequence: row.try_get("delivery_sequence")?,
+            group_id: row.try_get("group_id")?,
         })
     }
 }
@@ -207,10 +215,10 @@ impl FileTransaction {
             "insert into notes.writes
                  (write_id, connection_id, operation_id, idempotency_key, request_digest, origin,
                   kind, path, path_key, target_path, base_hash, content_hash, content_length,
-                  resolves, choice, target_path_key, property_key, property_change, state,
-                  created_at, updated_at)
+                  resolves, choice, target_path_key, property_key, property_change, group_id,
+                  state, created_at, updated_at)
              values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17,
-                     $18, 'queued', now(), now())",
+                     $18, $19, 'queued', now(), now())",
         )
         .bind(write.write_id)
         .bind(self.connection_id)
@@ -234,6 +242,7 @@ impl FileTransaction {
         .bind(write.target_path_key)
         .bind(write.property.map(|(key, _)| key))
         .bind(write.property.map(|(_, change)| change))
+        .bind(write.group_id)
         .execute(&mut *self.transaction)
         .await
         .map_err(query_error)?;
@@ -674,7 +683,8 @@ impl Database {
 
     /// The delivering writes of `connection_id` after the delivery sequence `after`, at most
     /// `limit`, in the order of delivery: the queue that the device of a `plugin` or `cli`
-    /// connection reads.
+    /// connection reads. A link rewrite of a write group is not in it: the device applies the
+    /// rename, and Obsidian rewrites the links.
     ///
     /// # Errors
     ///
@@ -688,6 +698,7 @@ impl Database {
         sqlx::query_as(&format!(
             "select {WRITE_COLUMNS} from notes.writes
              where connection_id = $1 and state = 'delivering' and delivery_sequence > $2
+               and (group_id is null or group_id = write_id)
              order by delivery_sequence limit $3"
         ))
         .bind(connection_id)
@@ -718,121 +729,5 @@ impl Database {
         .await
         .map_err(query_error)?;
         Ok(row)
-    }
-
-    /// The conflict `conflict_id` of a connection of `owner_id`. A conflict of another owner reads
-    /// as absent.
-    ///
-    /// # Errors
-    ///
-    /// [`PersistenceError::Query`] when the statement fails.
-    pub async fn conflict_of_owner(
-        &self,
-        owner_id: Uuid,
-        conflict_id: Uuid,
-    ) -> Result<Option<ConflictRow>, PersistenceError> {
-        Ok(self
-            .conflict(conflict_id)
-            .await?
-            .filter(|(owner, _)| *owner == owner_id)
-            .map(|(_, conflict)| conflict))
-    }
-
-    /// The conflict `conflict_id` and the owner of its connection.
-    ///
-    /// # Errors
-    ///
-    /// [`PersistenceError::Query`] when the statement fails.
-    pub async fn conflict(
-        &self,
-        conflict_id: Uuid,
-    ) -> Result<Option<(Uuid, ConflictRow)>, PersistenceError> {
-        type Row = (
-            Uuid,
-            Uuid,
-            Uuid,
-            Uuid,
-            String,
-            String,
-            String,
-            Option<String>,
-            Option<String>,
-            Option<String>,
-            Option<String>,
-            Option<bool>,
-            String,
-        );
-        let row: Option<Row> = sqlx::query_as(
-            "select n.owner_id, c.conflict_id, c.connection_id, c.operation_id, c.path, c.origin,
-                    c.media_type, c.base_hash, c.current_hash, c.writer_hash, c.merged_hash,
-                    c.has_overlapping_hunks, c.state
-             from notes.conflicts c
-             join notes.connections n on n.connection_id = c.connection_id
-             where c.conflict_id = $1",
-        )
-        .bind(conflict_id)
-        .fetch_optional(self.pool())
-        .await
-        .map_err(query_error)?;
-        Ok(row.map(
-            |(
-                owner_id,
-                conflict_id,
-                connection_id,
-                operation_id,
-                path,
-                origin,
-                media_type,
-                base_hash,
-                current_hash,
-                writer_hash,
-                merged_hash,
-                has_overlapping_hunks,
-                state,
-            )| {
-                (
-                    owner_id,
-                    ConflictRow {
-                        conflict_id,
-                        connection_id,
-                        operation_id,
-                        path,
-                        origin,
-                        media_type,
-                        base_hash,
-                        current_hash,
-                        writer_hash,
-                        merged_hash,
-                        has_overlapping_hunks,
-                        state,
-                    },
-                )
-            },
-        ))
-    }
-
-    /// The open conflicts that are not announced, oldest first, at most `limit`, after the
-    /// conflict `after` (the ids are `UUIDv7`, in the order of their creation).
-    ///
-    /// # Errors
-    ///
-    /// [`PersistenceError::Query`] when the statement fails.
-    pub async fn unannounced_conflicts(
-        &self,
-        after: Option<Uuid>,
-        limit: i64,
-    ) -> Result<Vec<Uuid>, PersistenceError> {
-        sqlx::query_scalar(
-            "select conflict_id from notes.conflicts
-             where not announced and state = 'open'
-               and ($1::uuid is null or conflict_id > $1)
-             order by conflict_id
-             limit $2",
-        )
-        .bind(after)
-        .bind(limit)
-        .fetch_all(self.pool())
-        .await
-        .map_err(query_error)
     }
 }

@@ -218,6 +218,26 @@ acknowledgement of the channel makes the revision current and writes `notes.file
 refusal of the channel leaves the previous revision current; a base mismatch reported by the
 channel is a conflict.
 
+**Link rewrite.** A `rename` or a `move` rewrites the links that it changes, with the rules of
+Obsidian's "Automatically update internal links" (spec `notes-link-rewrite`). When notes accepts
+it, `ratatoskr_notes_index::rewrite_links` computes the new text of each note whose links change,
+from the current revisions: each link resolves before and after the rename to the list of files it
+can name, and a link whose list changed is written again for the file it named, as the name alone
+when that name is unique, else as the path from the vault root. This also writes again a link to
+another file whose name the move made ambiguous. Aliases, headings, block references, embeds,
+Markdown link texts, titles and angle brackets stay; a space in a Markdown link is `%20`; links in
+code, HTML comments and math do not change; links in the frontmatter are not rewritten. Notes does
+not read the vault setting `newLinkFormat`, and writes links as its default `shortest` does. Each
+linking note gets an `update` on its current revision, and the renamed note gets its new bytes on
+the rename itself. The rename and its rewrites are one write group: the group waits until each of
+its writes is the head of every queue it is in, then every base is checked; one stale base fails
+the whole group with one conflict whose `stale_paths` names every stale file, and nothing is
+delivered. Each write of a delivered group becomes current when the channel acknowledges it. The
+operation ends with the last of them: `succeeded` with one result per file, or, when the channel
+applied only a part, `failed` with `notes.write.partially_applied` and one conflict that names every
+file that was not applied.
+The golden fixtures recorded with the real Obsidian app are the oracle (see DEVELOPMENT.md).
+
 **Acknowledgement and echo.** On the `sync` channel, a change of the working tree with the path and
 the hash of the delivered write at the head of its queue is the echo of that write and its
 acknowledgement: the content hash of a `create`, an `update` or a resolution, or the removal of the
@@ -267,10 +287,16 @@ always comes after that read's `next_cursor`. Each operation has `operation_id`,
   local file must have; `null` for a `create`), `content` (the notes-owned `BlobRef` of the bytes
   to write, or of the JSON value of a `set_property`), `property_key`, `property_change` (`set` or
   `remove`) and `expected_sha256` (the hash of the file after the operation as written, when notes
-  knows it). An operation stays in the queue until its result arrives.
+  knows it). A `rename` or a `move` whose links notes rewrites also has `rewrites`: for each
+  linking note, `path`, `base_hash` and `expected_sha256`; the rewrites themselves are no
+  operations of the queue, because Obsidian rewrites the links when the device renames the file.
+  An operation stays in the queue until its result arrives.
 - `GET .../device-operations/{operation_id}/content` streams the bytes of `content`.
 - `POST .../device-operations/{operation_id}/result` takes `{"outcome": "applied", "sha256": "<hash
-  of the file at the path, or at the target of a rename>"}` (no hash after a `delete`),
+  of the file at the path, or at the target of a rename>"}` (no hash after a `delete`; a rename
+  with rewrites adds `"rewrites": [{"path": ..., "outcome": "applied", "sha256": ...} or
+  {"path": ..., "outcome": "base_mismatch", "local_sha256": ...}]`, and a linking note that the
+  list does not name counts as not applied),
   `{"outcome": "base_mismatch", "local_sha256": "<hash>"}`, or `{"outcome": "failed", "code":
   "<typed code>"}`, and answers `{"operation_id": ..., "state": "succeeded" | "failed" |
   "delivering"}`. An `applied` hash names bytes that the device uploaded to the connection first;
@@ -287,7 +313,8 @@ always comes after that read's `next_cursor`. Each operation has `operation_id`,
 | `running` | `awaiting_device` | The write is in the queue of the device of a `plugin` or `cli` connection, which applies it when it connects. |
 | `running` | `awaiting_obsidian` | The write of a `sync` connection waits for the working tree and Obsidian Sync. |
 | `succeeded` | | The channel acknowledged the write. The one result has the kind `notes.file`, the target `notes_file:<file id>`, and the `BlobRef` of the new revision (none after a delete). |
-| `failed` | | A refusal above, a refusal of the channel with its own code, or the non-retryable `notes.write.conflict` with the error extension `conflict_id`. |
+| `succeeded` | | A rename with link rewrites: one `notes.file` result for each file of its group. |
+| `failed` | | A refusal above, a refusal of the channel with its own code, or the non-retryable `notes.write.conflict` with the error extension `conflict_id`. A rename whose group the channel applied only in part fails with the non-retryable `notes.write.partially_applied` and `conflict_id`. |
 
 **Conflicts.** A conflict is a record with three sides by hash: the base that the writer saw,
 the current revision of the vault, and the writer's content (a side that does not exist is left
@@ -328,7 +355,8 @@ the origin of the resolution, the connection, the path and the revision after it
 
 `GET /v1/notes/conflicts/{conflict_id}` answers a conflict of a connection of the owner:
 `conflict_id`, `operation_id`, `connection_id`, `path`, `origin`, `media_type`, `state` (`open` or
-`resolved`), `base_hash`, `current_hash`, `writer_hash`, `merge_proposal`, and, for Markdown and
+`resolved`), `base_hash`, `current_hash`, `writer_hash`, `merge_proposal`, `stale_paths` (a conflict
+of a write group: every stale or unapplied file, sorted; `path` is the first), and, for Markdown and
 plain text, `texts` with the text of each side (`base`, `current`, `writer`, `merged`) that notes
 holds. A side larger than 1 MiB, the cap of a merge, is not read: `texts_over_limit` names it. A
 base or current side that is a revision of the file stays readable at

@@ -5,6 +5,7 @@
 
 mod conflict;
 mod consumer;
+mod group;
 mod merge;
 mod mode;
 mod queue;
@@ -72,6 +73,11 @@ pub struct Delivery {
     pub property_key: Option<String>,
     /// `set` or `remove` for a `set_property`.
     pub property_change: Option<String>,
+    /// The write group of a rename and its link rewrites: the `write_id` of the rename. A rewrite
+    /// is an `update` of a linking note.
+    pub group_id: Option<Uuid>,
+    /// Whether the sync writer landed the write in the working tree.
+    pub landed: bool,
 }
 
 /// Why a channel did not apply a delivered write.
@@ -126,12 +132,13 @@ impl From<RecordError> for WriteError {
 }
 
 /// The SHA-256 that the file at the path of `write` has after the vault applied it as written:
-/// the content of a `create`, an `update` or a resolution, and the base of a `rename` or a `move`.
+/// the content of a `create`, an `update` or a resolution, and of a `rename` or a `move` the new
+/// bytes of its own link rewrites, or else its base.
 /// `None` for a `delete` and a `set_property`, whose bytes notes does not compute.
 pub(crate) fn expected_hash(write: &ratatoskr_notes_persistence::WriteRow) -> Option<&str> {
     match write.kind.as_str() {
         "create" | "update" | "resolve_conflict" => write.content_hash.as_deref(),
-        "rename" | "move" => write.base_hash.as_deref(),
+        "rename" | "move" => write.content_hash.as_deref().or(write.base_hash.as_deref()),
         _ => None,
     }
 }
@@ -181,6 +188,35 @@ pub(crate) async fn echo(
     Ok(acknowledged.then_some(head.write_id))
 }
 
+/// The outcome of the rename `leader` whose write group is `group`: pending while a write of the
+/// group is open; failed when one failed, with `notes.write.partially_applied` when another
+/// succeeded; else succeeded with the file of the rename.
+fn group_outcome(
+    leader: &ratatoskr_notes_persistence::WriteRow,
+    group: &[ratatoskr_notes_persistence::WriteRow],
+) -> Outcome {
+    if group
+        .iter()
+        .any(|write| matches!(write.state.as_str(), "queued" | "delivering"))
+    {
+        return Outcome::Pending;
+    }
+    let Some(failed) = group.iter().find(|write| write.state == "failed") else {
+        return Outcome::Succeeded {
+            revision: leader.revision.clone(),
+        };
+    };
+    let code = if group.iter().any(|write| write.state == "succeeded") {
+        PARTIALLY_APPLIED.to_owned()
+    } else {
+        failed.error_code.clone().unwrap_or_default()
+    };
+    Outcome::Failed {
+        code,
+        conflict_id: failed.conflict_id,
+    }
+}
+
 /// How the channel ended a delivered write.
 #[derive(Debug, Clone, Copy)]
 enum End<'a> {
@@ -217,6 +253,9 @@ const CONFLICT_NOT_FOUND: &str = "notes.conflict.not_found";
 
 /// The code of a write that met a revision that its writer did not see.
 const CONFLICT: &str = "notes.write.conflict";
+
+/// The code of a rename whose link rewrites the channel applied only in part.
+const PARTIALLY_APPLIED: &str = "notes.write.partially_applied";
 
 /// The pending writes of every connection.
 #[derive(Debug, Clone)]
@@ -328,10 +367,18 @@ impl Writes {
             }
         }
         let write_id = Uuid::now_v7();
-        locked
-            .transaction
-            .insert_write(&request.new_write(write_id))
-            .await?;
+        // A rename rewrites the links that named the old path, as one write group (design D7).
+        let plan = group::plan(&self.recorder, locked.transaction, &request).await?;
+        if let Some((content_hash, content_length)) = &plan.own {
+            request.content_hash = Some(content_hash.clone());
+            request.content_length = Some(*content_length);
+        }
+        let mut write = request.new_write(write_id);
+        if !plan.members.is_empty() {
+            write.group_id = Some(write_id);
+        }
+        locked.transaction.insert_write(&write).await?;
+        group::insert_members(locked.transaction, &write, &plan).await?;
         locked.report(write_id, Step::Queued).await?;
         locked.advance(&request.path_key).await?;
         if let Some(target_key) = request.target_path_key.as_deref() {
@@ -435,6 +482,8 @@ impl Writes {
                 content_hash: row.content_hash,
                 property_key: row.property_key,
                 property_change: row.property_change,
+                group_id: row.group_id,
+                landed: row.landed,
             })
             .collect())
     }
@@ -499,8 +548,28 @@ impl Writes {
             connection_id,
             raised: Vec::new(),
         };
-        match end {
-            End::Acknowledged(revision) => {
+        match (end, write.group_id) {
+            // A write of a group ends alone; the operation of the rename ends with the group.
+            (End::Acknowledged(revision), Some(group_id)) => {
+                locked.record(&write, revision).await?;
+                locked
+                    .transaction
+                    .succeed_write(write.write_id, revision)
+                    .await?;
+                locked.settle_group(group_id).await?;
+            }
+            (End::Refused(refusal), Some(group_id)) => {
+                let code = match refusal {
+                    Refusal::BaseMismatch { .. } => CONFLICT,
+                    Refusal::Failed { code } => code.as_str(),
+                };
+                locked.transaction.fail_write(write.write_id, code).await?;
+                if write.write_id == group_id {
+                    locked.fail_unlanded_rewrites(group_id, code).await?;
+                }
+                locked.settle_group(group_id).await?;
+            }
+            (End::Acknowledged(revision), None) => {
                 let revision = if write.kind == "delete" {
                     None
                 } else {
@@ -510,15 +579,21 @@ impl Writes {
                 locked.succeed(&write, revision).await?;
                 locked.resolved(&write, revision).await?;
             }
-            End::Refused(Refusal::BaseMismatch { local_hash }) => {
+            (End::Refused(Refusal::BaseMismatch { local_hash }), None) => {
                 locked.conflict(&write, local_hash.as_deref()).await?;
             }
-            End::Refused(Refusal::Failed { code }) => {
+            (End::Refused(Refusal::Failed { code }), None) => {
                 locked.fail(&write, code).await?;
             }
         }
-        for key in queue::keys_of(&write) {
-            locked.advance(key).await?;
+        let ended = match write.group_id {
+            Some(group_id) => locked.transaction.group_writes(group_id).await?,
+            None => vec![write],
+        };
+        for ended in &ended {
+            for key in queue::keys_of(ended) {
+                locked.advance(key).await?;
+            }
         }
         let raised = std::mem::take(&mut locked.raised);
         transaction.commit().await?;
@@ -595,6 +670,14 @@ impl Writes {
         else {
             return Ok(None);
         };
+        if let Some(group_id) = write.group_id {
+            let group = self
+                .recorder
+                .database()
+                .group_writes(write.connection_id, group_id)
+                .await?;
+            return Ok(Some(group_outcome(&write, &group)));
+        }
         Ok(Some(match write.state.as_str() {
             "succeeded" => Outcome::Succeeded {
                 revision: write.revision,

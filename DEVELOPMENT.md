@@ -123,6 +123,36 @@ Result on 2026-10-15, macOS on APFS:
 
 The full suite also runs in a `rust:1.97` Linux container before each push.
 
+## The link-rewrite fixtures
+
+`services/notes/tests/fixtures/link-rewrite/<case>/` holds the oracle of the link rewrite (OBS-024
+tasks 8.1 to 8.3): `case.json` (the rename, the setting `newLinkFormat` and the hard cases the
+fixture covers) and `before/` are written by hand; `after/`, `recording.json` (the Obsidian version
+and settings) and `SHA256SUMS` come only from the recording script.
+`services/notes/tests/link_rewrite_golden.rs` replays each fixture against `rewrite_links` and fails
+on the first file that differs, and also when a file does not match `SHA256SUMS`.
+
+To record the fixtures again, for a new fixture or a new Obsidian version, on a Mac with the
+Obsidian app:
+
+```bash
+OBSIDIAN_ASAR=/path/to/obsidian-<version>.asar tools/record-link-fixtures.sh [case ...]
+```
+
+The script opens Obsidian with an isolated profile (`--user-data-dir`, by default under
+`$TMPDIR`) whose only vault is an empty recording vault in a temporary folder, with updates off. It
+never opens another vault or the default profile. The plugin `tools/link-fixtures/main.js` creates
+each `before/` vault through the vault API, renames the file with `app.fileManager.renameFile` (the
+call behind `obsidian move` and `obsidian rename`), and writes `after/`; the script then writes
+`SHA256SUMS`. On the first run in a new profile, Obsidian asks whether to trust the author of the
+vault: trust it, and the profile keeps the answer for `RECORD_VAULT_ID`. The app package
+`obsidian-<version>.asar` is the one the app downloads into its own profile; copy that one file,
+never the profile. Run the script twice: the two checksum lists must be equal. A diff of `after/`
+in review is a change of Obsidian's rules.
+
+The fixtures of 2026-10-15 were recorded with Obsidian 1.14.4 (installer 1.8.10, so without the
+Obsidian CLI, which needs installer 1.12.7), and two runs gave 14 equal checksum lists.
+
 ## Running the service
 
 ```bash

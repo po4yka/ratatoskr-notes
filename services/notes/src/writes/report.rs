@@ -61,6 +61,8 @@ pub(super) enum Step<'a> {
     Awaiting(&'a str),
     /// The channel acknowledged the write.
     Succeeded(Option<FileResult<'a>>),
+    /// The channel acknowledged every write of the group of a rename: one result per file.
+    SucceededGroup(&'a [FileResult<'a>]),
     /// The write failed with the code, and with the conflict that it raised.
     Failed(&'a str, Option<Uuid>),
 }
@@ -71,6 +73,11 @@ pub(super) fn failure(code: &str) -> (&'static str, bool) {
     match code {
         "notes.write.conflict" => (
             "The file changed after the writer read it. Resolve the conflict.",
+            false,
+        ),
+        "notes.write.partially_applied" => (
+            "The vault applied only a part of the rename and its link updates. Resolve the \
+             conflict.",
             false,
         ),
         "notes.write.disabled" => ("Write mode is off for this connection.", false),
@@ -141,22 +148,8 @@ fn payload(operation_id: Uuid, step: Step<'_>) -> Result<OperationReported, Enve
     match step {
         Step::Queued => payload.stage = Some(stage("queued")?),
         Step::Awaiting(wait) => payload.stage = Some(stage(wait)?),
-        Step::Succeeded(file) => {
-            payload.status = OperationStatus::Succeeded;
-            if let Some(file) = file {
-                payload.results.push(result(file)?);
-                if file.transformed {
-                    let (code, message) = TRANSFORMED;
-                    payload.warnings.push(WarningEnvelope {
-                        code: ErrorCode::parse(code).map_err(|_| EnvelopeBuildError::STAGE)?,
-                        message: SafeMessage::parse(message)
-                            .map_err(|_| EnvelopeBuildError::STAGE)?,
-                        field_path: None,
-                        extensions: Extensions::new(),
-                    });
-                }
-            }
-        }
+        Step::Succeeded(file) => succeeded(&mut payload, file.as_slice())?,
+        Step::SucceededGroup(files) => succeeded(&mut payload, files)?,
         Step::Failed(code, conflict_id) => {
             let (message, retryable) = failure(code);
             payload.status = OperationStatus::Failed;
@@ -176,6 +169,28 @@ fn payload(operation_id: Uuid, step: Step<'_>) -> Result<OperationReported, Enve
     }
     payload.validate().map_err(|_| EnvelopeBuildError::STAGE)?;
     Ok(payload)
+}
+
+/// Make `payload` `succeeded` with one result for each of `files`, and the warning
+/// `notes.write.transformed` once when the vault changed the bytes of any of them.
+fn succeeded(
+    payload: &mut OperationReported,
+    files: &[FileResult<'_>],
+) -> Result<(), EnvelopeBuildError> {
+    payload.status = OperationStatus::Succeeded;
+    for file in files {
+        payload.results.push(result(*file)?);
+    }
+    if files.iter().any(|file| file.transformed) {
+        let (code, message) = TRANSFORMED;
+        payload.warnings.push(WarningEnvelope {
+            code: ErrorCode::parse(code).map_err(|_| EnvelopeBuildError::STAGE)?,
+            message: SafeMessage::parse(message).map_err(|_| EnvelopeBuildError::STAGE)?,
+            field_path: None,
+            extensions: Extensions::new(),
+        });
+    }
+    Ok(())
 }
 
 fn stage(stage: &str) -> Result<OperationStage, EnvelopeBuildError> {

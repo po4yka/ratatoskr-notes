@@ -77,6 +77,10 @@ pub(super) async fn read_conflict<B: SystemdBus>(
                 members.insert(name.to_owned(), Value::String(hash));
             }
         }
+        // A conflict of a rename and its link rewrites names every stale or unapplied file.
+        if let Some(paths) = conflict.stale_paths {
+            members.insert("stale_paths".to_owned(), json!(paths));
+        }
         if let (Some(merged_hash), Some(overlapping)) =
             (conflict.merged_hash, conflict.has_overlapping_hunks)
         {

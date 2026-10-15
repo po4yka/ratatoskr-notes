@@ -71,6 +71,9 @@ impl RecordError {
 
     /// The write that a change acknowledged could not be ended.
     pub(crate) const WRITE: Self = Self("the write that the change acknowledged");
+
+    /// The new bytes of a link rewrite could not be stored.
+    pub(crate) const REWRITE: Self = Self("the bytes of a link rewrite");
 }
 
 impl From<ratatoskr_notes_persistence::PersistenceError> for RecordError {

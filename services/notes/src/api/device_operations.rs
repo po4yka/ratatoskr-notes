@@ -8,6 +8,12 @@
 //!   in the vault (the file, or the JSON value of a `set_property`);
 //! - `POST .../device-operations/{operation_id}/result` reports what the device did.
 //!
+//! A rename whose links notes rewrites is one operation of the queue with the list `rewrites`: the
+//! path, the base hash and the expected hash of each linking note (spec `notes-link-rewrite`). The
+//! device renames through Obsidian, which rewrites the links on the device, and reports the hash of
+//! each linking note in the list `rewrites` of its result: `applied` with `sha256`, or
+//! `base_mismatch` with `local_sha256`. A note that the result does not name counts as not applied.
+//!
 //! Only the device that the connection registered, of the kind of its channel, reads or answers the
 //! queue. Any other device, also one of the owner, gets `404` `notes.connection.not_found`, so that
 //! no operation is disclosed. Paths are not logged: a file name is the owner's content.
@@ -45,10 +51,13 @@ pub(super) struct QueueQuery {
 #[serde(tag = "outcome", rename_all = "snake_case", deny_unknown_fields)]
 pub(super) enum DeviceResult {
     /// The device applied the operation; the file at the path (the target of a `rename` or a
-    /// `move`) has the SHA-256 `sha256` now. Absent after a `delete`.
+    /// `move`) has the SHA-256 `sha256` now. Absent after a `delete`. For a rename with link
+    /// rewrites, what the device did with each linking note.
     Applied {
         #[serde(default)]
         sha256: Option<String>,
+        #[serde(default)]
+        rewrites: Vec<RewriteResult>,
     },
     /// The local file did not have the base hash; nothing was applied.
     BaseMismatch {
@@ -57,6 +66,20 @@ pub(super) enum DeviceResult {
     },
     /// The device could not apply the operation, with a typed error code.
     Failed { code: String },
+}
+
+/// What the device did with one linking note of a rename.
+#[derive(Debug, serde::Deserialize)]
+#[serde(tag = "outcome", rename_all = "snake_case", deny_unknown_fields)]
+pub(super) enum RewriteResult {
+    /// The note at `path` has the SHA-256 `sha256` now.
+    Applied { path: String, sha256: String },
+    /// The note at `path` did not have the base hash.
+    BaseMismatch {
+        path: String,
+        #[serde(default)]
+        local_sha256: Option<String>,
+    },
 }
 
 /// `GET /v1/notes/connections/{id}/device-operations?after=<cursor>`: at most 256 delivered writes
@@ -90,8 +113,13 @@ pub(super) async fn list_operations<B: SystemdBus>(
         .last()
         .and_then(|write| write.delivery_sequence)
         .unwrap_or(after);
+    let mut operations = Vec::with_capacity(writes.len());
+    for write in &writes {
+        let rewrites = rewrites_of(&state, write).await?;
+        operations.push(operation_view(write, &rewrites));
+    }
     Ok(Json(json!({
-        "operations": writes.iter().map(operation_view).collect::<Vec<_>>(),
+        "operations": operations,
         "next_cursor": next.to_string(),
     })))
 }
@@ -148,9 +176,28 @@ pub(super) async fn post_result<B: SystemdBus>(
         tracing::error!(%error, %connection_id, "the result of a device could not be recorded");
         ApiFault::Unavailable
     };
+    let rewrites = rewrites_of(&state, &write).await?;
     if write.state == "delivering" {
         match result {
-            DeviceResult::Applied { sha256 } => {
+            DeviceResult::Applied {
+                sha256,
+                rewrites: results,
+            } => {
+                let ends = rewrite_ends(&rewrites, results);
+                for digest in ends.iter().filter_map(|(_, end)| match end {
+                    RewriteEnd::Applied(digest) => Some(digest),
+                    RewriteEnd::Refused(_) => None,
+                }) {
+                    if !writes
+                        .may_name(connection_id, digest)
+                        .await
+                        .map_err(unavailable)?
+                    {
+                        return Err(ApiFault::BytesMissing {
+                            missing: vec![digest.clone()],
+                        });
+                    }
+                }
                 let revision = if write.kind == "delete" {
                     None
                 } else {
@@ -171,15 +218,24 @@ pub(super) async fn post_result<B: SystemdBus>(
                     .acknowledge(connection_id, write.write_id, revision.as_deref())
                     .await
                     .map_err(unavailable)?;
+                for (member, end) in ends {
+                    match end {
+                        RewriteEnd::Applied(digest) => {
+                            writes
+                                .acknowledge(connection_id, member, Some(&digest))
+                                .await
+                        }
+                        RewriteEnd::Refused(refusal) => {
+                            writes.refuse(connection_id, member, refusal).await
+                        }
+                    }
+                    .map_err(unavailable)?;
+                }
             }
             DeviceResult::BaseMismatch { local_sha256 } => {
                 let local_hash = local_sha256.filter(|digest| is_sha256(digest));
-                writes
-                    .refuse(
-                        connection_id,
-                        write.write_id,
-                        Refusal::BaseMismatch { local_hash },
-                    )
+                let refusal = Refusal::BaseMismatch { local_hash };
+                refuse_all(&writes, connection_id, &write, &rewrites, &refusal)
                     .await
                     .map_err(unavailable)?;
             }
@@ -187,8 +243,8 @@ pub(super) async fn post_result<B: SystemdBus>(
                 if ratatoskr_error_contracts::ErrorCode::parse(&code).is_err() {
                     return Err(ApiFault::InvalidRequest);
                 }
-                writes
-                    .refuse(connection_id, write.write_id, Refusal::Failed { code })
+                let refusal = Refusal::Failed { code };
+                refuse_all(&writes, connection_id, &write, &rewrites, &refusal)
                     .await
                     .map_err(unavailable)?;
             }
@@ -264,10 +320,99 @@ fn is_sha256(digest: &str) -> bool {
             .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
 }
 
+/// How the device ended one linking note of a rename.
+#[derive(Debug)]
+enum RewriteEnd {
+    /// The note has these bytes now.
+    Applied(String),
+    /// The device did not apply the rewrite.
+    Refused(Refusal),
+}
+
+/// The link rewrites of the rename `write`, which the device applies with it: the other writes of
+/// its group. Empty for any other write.
+async fn rewrites_of<B: SystemdBus>(
+    state: &ApiState<B>,
+    write: &WriteRow,
+) -> Result<Vec<WriteRow>, ApiFault> {
+    let Some(group_id) = write
+        .group_id
+        .filter(|group_id| *group_id == write.write_id)
+    else {
+        return Ok(Vec::new());
+    };
+    let group = state
+        .database
+        .group_writes(write.connection_id, group_id)
+        .await
+        .map_err(|error| {
+            tracing::error!(%error, "the rewrites of a rename could not be read");
+            ApiFault::Unavailable
+        })?;
+    Ok(group
+        .into_iter()
+        .filter(|member| member.write_id != group_id)
+        .collect())
+}
+
+/// How the device ended each rewrite of `rewrites` that is still delivering, by its write: from
+/// `results`, and as a base mismatch when the result does not name its note.
+fn rewrite_ends(rewrites: &[WriteRow], results: Vec<RewriteResult>) -> Vec<(Uuid, RewriteEnd)> {
+    let mut by_path: std::collections::HashMap<String, RewriteEnd> = results
+        .into_iter()
+        .map(|result| match result {
+            RewriteResult::Applied { path, sha256 } => (path, RewriteEnd::Applied(sha256)),
+            RewriteResult::BaseMismatch { path, local_sha256 } => {
+                let local_hash = local_sha256.filter(|digest| is_sha256(digest));
+                (
+                    path,
+                    RewriteEnd::Refused(Refusal::BaseMismatch { local_hash }),
+                )
+            }
+        })
+        .collect();
+    rewrites
+        .iter()
+        .filter(|member| member.state == "delivering")
+        .map(|member| {
+            let end = by_path
+                .remove(&member.path)
+                .filter(|end| !matches!(end, RewriteEnd::Applied(digest) if !is_sha256(digest)))
+                .unwrap_or(RewriteEnd::Refused(Refusal::BaseMismatch {
+                    local_hash: None,
+                }));
+            (member.write_id, end)
+        })
+        .collect()
+}
+
+/// Refuse `write` and each of its `rewrites` that is still delivering with `refusal`: the device
+/// applied nothing of the group.
+async fn refuse_all(
+    writes: &Writes,
+    connection_id: Uuid,
+    write: &WriteRow,
+    rewrites: &[WriteRow],
+    refusal: &Refusal,
+) -> Result<(), crate::writes::WriteError> {
+    writes
+        .refuse(connection_id, write.write_id, refusal.clone())
+        .await?;
+    for member in rewrites
+        .iter()
+        .filter(|member| member.state == "delivering")
+    {
+        writes
+            .refuse(connection_id, member.write_id, refusal.clone())
+            .await?;
+    }
+    Ok(())
+}
+
 /// One operation of the queue, as the device reads it. A resolution is an `update` of the file of
 /// its conflict, or a `create` when that file was deleted: the device does not need to know the
-/// conflict.
-fn operation_view(write: &WriteRow) -> Value {
+/// conflict. A rename lists the link rewrites of its group.
+fn operation_view(write: &WriteRow, rewrites: &[WriteRow]) -> Value {
     let kind = match (write.kind.as_str(), &write.base_hash) {
         ("resolve_conflict", Some(_)) => "update",
         ("resolve_conflict", None) => "create",
@@ -298,5 +443,13 @@ fn operation_view(write: &WriteRow) -> Value {
         "property_key": write.property_key,
         "property_change": write.property_change,
         "expected_sha256": crate::writes::expected_hash(write),
+        "rewrites": rewrites
+            .iter()
+            .map(|member| json!({
+                "path": member.path,
+                "base_hash": member.base_hash,
+                "expected_sha256": crate::writes::expected_hash(member),
+            }))
+            .collect::<Vec<_>>(),
     })
 }
