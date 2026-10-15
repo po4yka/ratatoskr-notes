@@ -102,6 +102,23 @@ docker run --rm --network container:ratatoskr-notes-postgres -v "$PWD":/src -w /
   rust:1.97 cargo test --locked -p ratatoskr-notes --test secret_custody
 ```
 
+## The atomic write of a working tree
+
+A `sync` connection writes its working tree with `sync_write::write_atomically`: a temporary file
+`.ratatoskr-write-<id>.part` in the same folder, flushed to disk, then renamed over the file (OBS-024
+task 7.6). `services/notes/tests/sync_write.rs::reader_never_sees_partial_file` checks it: a reader
+thread hashes the file in a loop while the writer replaces it 1 000 times with 256 KiB of old and new
+bytes in turn, and every hash must be the old or the new one.
+
+Result on 2026-10-15, macOS on APFS:
+
+| Write | Torn reads | Time of the test |
+|---|---|---|
+| Direct `std::fs::write` (the fault mode of task 7.7) | 23 | under 1 s |
+| `write_atomically`, three runs | 0, 0, 0 | 9 to 10 s, most of it in the flush of each write |
+
+The full suite also runs in a `rust:1.97` Linux container before each push.
+
 ## Running the service
 
 ```bash
