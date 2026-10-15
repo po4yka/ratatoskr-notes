@@ -455,3 +455,48 @@ async fn oversized_texts_are_left_out() {
 
     writer.cleanup().await;
 }
+
+#[tokio::test]
+async fn conflict_resolved_before_its_announcement_is_not_announced() {
+    let writer = Writer::new().await;
+    let base: &[u8] = b"# Plan\n\nThe draft that the writer read.\n";
+    let phone: &[u8] = b"# Plan\n\nThe draft that the phone saved.\n";
+    let mine: &[u8] = b"# Plan\n\nThe draft that the writer saved.\n";
+    let connection = stale_update(
+        &writer,
+        "Plan.md",
+        "text/markdown",
+        [base, phone, mine],
+        "platform",
+    )
+    .await;
+    let conflict_id = last_conflict(&writer, connection).await;
+    // The state between the commit that records the conflict and its announcement.
+    sqlx::query("update notes.conflicts set announced = false, merged_hash = null, has_overlapping_hunks = null")
+        .execute(writer.channel.fixture.pool())
+        .await
+        .expect("the conflict is marked unannounced");
+    sqlx::query("delete from notes.outbox where event_type = $1")
+        .bind(RAISED)
+        .execute(writer.channel.fixture.pool())
+        .await
+        .expect("the raised event is removed");
+
+    // A client resolves it from the failed report, before the announcement.
+    let resolution = command(connection, &resolve(&conflict_id, "keep_current"));
+    writer.send(&resolution).await;
+    let announced = writer
+        .writes
+        .announce_pending()
+        .await
+        .expect("the pending conflicts are announced");
+
+    assert_eq!(announced, 0, "a resolved conflict is not announced");
+    assert!(
+        writer.events_of(connection, RAISED).await.is_empty(),
+        "no notes.conflict.raised.v1 after the resolution"
+    );
+    assert_eq!(writer.events_of(connection, RESOLVED).await.len(), 1);
+
+    writer.cleanup().await;
+}
