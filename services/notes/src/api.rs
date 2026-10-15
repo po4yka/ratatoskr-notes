@@ -686,7 +686,7 @@ const DEVICE_KIND_HEADER: &str = "x-ratatoskr-device-kind";
 
 /// The claim that names the kind of the session of a request without a device, for example
 /// `browser` (OBS-024: the owner's session uploads the content of a write).
-const SESSION_KIND_HEADER: &str = "x-ratatoskr-session-kind";
+pub(super) const SESSION_KIND_HEADER: &str = "x-ratatoskr-session-kind";
 
 /// Whether the request comes from a session of the owner and not from a paired device: Edge minted
 /// a session kind and no device id.

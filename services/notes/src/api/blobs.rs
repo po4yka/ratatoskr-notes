@@ -9,7 +9,9 @@
 //!
 //! The device of the connection uploads the bytes of its changes. The owner's session uploads the
 //! content of a write (OBS-024): an upload registers the bytes for the connection, and only a
-//! write that the channel acknowledges makes them a revision.
+//! write that the channel acknowledges makes them a revision. A site owner session uploads the
+//! content of an edit from a site (SITE-027): its claim names the site in `x-ratatoskr-origin`, and
+//! the upload only registers the bytes, as for the owner's session.
 
 use axum::Json;
 use axum::body::Bytes;
@@ -20,9 +22,10 @@ use ratatoskr_blob_transfer_contracts::{
     UploadChunkReceipt, UploadCompletionOutcome, UploadFinalizeRequest, UploadSessionOpened,
     UploadSessionRequest, UploadStatusResponse,
 };
+use ratatoskr_notes_contracts::WriteOrigin;
 use uuid::Uuid;
 
-use super::{ApiFault, ApiState, device_claim, is_session, owner};
+use super::{ApiFault, ApiState, SESSION_KIND_HEADER, device_claim, is_session, owner};
 use crate::channel::device_kind_of;
 use crate::systemd::SystemdBus;
 use crate::uploads::UploadRefusal;
@@ -31,9 +34,31 @@ use crate::uploads::UploadRefusal;
 pub(super) const MAX_CHUNK_BYTES: usize =
     ratatoskr_blob_transfer_contracts::CHUNK_SIZE_MAX_BYTES as usize;
 
-/// The connection exists for this owner, and the request comes from the owner's session or from
-/// the device of the connection, of the kind of its channel. A connection of another owner
-/// answers `404`; another device or kind answers `notes.channel_mismatch`.
+/// The session kind of a site owner session (SITE-027).
+const SITE_OWNER_KIND: &str = "site_owner";
+
+/// The claim that names the site of a site owner session, `site:<site id>`.
+const ORIGIN_HEADER: &str = "x-ratatoskr-origin";
+
+/// A site owner session names its site: Edge mints the origin `site:<site id>` for each of its
+/// requests, as `WriteOrigin` spells a site. A site owner claim without it is malformed and
+/// answers `401`. Another session kind needs no origin.
+fn check_site_origin(headers: &HeaderMap) -> Result<(), ApiFault> {
+    let claim = |name: &str| headers.get(name).and_then(|value| value.to_str().ok());
+    if claim(SESSION_KIND_HEADER) != Some(SITE_OWNER_KIND) {
+        return Ok(());
+    }
+    claim(ORIGIN_HEADER)
+        .and_then(|origin| WriteOrigin::parse(origin).ok())
+        .filter(|origin| origin.as_str().starts_with("site:"))
+        .map(|_| ())
+        .ok_or(ApiFault::Unauthenticated)
+}
+
+/// The connection exists for this owner, and the request comes from a session of the owner or from
+/// the device of the connection, of the kind of its channel. A site owner session must name its
+/// site. A connection of another owner answers `404`; another device or kind answers
+/// `notes.channel_mismatch`.
 async fn authorize<B: SystemdBus>(
     state: &ApiState<B>,
     headers: &HeaderMap,
@@ -41,6 +66,7 @@ async fn authorize<B: SystemdBus>(
 ) -> Result<(), ApiFault> {
     let owner_id = owner(headers)?;
     if is_session(headers) {
+        check_site_origin(headers)?;
         let connection = state
             .database
             .connection_of_owner(owner_id, connection_id)

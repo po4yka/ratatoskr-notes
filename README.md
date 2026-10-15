@@ -195,7 +195,10 @@ through the upload routes of the connection (see Device channels), and the comma
 notes-owned `BlobRef`. Edge names the session in `x-ratatoskr-session-kind` (any kind except
 `device`) and sends no device id. A session upload registers the bytes for the connection and is no
 revision. A session of another owner gets `404` `notes.connection.not_found`. A change batch or a
-manifest from a session answers `409` `notes.channel_mismatch`.
+manifest from a session answers `409` `notes.channel_mismatch`. A site owner session (session kind
+`site_owner`, SITE-027) uploads the content of an edit from a site in the same way. Its claim must
+name the site in `x-ratatoskr-origin: site:<site id>`, as the contract type `WriteOrigin` spells
+a site; without that origin the upload answers `401` `notes.request.unauthenticated`.
 
 **Checks when a write arrives.** In this order, each refusal fails the operation and changes
 nothing:
