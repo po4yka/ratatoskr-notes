@@ -73,7 +73,7 @@ type Pause = Pin<Box<dyn Future<Output = ()> + Send>>;
 /// A pause at one step of a connection, for example between the insert of a connection and the
 /// start of its login. For tests.
 #[derive(Clone)]
-struct TestHook(Arc<dyn Fn(Uuid) -> Pause + Send + Sync>);
+pub(crate) struct TestHook(pub(crate) Arc<dyn Fn(Uuid) -> Pause + Send + Sync>);
 
 impl fmt::Debug for TestHook {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -105,7 +105,7 @@ pub struct ApiState<B> {
     removals: Removals,
     before_login: Option<TestHook>,
     after_manifest: Option<TestHook>,
-    after_device_fail: Option<TestHook>,
+    after_terminal_state: Option<TestHook>,
     blobs: BlobStore,
     trees_root: PathBuf,
     max_file_bytes: u64,
@@ -127,7 +127,7 @@ impl<B> Clone for ApiState<B> {
             removals: self.removals.clone(),
             before_login: self.before_login.clone(),
             after_manifest: self.after_manifest.clone(),
-            after_device_fail: self.after_device_fail.clone(),
+            after_terminal_state: self.after_terminal_state.clone(),
             blobs: self.blobs.clone(),
             trees_root: self.trees_root.clone(),
             max_file_bytes: self.max_file_bytes,
@@ -158,7 +158,7 @@ impl<B: SystemdBus> ApiState<B> {
             removals: Removals::default(),
             before_login: None,
             after_manifest: None,
-            after_device_fail: None,
+            after_terminal_state: None,
             blobs,
             trees_root,
             max_file_bytes,
@@ -263,16 +263,26 @@ impl<B: SystemdBus> ApiState<B> {
         self
     }
 
-    /// Wait for `hook` after the end of the manifest bound failed a device connection. For tests:
-    /// a hook that never ends stands for a stop of the process at that step.
+    /// Wait for `hook` after a connection was failed, removed or its login expired, in the step
+    /// that ends its connect operation. For tests: a hook that never ends stands for a stop of the
+    /// process at that step.
     #[must_use]
-    pub fn with_after_device_fail<F, Fut>(mut self, hook: F) -> Self
+    pub fn with_after_terminal_state<F, Fut>(mut self, hook: F) -> Self
     where
         F: Fn(Uuid) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = ()> + Send + 'static,
     {
-        self.after_device_fail = Some(TestHook::of(hook));
+        let hook = TestHook::of(hook);
+        self.supervisor.set_after_terminal_state(hook.clone());
+        self.after_terminal_state = Some(hook);
         self
+    }
+
+    /// Run the hook of [`Self::with_after_terminal_state`] for `connection_id`, when there is one.
+    pub(crate) async fn after_terminal_state(&self, connection_id: Uuid) {
+        if let Some(hook) = &self.after_terminal_state {
+            (hook.0)(connection_id).await;
+        }
     }
 
     /// Wait for `hook` after a manifest of a device connection is applied and before the answer.
@@ -328,6 +338,7 @@ impl<B: SystemdBus> ApiState<B> {
             match self.database.fail_connection(connection_id).await {
                 Ok(_) => {
                     tracing::info!(%connection_id, "a login that a stop interrupted is failed");
+                    self.after_terminal_state(connection_id).await;
                 }
                 Err(error) => {
                     tracing::error!(%error, %connection_id, "an interrupted login could not be failed");
@@ -525,6 +536,7 @@ async fn remove_connection<B: SystemdBus>(
         })?;
     if removed {
         tracing::info!(%connection_id, channel = %connection.channel, "a connection was removed");
+        state.after_terminal_state(connection_id).await;
         // A connect whose login finished, or a device connect, waits for its first scan. The
         // removal ends its operation. A connect whose login runs reports its own end.
         let waits_for_scan = connection.channel != "sync" || connection.logged_in;

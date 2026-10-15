@@ -691,7 +691,7 @@ async fn failed_device_connect_has_its_report_at_once() {
     let channel = Channel::with(move |state| {
         state
             .with_manifest_deadline(SHORT_DEADLINE)
-            .with_after_device_fail(move |connection_id| {
+            .with_after_terminal_state(move |connection_id| {
                 let failed = failed.clone();
                 async move {
                     let _ = failed.send(connection_id);

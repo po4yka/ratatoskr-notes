@@ -376,6 +376,7 @@ async fn log_in<B: SystemdBus>(
         })?;
     if failed {
         tracing::info!(%connection_id, "a connection failed at its first login");
+        state.after_terminal_state(connection_id).await;
     }
     Err(fault)
 }

@@ -34,6 +34,7 @@ use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 use uuid::Uuid;
 
+use crate::api::TestHook;
 use crate::operation::{self, Completion, Phase, Report};
 use crate::systemd::{
     JOURNAL_UNREADABLE, JobResult, JournalLine, SYNC_LOG_NAMESPACE, SystemdBus, UnitName,
@@ -122,6 +123,8 @@ pub(crate) struct Supervisor<B> {
     pipeline: Pipeline,
     /// The stop of the pipeline of each connection whose sync unit this process started.
     pipelines: Arc<Mutex<HashMap<Uuid, CancellationToken>>>,
+    /// A pause after a login expired, for tests.
+    after_terminal_state: Option<TestHook>,
 }
 
 impl<B> Clone for Supervisor<B> {
@@ -135,6 +138,7 @@ impl<B> Clone for Supervisor<B> {
             stopping: self.stopping.clone(),
             pipeline: self.pipeline.clone(),
             pipelines: Arc::clone(&self.pipelines),
+            after_terminal_state: self.after_terminal_state.clone(),
         }
     }
 }
@@ -151,7 +155,13 @@ impl<B: SystemdBus> Supervisor<B> {
             stopping: CancellationToken::new(),
             pipeline,
             pipelines: Arc::new(Mutex::new(HashMap::new())),
+            after_terminal_state: None,
         }
+    }
+
+    /// Wait for `hook` after a login expired, before the rest of the step. For tests.
+    pub(crate) fn set_after_terminal_state(&mut self, hook: TestHook) {
+        self.after_terminal_state = Some(hook);
     }
 
     /// Use `pipeline` for the working trees of the units that start from now on.
@@ -373,6 +383,9 @@ impl<B: SystemdBus> Supervisor<B> {
             }
         }
         tracing::warn!(%connection_id, code = LOGIN_EXPIRED, "the Sync login of a connection expired; the owner must connect again");
+        if let Some(hook) = &self.after_terminal_state {
+            (hook.0)(connection_id).await;
+        }
         self.forget(connection_id);
         // A connect whose first scan did not end fails with the code of the expired login.
         if let Some(operation) = operation.filter(|operation| operation.state == "connecting")
