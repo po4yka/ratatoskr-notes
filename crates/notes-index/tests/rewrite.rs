@@ -44,3 +44,27 @@ fn a_nested_link_before_a_multibyte_character_does_not_panic() {
         "the rewrite ends, and the text stays valid"
     );
 }
+
+#[test]
+fn the_nested_link_is_rewritten_and_not_its_copy_in_code_a_comment_or_math() {
+    for (before, after) in [
+        (
+            "[`[[A]]` [[A]]](A.md)\n",
+            "[`[[A]]` [[B\u{e9}]]](B\u{e9}.md)\n",
+        ),
+        (
+            "[<!-- [[A]] --> [[A]]](A.md)\n",
+            "[<!-- [[A]] --> [[B\u{e9}]]](B\u{e9}.md)\n",
+        ),
+        (
+            "[$[[A]]$ [[A]]](A.md)\n",
+            "[$[[A]]$ [[B\u{e9}]]](B\u{e9}.md)\n",
+        ),
+    ] {
+        assert_eq!(
+            rewritten(before, "A.md", "B\u{e9}.md").as_deref(),
+            Some(after),
+            "the link is rewritten where it stands in {before:?}"
+        );
+    }
+}
