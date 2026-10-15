@@ -21,7 +21,7 @@ use std::time::Duration;
 use ratatoskr_blob_transfer_contracts::{
     ChunkRecordOutcome, DigestHex, TransferErrorCode, TransferFailure, UploadChunkReceipt,
     UploadCompletionOutcome, UploadPlan, UploadResumptionToken, UploadSession, UploadSessionOpened,
-    UploadSessionRequest, UploadStatusResponse,
+    UploadSessionRequest, UploadSessionState, UploadStatusResponse,
 };
 use ratatoskr_identifiers::{BlobOwner, Extensions, WireTimestamp};
 use tokio::sync::OwnedMutexGuard;
@@ -246,7 +246,14 @@ impl Uploads {
         let resumption_token = UploadResumptionToken::parse(token).map_err(|_| unknown())?;
         let slot = self.lock().get(token).cloned().ok_or_else(unknown)?;
         let session = slot.session.lock_owned().await;
-        if session.connection_id != connection_id {
+        // A step that waited for the lock can find the session ended by the step before it, for
+        // example a second finalize of one token.
+        let open = session
+            .reference
+            .status_view(&resumption_token)
+            .session_state
+            == UploadSessionState::Open;
+        if session.connection_id != connection_id || !open {
             return Err(unknown());
         }
         if session.expires <= Instant::now() {
