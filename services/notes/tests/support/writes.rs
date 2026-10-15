@@ -454,3 +454,75 @@ impl Writer {
 pub(crate) fn resolve(conflict_id: &str, choice: &str) -> Value {
     json!({ "resolve_conflict": { "conflict_id": conflict_id, "choice": choice } })
 }
+
+impl Writer {
+    /// `PUT /v1/notes/connections/{id}/write-mode` from a browser session of `owner`, with the
+    /// body `{"write_mode": mode}` and an operation that Edge minted. Returns the operation and the
+    /// answer.
+    pub(crate) async fn put_write_mode(
+        &self,
+        owner: Uuid,
+        connection_id: Uuid,
+        mode: &str,
+    ) -> (Uuid, Answer) {
+        let operation_id = Uuid::now_v7();
+        let request = Request::builder()
+            .method(Method::PUT)
+            .uri(format!("/v1/notes/connections/{connection_id}/write-mode"))
+            .header(USER_HEADER, owner.to_string())
+            .header(SESSION_KIND_HEADER, "browser")
+            .header(crate::support::OPERATION_HEADER, operation_id.to_string())
+            .header("content-type", "application/json")
+            .body(Body::from(json!({ "write_mode": mode }).to_string()))
+            .expect("a request");
+        let response = self
+            .channel
+            .router
+            .clone()
+            .oneshot(request)
+            .await
+            .expect("the router answers");
+        let status = response.status();
+        let body = response
+            .into_body()
+            .collect()
+            .await
+            .expect("a body")
+            .to_bytes();
+        let answer = Answer {
+            status,
+            body: serde_json::from_slice(&body).unwrap_or(Value::Null),
+        };
+        (operation_id, answer)
+    }
+
+    /// The terminal report of the operation `operation_id` once there is one, or `Value::Null`
+    /// after 10 seconds.
+    pub(crate) async fn terminal(&self, operation_id: Uuid) -> Value {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            let ended = self.reports(operation_id).await.into_iter().find(|report| {
+                matches!(
+                    report["status"].as_str(),
+                    Some("succeeded" | "partially_succeeded" | "failed")
+                )
+            });
+            if let Some(ended) = ended {
+                return ended;
+            }
+            if std::time::Instant::now() >= deadline {
+                return Value::Null;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+    }
+
+    /// The write mode of a connection, as its row holds it.
+    pub(crate) async fn write_mode(&self, connection_id: Uuid) -> String {
+        sqlx::query_scalar("select write_mode from notes.connections where connection_id = $1")
+            .bind(connection_id)
+            .fetch_one(self.channel.fixture.pool())
+            .await
+            .expect("the connection exists")
+    }
+}
