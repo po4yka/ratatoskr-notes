@@ -1,7 +1,9 @@
 //! The write path helpers: an active `plugin` connection with write mode on, the commands that
 //! Edge would publish, and a fake channel that sees the deliveries and acknowledges them.
 
-use axum::http::StatusCode;
+use axum::body::Body;
+use axum::http::{Method, Request, StatusCode};
+use http_body_util::BodyExt as _;
 use ratatoskr_event_envelope::{
     CommandEnvelope, CommandPayload as _, EnvelopeSchemaVersion, ProducerName,
 };
@@ -10,9 +12,11 @@ use ratatoskr_notes::files::FileRecorder;
 use ratatoskr_notes::writes::{Delivery, Handled, Outcome, Refusal, Writes};
 use ratatoskr_notes_contracts::FileWriteRequested;
 use serde_json::{Value, json};
+use tower::ServiceExt as _;
 use uuid::Uuid;
 
 use crate::support::channel::{Channel, OWNER, change, entry, sha256};
+use crate::support::{Answer, USER_HEADER, send_with};
 
 /// A domain router, its blob store and the pending writes of one test database.
 pub(crate) struct Writer {
@@ -264,4 +268,105 @@ pub(crate) fn update(path: &str, base: &str, blob: &Value) -> Value {
 /// `create` of `path` with the content `blob`.
 pub(crate) fn create(path: &str, blob: &Value) -> Value {
     json!({ "create": { "path": path, "blob": blob } })
+}
+
+/// The claim that Edge mints for the kind of the session of a request without a device.
+pub(crate) const SESSION_KIND_HEADER: &str = "x-ratatoskr-session-kind";
+
+impl Writer {
+    /// A JSON request from a browser session of `owner` to a route of `connection_id`.
+    pub(crate) async fn session_call(
+        &self,
+        owner: Uuid,
+        connection_id: Uuid,
+        route: &str,
+        body: Value,
+    ) -> Answer {
+        send_with(
+            &self.channel.router,
+            Method::POST,
+            &format!("/v1/notes/connections/{connection_id}/{route}"),
+            owner,
+            &[(SESSION_KIND_HEADER, "browser".to_owned())],
+            Some(body),
+        )
+        .await
+    }
+
+    /// Upload `bytes` from a browser session of `owner` to `connection_id` in one chunk. Returns
+    /// the answers of the open, the chunk and the finalize.
+    pub(crate) async fn session_upload(
+        &self,
+        owner: Uuid,
+        connection_id: Uuid,
+        bytes: &[u8],
+    ) -> [Answer; 3] {
+        let opened = self
+            .session_call(
+                owner,
+                connection_id,
+                "blobs",
+                json!({
+                    "declared_size_bytes": bytes.len(),
+                    "media_type": "text/markdown",
+                    "digest": { "algorithm": "sha256", "hex": sha256(bytes) },
+                    "chunk_size_bytes": 65_536,
+                }),
+            )
+            .await;
+        let token = opened.body["resumption_token"]
+            .as_str()
+            .unwrap_or("rst_00000000000000000000000000")
+            .to_owned();
+        let request = Request::builder()
+            .method(Method::PUT)
+            .uri(format!(
+                "/v1/notes/connections/{connection_id}/blobs/{token}/chunks/0"
+            ))
+            .header(USER_HEADER, owner.to_string())
+            .header(SESSION_KIND_HEADER, "browser")
+            .header("content-type", "application/octet-stream")
+            .body(Body::from(bytes.to_vec()))
+            .expect("a request");
+        let response = self
+            .channel
+            .router
+            .clone()
+            .oneshot(request)
+            .await
+            .expect("the router answers");
+        let status = response.status();
+        let body = response
+            .into_body()
+            .collect()
+            .await
+            .expect("a body")
+            .to_bytes();
+        let chunk = Answer {
+            status,
+            body: serde_json::from_slice(&body).unwrap_or(Value::Null),
+        };
+        let finalized = self
+            .session_call(
+                owner,
+                connection_id,
+                &format!("blobs/{token}/finalize"),
+                json!({ "resumption_token": token }),
+            )
+            .await;
+        [opened, chunk, finalized]
+    }
+
+    /// Whether `connection_id` may name the bytes with the SHA-256 `digest` in a write.
+    pub(crate) async fn registered(&self, connection_id: Uuid, digest: &str) -> bool {
+        sqlx::query_scalar(
+            "select exists (select 1 from notes.connection_blobs
+                            where connection_id = $1 and revision = $2)",
+        )
+        .bind(connection_id)
+        .bind(digest)
+        .fetch_one(self.channel.fixture.pool())
+        .await
+        .expect("the blobs can be read")
+    }
 }
