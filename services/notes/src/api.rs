@@ -106,6 +106,7 @@ pub struct ApiState<B> {
     before_login: Option<TestHook>,
     after_manifest: Option<TestHook>,
     after_terminal_state: Option<TestHook>,
+    after_sync_start: Option<TestHook>,
     blobs: BlobStore,
     trees_root: PathBuf,
     max_file_bytes: u64,
@@ -128,6 +129,7 @@ impl<B> Clone for ApiState<B> {
             before_login: self.before_login.clone(),
             after_manifest: self.after_manifest.clone(),
             after_terminal_state: self.after_terminal_state.clone(),
+            after_sync_start: self.after_sync_start.clone(),
             blobs: self.blobs.clone(),
             trees_root: self.trees_root.clone(),
             max_file_bytes: self.max_file_bytes,
@@ -159,6 +161,7 @@ impl<B: SystemdBus> ApiState<B> {
             before_login: None,
             after_manifest: None,
             after_terminal_state: None,
+            after_sync_start: None,
             blobs,
             trees_root,
             max_file_bytes,
@@ -275,6 +278,18 @@ impl<B: SystemdBus> ApiState<B> {
         let hook = TestHook::of(hook);
         self.supervisor.set_after_terminal_state(hook.clone());
         self.after_terminal_state = Some(hook);
+        self
+    }
+
+    /// Wait for `hook` after the first login of a `sync` connection started its sync unit and
+    /// before the login is recorded. For tests: the sync unit can report an expired login there.
+    #[must_use]
+    pub fn with_after_sync_start<F, Fut>(mut self, hook: F) -> Self
+    where
+        F: Fn(Uuid) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = ()> + Send + 'static,
+    {
+        self.after_sync_start = Some(TestHook::of(hook));
         self
     }
 

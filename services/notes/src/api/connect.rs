@@ -339,7 +339,7 @@ async fn log_in<B: SystemdBus>(
     let connection_id = connect.connection_id;
     let fault = match state.database.is_connecting(connection_id).await {
         Ok(true) => match run_login(state, connect, sync_login).await {
-            Ok(()) => match state.database.record_login(connection_id).await {
+            Ok(()) => match record_login(state, connection_id).await {
                 Ok(true) => return Ok(()),
                 Ok(false) => {
                     tracing::info!(%connection_id, "the connection was removed while its login ran; the cleanup runs again");
@@ -388,6 +388,17 @@ async fn log_in<B: SystemdBus>(
     tracing::info!(%connection_id, "a connection failed at its first login");
     state.after_terminal_state(connection_id).await;
     Err(None)
+}
+
+/// Record the first login of a connection whose sync unit started.
+async fn record_login<B: SystemdBus>(
+    state: &ApiState<B>,
+    connection_id: Uuid,
+) -> Result<bool, ratatoskr_notes_persistence::PersistenceError> {
+    if let Some(after_sync_start) = &state.after_sync_start {
+        (after_sync_start.0)(connection_id).await;
+    }
+    state.database.record_login(connection_id).await
 }
 
 /// Whether a disconnect of the connection ran while its login ran, and removed it. A disconnect

@@ -91,6 +91,23 @@ async fn state_of(fixture: &TestDatabase, connection_id: Uuid) -> String {
         .expect("the connection can be read")
 }
 
+/// Wait until the connection is in `wanted`, or the deadline passes.
+async fn wait_for_state(pool: &sqlx::PgPool, connection_id: Uuid, wanted: &str) {
+    let deadline = tokio::time::Instant::now() + HOOK_DEADLINE;
+    while tokio::time::Instant::now() < deadline {
+        let state: String =
+            sqlx::query_scalar("select state from notes.connections where connection_id = $1")
+                .bind(connection_id)
+                .fetch_one(pool)
+                .await
+                .expect("the connection can be read");
+        if state == wanted {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
 /// Assert one terminal report `failed` with `code` for the connection.
 async fn assert_one_failure(fixture: &TestDatabase, connection_id: Uuid, code: &str) {
     let reports = terminal_reports(fixture, connection_id).await;
@@ -218,6 +235,44 @@ async fn expired_login_has_its_report_at_once() {
     let stopped = until_stopped(std::future::pending::<()>(), &mut stops).await;
 
     assert_eq!(stopped, connection);
+    assert_eq!(state_of(&fixture, connection).await, "login_expired");
+    assert_one_failure(&fixture, connection, "notes.sync.login_expired").await;
+
+    fixture
+        .cleanup()
+        .await
+        .expect("the test database is dropped");
+}
+
+#[tokio::test]
+async fn login_expiry_before_its_record_reports_once() {
+    let fixture = TestDatabase::create().await.expect("a test database");
+    let systemd = FakeSystemd::new();
+    // The sync unit runs, and its login expires before the connect records the login.
+    let (pool, journals) = (fixture.pool().clone(), systemd.clone());
+    let state = ApiState::new(fixture.database.clone(), systemd.clone())
+        .with_key_file(systemd.key_file())
+        .with_credentials_dir(systemd.credentials_root())
+        .with_trees_root(systemd.trees_root())
+        .with_after_sync_start(move |connection_id| {
+            let (pool, journals) = (pool.clone(), journals.clone());
+            async move {
+                let unit = format!("ratatoskr-notes-sync@{connection_id}.service");
+                journals
+                    .journals()
+                    .log_auth_failures(&unit, Duration::from_mins(10));
+                wait_for_state(&pool, connection_id, "login_expired").await;
+            }
+        });
+    let router = domain_router(state.clone());
+
+    let accepted = connect_sync(&router, OWNER, "remote-vault-0e05", MARKER_SECRETS).await;
+    let connection = connection_id(&accepted);
+    // The login ran, and the hook saw it expire; the stop then waits for the rest of the task of
+    // the connect.
+    wait_for_state(fixture.pool(), connection, "login_expired").await;
+    state.shut_down().await;
+
     assert_eq!(state_of(&fixture, connection).await, "login_expired");
     assert_one_failure(&fixture, connection, "notes.sync.login_expired").await;
 
