@@ -700,14 +700,19 @@ impl Database {
         limit: i64,
     ) -> Result<Vec<WriteRow>, PersistenceError> {
         sqlx::query_as(&format!(
-            "select {WRITE_COLUMNS} from notes.writes w
-             where w.connection_id = $1 and w.delivery_sequence > $2
-               and ((w.group_id is null and w.state = 'delivering')
-                    or (w.group_id = w.write_id
-                        and exists (select 1 from notes.writes m
-                                    where m.connection_id = $1 and m.group_id = w.write_id
-                                      and m.state = 'delivering')))
-             order by w.delivery_sequence limit $3"
+            // Both branches read only delivering writes, through `writes_delivering_idx`; the
+            // delivered history is never scanned.
+            "select {WRITE_COLUMNS} from notes.writes
+             where connection_id = $1 and delivery_sequence > $2
+               and write_id in (
+                   select write_id from notes.writes
+                    where connection_id = $1 and state = 'delivering'
+                      and (group_id is null or group_id = write_id)
+                   union
+                   select group_id from notes.writes
+                    where connection_id = $1 and state = 'delivering'
+                      and group_id is not null and group_id <> write_id)
+             order by delivery_sequence limit $3"
         ))
         .bind(connection_id)
         .bind(after)

@@ -19,8 +19,11 @@ pub(crate) enum Defect {
 }
 
 impl Writes {
-    /// Fail the operation of `command`, which stopped the write path by a defect, with
-    /// `notes.write.internal`. Nothing of the command was committed. A failure is logged.
+    /// End `command`, which stopped the write path by a defect. When its write was committed before
+    /// the defect, nothing more happens: the write goes on and its operation ends with it
+    /// ([`Defect::Committed`]). Otherwise its operation fails with `notes.write.internal`
+    /// ([`Defect::Failed`]). When the write cannot be read or the failure cannot be recorded, the
+    /// command must be delivered again ([`Defect::Unreported`]); the error is logged.
     pub(crate) async fn fail_defect(&self, command: &CommandEnvelope) -> Defect {
         let Some((owner_id, operation_id)) = Request::operation_of(command) else {
             return Defect::Failed;

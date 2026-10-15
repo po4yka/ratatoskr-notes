@@ -2,8 +2,8 @@
 //! internal links" (workspace change `add-notes-write-back`, spec `notes-link-rewrite`).
 //!
 //! The rules are those of the Obsidian app 1.14.4 (`fileManager.renameFile`), and the golden
-//! fixtures that the real app recorded are the oracle (`services/notes/tests/link_rewrite_golden.rs`
-//! in this repository):
+//! fixtures that the real app recorded are the oracle
+//! (`services/notes/tests/link_rewrite_golden.rs` in this repository):
 //!
 //! 1. Before the rename, each link and embed of each note whose path part is not empty is resolved
 //!    to the list of files that it can name, the best first ([`Files::linkpath_dest`]).
