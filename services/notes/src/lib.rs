@@ -24,6 +24,7 @@ pub mod operation;
 pub mod outbox;
 pub mod secrets;
 mod supervisor;
+pub mod sync_write;
 pub mod systemd;
 mod tree_sync;
 pub mod uploads;
