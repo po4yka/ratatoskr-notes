@@ -53,3 +53,17 @@ as it is.
 
 - **WHEN** a `site_owner` claim closes its open session, first without its origin and then with the origin `site:site-a`
 - **THEN** the first answer is `401` and the second is `204`, verified by `services/notes/tests/device_uploads.rs::site_owner_closes_its_upload_session`
+
+### Requirement: A site owner claim reaches only the upload and conflict routes
+
+The domain router SHALL serve a request with the session kind `site_owner` only on the blob routes
+`POST /v1/notes/connections/{id}/blobs`, `PUT .../blobs/{token}/chunks/{index}`,
+`POST .../blobs/{token}/finalize` and `DELETE .../blobs/{token}`, and on
+`GET /v1/notes/conflicts/{id}`. The change batch and manifest routes SHALL refuse it with `409` and
+`notes.channel_mismatch`. Every other route SHALL refuse it with `401` and
+`notes.request.unauthenticated`, and SHALL change nothing.
+
+#### Scenario: A site owner claim walks the domain router
+
+- **WHEN** a request with the session kind `site_owner` and the origin `site:site-a` is sent to each entry of the domain router
+- **THEN** the upload and conflict routes are served, the change and manifest routes answer `409` `notes.channel_mismatch`, every other route answers `401` `notes.request.unauthenticated`, and the connection of the owner is not removed, verified by `services/notes/tests/site_owner_routes.rs::site_owner_reaches_only_uploads_and_conflicts`

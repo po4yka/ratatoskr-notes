@@ -18,6 +18,8 @@ implements group 4 of the workspace task list, and does not restate that rule.
 - Add `DELETE /v1/notes/connections/{id}/blobs/{token}`, which closes an open upload session: it
   deletes the received chunks, frees the slot of the session, and answers `204`. Edge calls it
   after a failed chunk or finalize of a site edit.
+- A guard on the domain router serves a `site_owner` claim only on the blob routes and the conflict
+  read, and refuses it on every other route, so that notes does not rely only on Edge.
 
 ## Capabilities
 
@@ -32,8 +34,9 @@ None.
 
 ## Impact
 
-`services/notes/src/api/blobs.rs`, `services/notes/src/uploads.rs`, `services/notes/src/api.rs`,
-the README, and the tests in `services/notes/tests/device_channel.rs` and `device_uploads.rs`. No
+`services/notes/src/api/blobs.rs`, `services/notes/src/api/site_owner.rs`,
+`services/notes/src/uploads.rs`, `services/notes/src/api.rs`, the README, and the tests in
+`services/notes/tests/device_channel.rs`, `device_uploads.rs` and `site_owner_routes.rs`. No
 schema change. The write command with `origin: "site:<site id>"` and the conflict read
 `GET /v1/notes/conflicts/{id}` need no change: OBS-024 already accepts the site origin, and the
 conflict read reads only the owner claim.
