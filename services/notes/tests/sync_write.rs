@@ -299,3 +299,50 @@ async fn set_property_changes_only_its_key() {
 
     writer.cleanup().await;
 }
+
+#[tokio::test]
+async fn tree_writes_are_group_writable() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let writer = Writer::new().await;
+    let mine: &[u8] = b"# Plan\n\nA new note in a new folder.\n";
+    let connection = writer.sync_vault(&[]).await;
+    let trees = tempfile::tempdir().expect("a trees root");
+    let tree = trees.path().join(connection.to_string());
+    std::fs::create_dir_all(&tree).expect("the working tree");
+    writer.keep_for_sync(connection, mine).await;
+    let write = command(
+        connection,
+        &serde_json::json!({ "create": {
+            "path": "Projects/Plan.md",
+            "blob": blob_ref(mine, "text/markdown"),
+        } }),
+    );
+    assert!(matches!(writer.send(&write).await, Handled::Queued { .. }));
+
+    SyncWriter::new(writer.recorder(), trees.path())
+        .deliver(connection)
+        .await
+        .expect("the delivery runs");
+
+    let mode = |path: &std::path::Path| {
+        std::fs::metadata(path)
+            .expect("the path exists")
+            .permissions()
+            .mode()
+            & 0o7777
+    };
+    // ob runs as another member of the group of the trees: it must replace what notes writes.
+    assert_eq!(
+        mode(&tree.join("Projects")),
+        0o2770,
+        "a folder that notes creates"
+    );
+    assert_eq!(
+        mode(&tree.join("Projects/Plan.md")),
+        0o660,
+        "a file that notes writes"
+    );
+
+    writer.cleanup().await;
+}

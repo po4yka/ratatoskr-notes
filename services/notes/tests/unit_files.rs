@@ -2,10 +2,10 @@
 //!
 //! Decision A: the sync unit logs to the journal namespace that the service reads, and to no other
 //! journal. Decision B: the working tree of a connection is `/mnt/nvme/ratatoskr/notes/trees/<id>`,
-//! which the service reads through the group `ratatoskr-notes-trees`, and the client state is
-//! `/mnt/nvme/ratatoskr/notes/clients/<id>`, which only the user of `ob` can enter. The sync and
-//! login units create files with `UMask=0027`, so the setgid bit of the trees root gives each file
-//! of a tree that group and mode 0640 or 0750.
+//! which the service reads and writes through the group `ratatoskr-notes-trees`, and the client
+//! state is `/mnt/nvme/ratatoskr/notes/clients/<id>`, which only the user of `ob` can enter. The sync
+//! and login units create files with `UMask=0007` (OBS-024 write-back), so the setgid bit of the
+//! trees root gives each file of a tree that group and mode 0660 or 2770.
 //!
 //! The tests read the unit files in `deploy/systemd/` with `%i` replaced, and compare them with
 //! the paths that the service builds.
@@ -101,7 +101,11 @@ fn sync_unit_logs_to_its_namespace_and_reads_the_split_roots() {
         [SYNC_LOG_NAMESPACE],
         "decision A: the namespace that the service reads"
     );
-    assert_eq!(values(&unit, "UMask"), ["0027"], "decision B: the umask");
+    assert_eq!(
+        values(&unit, "UMask"),
+        ["0007"],
+        "write-back: the group of the trees writes the tree"
+    );
     assert_client_environment("sync", &unit);
     for key in ["ExecStartPre", "ExecStart"] {
         for command in values(&unit, key) {
@@ -128,7 +132,11 @@ fn login_and_cleanup_units_use_the_split_roots() {
     ]);
 
     let login = settings("ratatoskr-notes-login@.service");
-    assert_eq!(values(&login, "UMask"), ["0027"], "decision B: the umask");
+    assert_eq!(
+        values(&login, "UMask"),
+        ["0007"],
+        "write-back: the group of the trees writes the tree"
+    );
     assert_client_environment("login", &login);
     let steps = values(&login, "ExecStart");
     assert!(
