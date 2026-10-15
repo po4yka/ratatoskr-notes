@@ -41,6 +41,22 @@ pub struct FileSummary {
     pub length_bytes: i64,
 }
 
+/// One present file of a connection and the index of its current revision, as the internal index
+/// route gives it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct IndexedRow {
+    /// Its NFC path.
+    pub path: String,
+    /// Its current revision.
+    pub revision: String,
+    /// The media type of that revision.
+    pub media_type: String,
+    /// The number of bytes of that revision.
+    pub length_bytes: i64,
+    /// The index of that revision, for a Markdown note.
+    pub note_index: Option<serde_json::Value>,
+}
+
 /// The states of a connection that an owner reads. The text matches `HOLDS_VAULT_KEY`.
 const READABLE: &str = "state not in ('failed', 'removed')";
 
@@ -216,5 +232,53 @@ impl Database {
         .fetch_all(&self.pool)
         .await
         .map_err(PersistenceError::Query)
+    }
+
+    /// Every present file of the connection `connection_id` with the index of its current
+    /// revision, in the order of their paths, or `None` when the connection does not exist or is
+    /// failed or removed. It names no owner: only the internal index route, on loopback, calls it.
+    ///
+    /// # Errors
+    ///
+    /// [`PersistenceError::Query`] when a statement fails.
+    pub async fn indexed_files(
+        &self,
+        connection_id: Uuid,
+    ) -> Result<Option<Vec<IndexedRow>>, PersistenceError> {
+        let exists: bool = sqlx::query_scalar(&format!(
+            "select exists (select 1 from notes.connections
+                            where connection_id = $1 and {READABLE})"
+        ))
+        .bind(connection_id)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(PersistenceError::Query)?;
+        if !exists {
+            return Ok(None);
+        }
+        let rows: Vec<(String, String, String, i64, Option<serde_json::Value>)> = sqlx::query_as(
+            "select f.path, f.revision, r.media_type, r.length_bytes, r.note_index
+             from notes.files f
+             join notes.revisions r on r.file_id = f.file_id and r.revision = f.revision
+             where f.connection_id = $1 and f.state = 'present'
+             order by f.path",
+        )
+        .bind(connection_id)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(PersistenceError::Query)?;
+        Ok(Some(
+            rows.into_iter()
+                .map(
+                    |(path, revision, media_type, length_bytes, note_index)| IndexedRow {
+                        path,
+                        revision,
+                        media_type,
+                        length_bytes,
+                        note_index,
+                    },
+                )
+                .collect(),
+        ))
     }
 }

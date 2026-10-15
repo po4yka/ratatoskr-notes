@@ -40,6 +40,7 @@ mod connect;
 mod device_connect;
 mod device_operations;
 mod fault;
+mod internal;
 mod read;
 mod removals;
 mod write_mode;
@@ -492,6 +493,10 @@ pub fn domain_router<B: SystemdBus>(state: ApiState<B>) -> Router {
         .route(
             "/v1/notes/conflicts/{conflict_id}",
             get(conflicts::read_conflict::<B>),
+        )
+        .route(
+            "/internal/connections/{connection_id}/files",
+            get(internal::list_indexed_files::<B>),
         )
         .route(
             "/v1/notes/connections/{connection_id}/changes",
