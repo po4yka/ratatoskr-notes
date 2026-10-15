@@ -140,6 +140,12 @@ pub(crate) struct FakeSystemd {
     calls_made: Arc<watch::Sender<usize>>,
     /// The journals of the sync units.
     journals: Journals,
+    /// `true` while each start of a pull-only sync unit waits before its first command.
+    pull_starts_held: Arc<watch::Sender<bool>>,
+    /// The sync units whose start finished and that were not stopped since.
+    active: Arc<Mutex<std::collections::BTreeSet<String>>>,
+    /// The number of starts of sync units that finished.
+    sync_starts_done: Arc<watch::Sender<usize>>,
 }
 
 impl FakeSystemd {
@@ -170,6 +176,9 @@ impl FakeSystemd {
             running: Arc::new(Mutex::new(HashMap::new())),
             calls_made: Arc::new(watch::Sender::new(0)),
             journals: Journals::default(),
+            pull_starts_held: Arc::new(watch::Sender::new(false)),
+            active: Arc::new(Mutex::new(std::collections::BTreeSet::new())),
+            sync_starts_done: Arc::new(watch::Sender::new(0)),
         }
     }
 
@@ -178,6 +187,55 @@ impl FakeSystemd {
     pub(crate) fn hold_logins(self) -> Self {
         self.logins_held.send_replace(true);
         self
+    }
+
+    /// Each start of a pull-only sync unit waits before its first command until
+    /// [`Self::release_pull_starts`]. The start is recorded before the wait.
+    pub(crate) fn hold_pull_starts(self) -> Self {
+        self.pull_starts_held.send_replace(true);
+        self
+    }
+
+    /// The starts of pull-only sync units that wait continue, and the next ones do not wait.
+    pub(crate) fn release_pull_starts(&self) {
+        self.pull_starts_held.send_replace(false);
+    }
+
+    /// Wait until every start of a sync unit that the service made finished, for at most 10
+    /// seconds. Returns whether they did.
+    pub(crate) async fn wait_for_sync_starts(&self) -> bool {
+        let mut done = self.sync_starts_done.subscribe();
+        tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            loop {
+                let started = self
+                    .calls()
+                    .iter()
+                    .filter(|call| {
+                        matches!(call, Call::Start(unit) if unit.starts_with("ratatoskr-notes-sync-"))
+                    })
+                    .count();
+                if *done.borrow_and_update() >= started {
+                    return;
+                }
+                if done.changed().await.is_err() {
+                    return;
+                }
+            }
+        })
+        .await
+        .is_ok()
+    }
+
+    /// The sync units of `connection_id` that run: their start finished, and no stop came after.
+    pub(crate) fn active_sync_units(&self, connection_id: Uuid) -> Vec<String> {
+        self.active
+            .lock()
+            .expect("the active units")
+            .iter()
+            .filter(|unit| unit.starts_with("ratatoskr-notes-sync-"))
+            .filter(|unit| unit.contains(&connection_id.to_string()))
+            .cloned()
+            .collect()
     }
 
     /// The login units that wait continue, and the next ones do not wait.
@@ -324,10 +382,14 @@ impl FakeSystemd {
 
     /// Wait until the service stops `unit`, for at most 10 seconds. Returns whether it did.
     pub(crate) async fn wait_for_stop(&self, unit: &str) -> bool {
-        let stop = Call::Stop(unit.to_owned());
+        self.wait_for_call(&Call::Stop(unit.to_owned())).await
+    }
+
+    /// Wait until the service made `call`, for at most 10 seconds. Returns whether it did.
+    pub(crate) async fn wait_for_call(&self, call: &Call) -> bool {
         let mut made = self.calls_made.subscribe();
         tokio::time::timeout(std::time::Duration::from_secs(10), async {
-            while !self.calls().contains(&stop) {
+            while !self.calls().contains(call) {
                 if made.changed().await.is_err() {
                     return;
                 }
@@ -647,14 +709,31 @@ impl SystemdBus for FakeSystemd {
         if let Some(instance) = instance_of(unit, "ratatoskr-notes-login@.service") {
             return self.run_login(unit, instance).await;
         }
+        if let Some(instance) = instance_of(unit, "ratatoskr-notes-cleanup@.service") {
+            return self
+                .run_template("ratatoskr-notes-cleanup@.service", instance)
+                .await;
+        }
         for template in [
-            "ratatoskr-notes-cleanup@.service",
             "ratatoskr-notes-sync-pull@.service",
             "ratatoskr-notes-sync-bidi@.service",
         ] {
-            if let Some(instance) = instance_of(unit, template) {
-                return self.run_template(template, instance).await;
+            let Some(instance) = instance_of(unit, template) else {
+                continue;
+            };
+            if template.contains("-pull@") {
+                let mut held = self.pull_starts_held.subscribe();
+                let _ = held.wait_for(|held| !*held).await;
             }
+            let result = self.run_template(template, instance).await;
+            if matches!(result, Ok(JobResult::Done)) {
+                self.active
+                    .lock()
+                    .expect("the active units")
+                    .insert(unit.as_str().to_owned());
+            }
+            self.sync_starts_done.send_modify(|done| *done += 1);
+            return result;
         }
         Ok(JobResult::Done)
     }
@@ -662,6 +741,10 @@ impl SystemdBus for FakeSystemd {
     async fn stop_unit(&self, unit: &UnitName) -> Result<JobResult, BusError> {
         self.journals.record_stop(unit.as_str());
         self.record(Call::Stop(unit.as_str().to_owned()));
+        self.active
+            .lock()
+            .expect("the active units")
+            .remove(unit.as_str());
         let running = self
             .running
             .lock()

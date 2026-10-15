@@ -188,3 +188,63 @@ async fn write_mode_switches_between_two_fixed_units() {
         .await
         .expect("the test database is dropped");
 }
+
+#[tokio::test]
+async fn a_start_and_a_mode_change_never_run_two_units() {
+    let fixture = TestDatabase::create().await.expect("a test database");
+    let systemd = FakeSystemd::new().hold_pull_starts();
+    let api = free_address();
+    let steps = async {
+        let answer = send_tcp(
+            api,
+            Method::POST,
+            "/v1/notes/connections",
+            OWNER,
+            Some(sync_body(REMOTE_VAULT_ID, support::MARKER_SECRETS)),
+        )
+        .await;
+        let id = connection_id(&answer);
+        let pull = format!("ratatoskr-notes-sync-pull@{id}.service");
+        assert!(
+            systemd.wait_for_call(&Call::Start(pull)).await,
+            "after the login, the connect starts the pull-only unit"
+        );
+        // Write mode goes on while that start runs. Without one lock per connection the change
+        // runs now; with it, the change waits for the start.
+        let operation_id = Uuid::now_v7();
+        let answer = send_tcp_as(
+            api,
+            Method::PUT,
+            &format!("/v1/notes/connections/{id}/write-mode"),
+            OWNER,
+            operation_id,
+            Some(json!({ "write_mode": "on" })),
+        )
+        .await;
+        assert_eq!(answer.status, StatusCode::ACCEPTED, "{:?}", answer.body);
+        let _ =
+            tokio::time::timeout(Duration::from_secs(2), terminal(&fixture, operation_id)).await;
+        systemd.release_pull_starts();
+        let ended = terminal(&fixture, operation_id).await;
+        assert_eq!(ended["status"], "succeeded", "{ended:?}");
+        assert!(
+            systemd.wait_for_sync_starts().await,
+            "every start of a sync unit finished"
+        );
+        id
+    };
+    let (id, stopped) = run_service(&fixture, &systemd, steps, api).await;
+    assert!(stopped, "serve stops without a failure");
+
+    assert_eq!(
+        systemd.active_sync_units(id),
+        [format!("ratatoskr-notes-sync-bidi@{id}.service")],
+        "one sync unit runs, the one of write mode on: {:?}",
+        systemd.calls()
+    );
+
+    fixture
+        .cleanup()
+        .await
+        .expect("the test database is dropped");
+}

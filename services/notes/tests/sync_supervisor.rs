@@ -196,6 +196,15 @@ async fn auth_failure_stops_the_unit_and_waits_for_the_owner() {
         "the sync unit is stopped: {:?}",
         systemd.calls()
     );
+    let calls = systemd.calls();
+    assert_eq!(
+        calls[calls.len().saturating_sub(2)..],
+        [
+            Call::Stop(unit.clone()),
+            Call::Stop(format!("ratatoskr-notes-sync-bidi@{id}.service")),
+        ],
+        "the expiry stops the units of both write modes: {calls:?}"
+    );
     assert_eq!(
         systemd.journals().read_at_stops(&unit),
         [Some(Duration::from_mins(5))],
