@@ -19,14 +19,24 @@
 //! A `set_property` needs a change of the frontmatter that notes does not compute on this channel
 //! yet; it fails with `notes.write.unsupported`. Paths are not logged: a file name is the owner's
 //! content.
+//!
+//! The tree belongs to the user of `ob`, who can put a symbolic link anywhere in it. Every file
+//! operation therefore runs relative to a directory descriptor that was opened from the root of the
+//! tree one name at a time with `O_NOFOLLOW`, as the watcher reads the tree: a link in any component
+//! refuses the write with `notes.write.unsafe_path`, so no write, delete, rename or read leaves the
+//! tree, and no byte outside it reaches the blob store.
 
 use std::collections::HashMap;
-use std::io::{Read as _, Write as _};
+use std::ffi::OsStr;
+use std::fs::File;
+use std::io::{Read as _, Seek as _, Write as _};
+use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use ratatoskr_notes_index::paths::path_key;
+use rustix::fs::{AtFlags, FileType, Mode, OFlags};
 use sha2::{Digest as _, Sha256};
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
@@ -40,6 +50,10 @@ const POLL: Duration = Duration::from_secs(2);
 
 /// The code of a write that this channel cannot apply.
 const UNSUPPORTED: &str = "notes.write.unsupported";
+
+/// The code of a write whose path in the tree passes through a symbolic link, or a file where a
+/// folder must be.
+const UNSAFE_PATH: &str = "notes.write.unsafe_path";
 
 /// The locks of the files that a delivery changes now, by connection and path key.
 type FileLocks = Arc<Mutex<HashMap<(Uuid, String), Arc<tokio::sync::Mutex<()>>>>>;
@@ -63,6 +77,8 @@ enum Step {
     Mismatch(Option<String>),
     /// The channel cannot apply the write.
     Unsupported,
+    /// The path passes through a symbolic link or a file: the write would leave the tree.
+    Unsafe,
 }
 
 impl SyncWriter {
@@ -130,13 +146,18 @@ impl SyncWriter {
                         )
                         .await?;
                 }
-                Step::Unsupported => {
+                Step::Unsupported | Step::Unsafe => {
+                    let code = if matches!(step, Step::Unsafe) {
+                        UNSAFE_PATH
+                    } else {
+                        UNSUPPORTED
+                    };
                     self.writes
                         .refuse(
                             connection_id,
                             delivery.write_id,
                             Refusal::Failed {
-                                code: UNSUPPORTED.to_owned(),
+                                code: code.to_owned(),
                             },
                         )
                         .await?;
@@ -159,21 +180,17 @@ impl SyncWriter {
 
     /// Compare the tree with the write and apply it when the tree has its base.
     async fn apply(&self, tree: &Path, delivery: &Delivery) -> Step {
-        let Some(file) = inside(tree, &delivery.path) else {
-            return Step::Unsupported;
-        };
         let blobs = self.blobs.clone();
         let delivery = delivery.clone();
-        let target = delivery
-            .target_path
-            .as_deref()
-            .and_then(|target| inside(tree, target));
+        let tree = tree.to_path_buf();
         let applied = tokio::task::spawn_blocking(move || {
-            apply_blocking(&blobs, &file, target.as_deref(), &delivery)
+            let root = crate::watcher::beneath::open_root(&tree)?;
+            apply_blocking(&blobs, root.as_fd(), &delivery)
         })
         .await;
         match applied {
             Ok(Ok(step)) => step,
+            Ok(Err(error)) if is_unsafe(&error) => Step::Unsafe,
             Ok(Err(error)) => {
                 tracing::error!(%error, "a write of a working tree failed; the next pass tries again");
                 Step::Applied
@@ -186,14 +203,20 @@ impl SyncWriter {
     }
 }
 
-/// The step of `delivery` against the tree, in blocking file operations.
+/// The step of `delivery` against the tree whose root is `root`, in blocking file operations.
 fn apply_blocking(
     blobs: &BlobStore,
-    file: &Path,
-    target: Option<&Path>,
+    root: BorrowedFd<'_>,
     delivery: &Delivery,
 ) -> std::io::Result<Step> {
-    let current = hash_of(file)?;
+    let Some((folder, name)) = split(&delivery.path) else {
+        return Ok(Step::Unsafe);
+    };
+    let parent = open_folder(root, folder, false)?;
+    let (current, opened) = match &parent {
+        Some(parent) => hash_at(parent.as_fd(), name)?,
+        None => (None, None),
+    };
     let base = delivery.base_hash.clone();
     match delivery.kind.as_str() {
         "create" | "update" | "resolve_conflict" => {
@@ -204,69 +227,133 @@ fn apply_blocking(
                 return Ok(Step::Acknowledge(Some(content)));
             }
             if current != base {
-                return mismatch(blobs, file, current.as_deref());
+                return mismatch(blobs, opened);
             }
             let Some(source) = blobs.path_of(&content) else {
                 return Ok(Step::Unsupported);
             };
-            write_atomically(file, &std::fs::read(source)?)?;
+            let parent = match parent {
+                Some(parent) => parent,
+                None => open_folder(root, folder, true)?.ok_or_else(missing)?,
+            };
+            write_at(parent.as_fd(), name, &std::fs::read(source)?)?;
             Ok(Step::Applied)
         }
-        "delete" => match current {
-            None => Ok(Step::Acknowledge(None)),
-            Some(_) if current == base => {
-                std::fs::remove_file(file)?;
+        "delete" => match (&current, &parent) {
+            (None, _) => Ok(Step::Acknowledge(None)),
+            (Some(_), Some(parent)) if current == base => {
+                rustix::fs::unlinkat(parent.as_fd(), name, AtFlags::empty())?;
                 Ok(Step::Applied)
             }
-            Some(_) => mismatch(blobs, file, current.as_deref()),
+            _ => mismatch(blobs, opened),
         },
         "rename" | "move" => {
-            let Some(target) = target else {
-                return Ok(Step::Unsupported);
+            let Some((target_folder, target_name)) =
+                delivery.target_path.as_deref().and_then(split)
+            else {
+                return Ok(Step::Unsafe);
             };
-            let moved = hash_of(target)?;
+            let target_parent = open_folder(root, target_folder, false)?;
+            let (moved, _) = match &target_parent {
+                Some(target_parent) => hash_at(target_parent.as_fd(), target_name)?,
+                None => (None, None),
+            };
             if current.is_none() && moved.is_some() && moved == base {
                 return Ok(Step::Acknowledge(moved));
             }
-            if current.is_none() || current != base || moved.is_some() {
-                return mismatch(blobs, file, current.as_deref());
+            let Some(parent) = parent.filter(|_| current.is_some() && current == base) else {
+                return mismatch(blobs, opened);
+            };
+            if moved.is_some() {
+                return mismatch(blobs, opened);
             }
-            if let Some(parent) = target.parent() {
-                std::fs::create_dir_all(parent)?;
-            }
-            std::fs::rename(file, target)?;
+            let target_parent = match target_parent {
+                Some(target_parent) => target_parent,
+                None => open_folder(root, target_folder, true)?.ok_or_else(missing)?,
+            };
+            rustix::fs::renameat(parent.as_fd(), name, target_parent.as_fd(), target_name)?;
             Ok(Step::Applied)
         }
         _ => Ok(Step::Unsupported),
     }
 }
 
-/// The tree has the bytes `current` at `file`: keep them in the blob store, so that the conflict
-/// can show them, and refuse the write.
-fn mismatch(blobs: &BlobStore, file: &Path, current: Option<&str>) -> std::io::Result<Step> {
-    if current.is_some() {
-        let stored = blobs.store_file(file)?;
-        return Ok(Step::Mismatch(Some(stored.digest)));
-    }
-    Ok(Step::Mismatch(None))
-}
-
-/// The path of `relative` in `tree`, or `None` when it is not a plain relative path.
-fn inside(tree: &Path, relative: &str) -> Option<PathBuf> {
-    let relative = Path::new(relative);
-    relative
-        .components()
-        .all(|component| matches!(component, Component::Normal(_)))
-        .then(|| tree.join(relative))
-}
-
-/// The lowercase hex SHA-256 of the file at `path`, or `None` when no file is there.
-fn hash_of(path: &Path) -> std::io::Result<Option<String>> {
-    let mut file = match std::fs::File::open(path) {
-        Ok(file) => file,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(error),
+/// The tree has other bytes than the base, in the open file `opened` (none: no file): keep them in
+/// the blob store, so that the conflict can show them, and refuse the write.
+fn mismatch(blobs: &BlobStore, opened: Option<File>) -> std::io::Result<Step> {
+    let Some(mut file) = opened else {
+        return Ok(Step::Mismatch(None));
     };
+    file.rewind()?;
+    let stored = blobs.store_open_file(&file)?;
+    Ok(Step::Mismatch(Some(stored.digest)))
+}
+
+/// The folder and the name of the relative path `relative`, or `None` when it is not a plain
+/// relative path of names.
+fn split(relative: &str) -> Option<(&Path, &OsStr)> {
+    let path = Path::new(relative);
+    let plain = path
+        .components()
+        .all(|component| matches!(component, Component::Normal(_)));
+    let name = path.file_name()?;
+    plain.then(|| (path.parent().unwrap_or_else(|| Path::new("")), name))
+}
+
+/// The flags of each folder that the writer opens.
+const FOLDER: OFlags = OFlags::RDONLY
+    .union(OFlags::DIRECTORY)
+    .union(OFlags::NOFOLLOW)
+    .union(OFlags::CLOEXEC);
+
+/// Open `folder`, relative to `root`, one name at a time without following a link. A missing
+/// folder is `None`, or is created when `create` is true.
+fn open_folder(
+    root: BorrowedFd<'_>,
+    folder: &Path,
+    create: bool,
+) -> std::io::Result<Option<OwnedFd>> {
+    let mut current = rustix::fs::openat(root, ".", FOLDER, Mode::empty())?;
+    for component in folder.components() {
+        let Component::Normal(name) = component else {
+            return Err(std::io::Error::from_raw_os_error(libc_eloop()));
+        };
+        current = match rustix::fs::openat(&current, name, FOLDER, Mode::empty()) {
+            Ok(next) => next,
+            Err(rustix::io::Errno::NOENT) if create => {
+                match rustix::fs::mkdirat(&current, name, Mode::from_raw_mode(0o2770)) {
+                    Ok(()) | Err(rustix::io::Errno::EXIST) => {}
+                    Err(error) => return Err(error.into()),
+                }
+                rustix::fs::openat(&current, name, FOLDER, Mode::empty())?
+            }
+            Err(rustix::io::Errno::NOENT) => return Ok(None),
+            Err(error) => return Err(error.into()),
+        };
+    }
+    Ok(Some(current))
+}
+
+/// The lowercase hex SHA-256 of the regular file `name` in `folder`, and the open file; `None` when
+/// no file is there. A link or another kind of file is an unsafe path.
+fn hash_at(
+    folder: BorrowedFd<'_>,
+    name: &OsStr,
+) -> std::io::Result<(Option<String>, Option<File>)> {
+    let opened = match rustix::fs::openat(
+        folder,
+        name,
+        OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC | OFlags::NONBLOCK,
+        Mode::empty(),
+    ) {
+        Ok(opened) => opened,
+        Err(rustix::io::Errno::NOENT) => return Ok((None, None)),
+        Err(error) => return Err(error.into()),
+    };
+    if FileType::from_raw_mode(rustix::fs::fstat(&opened)?.st_mode) != FileType::RegularFile {
+        return Err(std::io::Error::from_raw_os_error(libc_eloop()));
+    }
+    let mut file = File::from(opened);
     let mut hasher = Sha256::new();
     let mut buffer = vec![0_u8; 64 * 1024];
     loop {
@@ -276,36 +363,69 @@ fn hash_of(path: &Path) -> std::io::Result<Option<String>> {
         }
         hasher.update(buffer.get(..read).unwrap_or_default());
     }
-    Ok(Some(format!("{:x}", hasher.finalize())))
+    Ok((Some(format!("{:x}", hasher.finalize())), Some(file)))
+}
+
+/// The error number of a link where none may be.
+fn libc_eloop() -> i32 {
+    rustix::io::Errno::LOOP.raw_os_error()
+}
+
+/// Whether `error` says that a path passes through a link or a file: `ELOOP` from `O_NOFOLLOW`,
+/// `ENOTDIR` from `O_DIRECTORY`, and `EMLINK`, which FreeBSD returns for `O_NOFOLLOW`.
+fn is_unsafe(error: &std::io::Error) -> bool {
+    [
+        rustix::io::Errno::LOOP,
+        rustix::io::Errno::NOTDIR,
+        rustix::io::Errno::MLINK,
+    ]
+    .iter()
+    .any(|errno| error.raw_os_error() == Some(errno.raw_os_error()))
+}
+
+/// The error of a folder that is gone after it was created.
+fn missing() -> std::io::Error {
+    std::io::Error::from(std::io::ErrorKind::NotFound)
 }
 
 /// Replace the file at `path` with `bytes` so that a reader sees the old or the new bytes and never
-/// a mix: write a temporary file in the same folder, flush it to disk, and rename it over the file.
-/// The temporary name starts with a dot, which Obsidian Sync does not sync.
+/// a mix (see [`write_at`]).
 ///
 /// # Errors
 ///
 /// The error of a file operation; the temporary file is removed then.
 pub fn write_atomically(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     let folder = path.parent().unwrap_or_else(|| Path::new("."));
+    let name = path.file_name().ok_or_else(missing)?;
     std::fs::create_dir_all(folder)?;
-    let part = folder.join(format!(".ratatoskr-write-{}.part", Uuid::now_v7().simple()));
-    let written = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&part)
-        .and_then(|mut file| {
-            file.write_all(bytes)?;
-            file.sync_all()
-        })
-        .and_then(|()| std::fs::rename(&part, path));
+    let folder = rustix::fs::open(folder, FOLDER, Mode::empty())?;
+    write_at(folder.as_fd(), name, bytes)
+}
+
+/// Replace the file `name` of `folder` with `bytes`: write a temporary file in the same folder,
+/// created new without following a link, flush it to disk, and rename it over the file, all
+/// relative to `folder`. The rename replaces a link at `name` itself, never its target. The
+/// temporary name starts with a dot, which Obsidian Sync does not sync.
+fn write_at(folder: BorrowedFd<'_>, name: &OsStr, bytes: &[u8]) -> std::io::Result<()> {
+    let part = format!(".ratatoskr-write-{}.part", Uuid::now_v7().simple());
+    let written = rustix::fs::openat(
+        folder,
+        part.as_str(),
+        OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        Mode::from_raw_mode(0o660),
+    )
+    .map_err(std::io::Error::from)
+    .and_then(|opened| {
+        let mut file = File::from(opened);
+        file.write_all(bytes)?;
+        file.sync_all()
+    })
+    .and_then(|()| Ok(rustix::fs::renameat(folder, part.as_str(), folder, name)?));
     if let Err(error) = written {
-        let _ = std::fs::remove_file(&part);
+        let _ = rustix::fs::unlinkat(folder, part.as_str(), AtFlags::empty());
         return Err(error);
     }
-    if let Ok(directory) = std::fs::File::open(folder) {
-        // The rename is durable once the folder is flushed.
-        let _ = directory.sync_all();
-    }
+    // The rename is durable once the folder is flushed.
+    let _ = rustix::fs::fsync(folder);
     Ok(())
 }

@@ -440,7 +440,7 @@ impl Watcher {
 }
 
 /// Opens a path of a tree without a symbolic link in any component and without leaving the tree.
-mod beneath {
+pub(crate) mod beneath {
     use std::os::fd::{BorrowedFd, OwnedFd};
     use std::path::Path;
 
@@ -455,7 +455,7 @@ mod beneath {
     /// Open the root of `tree`: open its parent by path, then open the tree in the parent without
     /// following a link. The parent is the trees root, which the host keeps. The tree belongs to
     /// the user of `ob`, who can put a link in its place.
-    pub(super) fn open_root(tree: &Path) -> std::io::Result<OwnedFd> {
+    pub(crate) fn open_root(tree: &Path) -> std::io::Result<OwnedFd> {
         let (Some(parent), Some(name)) = (tree.parent(), tree.file_name()) else {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,

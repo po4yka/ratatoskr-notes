@@ -235,7 +235,10 @@ bytes and never a mix; a `delete` removes the file, and a `rename` or a `move` r
 Headless client sends the change to Obsidian Sync, and the watcher reports it back as the echo. Any
 other file means that the tree changed after the queue check: nothing is written, the bytes of the
 tree go to the blob store, and the write fails with a conflict whose current side is those bytes. A
-`set_property` fails with `notes.write.unsupported` on this channel, because notes does not change
+Every file operation runs relative to a folder that was opened from the root of the tree one name
+at a time without following a link; a symbolic link (or a file where a folder must be) anywhere in
+the path fails the write with `notes.write.unsafe_path`, so no write, delete, rename or read leaves
+the tree. A set_property` fails with `notes.write.unsupported` on this channel, because notes does not change
 a frontmatter itself yet. The service must be able to write the working tree on the host, which the
 read-only group access of owner decision B does not give: the deploy role must change that before
 write mode is turned on for a `sync` connection.
