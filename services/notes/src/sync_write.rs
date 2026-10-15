@@ -356,6 +356,21 @@ fn split(relative: &str) -> Option<(&Path, &OsStr)> {
     plain.then(|| (path.parent().unwrap_or_else(|| Path::new("")), name))
 }
 
+/// The start of the name of the temporary file of a write.
+const PART_PREFIX: &str = ".ratatoskr-write-";
+
+/// The end of the name of the temporary file of a write.
+const PART_SUFFIX: &str = ".part";
+
+/// Whether the last name of `path` is the temporary file of a write, which the watcher and the
+/// index leave out: it lives only until its rename, and it is never a note.
+#[must_use]
+pub fn is_write_part(path: &Path) -> bool {
+    path.file_name()
+        .and_then(OsStr::to_str)
+        .is_some_and(|name| name.starts_with(PART_PREFIX) && name.ends_with(PART_SUFFIX))
+}
+
 /// The mode of a folder that the writer creates in a tree: the group of the trees, of which the
 /// service and the user of `ob` are members, reads and writes it, and the setgid bit keeps that
 /// group on what is created in it.
@@ -475,7 +490,7 @@ pub fn write_atomically(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
 /// relative to `folder`. The rename replaces a link at `name` itself, never its target. The
 /// temporary name starts with a dot, which Obsidian Sync does not sync.
 fn write_at(folder: BorrowedFd<'_>, name: &OsStr, bytes: &[u8]) -> std::io::Result<()> {
-    let part = format!(".ratatoskr-write-{}.part", Uuid::now_v7().simple());
+    let part = format!("{PART_PREFIX}{}{PART_SUFFIX}", Uuid::now_v7().simple());
     let written = rustix::fs::openat(
         folder,
         part.as_str(),

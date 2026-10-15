@@ -231,7 +231,7 @@ service compares each delivered write with the working tree under a lock of its 
 the hash that the write produces is the acknowledgement. A file with the base of the write (no file
 for a `create`) gets the write: new bytes go to a temporary file `.ratatoskr-write-<id>.part` in the
 same folder, which is flushed to disk and renamed over the file, so a reader sees the old or the new
-bytes and never a mix; a `delete` removes the file, and a `rename` or a `move` renames it. The
+bytes and never a mix (the watcher and the index leave such temporary files out); a `delete` removes the file, and a `rename` or a `move` renames it. The
 Headless client sends the change to Obsidian Sync, and the watcher reports it back as the echo. Any
 other file means that the tree changed after the queue check: nothing is written, the bytes of the
 tree go to the blob store, and the write fails with a conflict whose current side is those bytes.

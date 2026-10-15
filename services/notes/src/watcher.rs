@@ -224,6 +224,8 @@ fn walk(root: BorrowedFd<'_>, top: PathBuf) -> Found {
             let path = directory.join(name);
             match kind_of(&entries, name, entry.file_type()) {
                 FileType::Directory => open.push(path),
+                // The temporary file of a write of notes lives only until its rename.
+                FileType::RegularFile if crate::sync_write::is_write_part(&path) => {}
                 FileType::RegularFile => {
                     if let Some((_, state)) = open_file(root, &path) {
                         found.files.push((path, state));
@@ -287,6 +289,9 @@ impl Watcher {
 
     /// A file of the tree may have changed.
     async fn observe(&mut self, path: PathBuf) -> bool {
+        if crate::sync_write::is_write_part(&path) {
+            return true;
+        }
         let state = self.stat(&path);
         self.observe_state(path, state).await
     }

@@ -168,6 +168,9 @@ impl FileRecorder {
         let raw = match change {
             TreeChange::Revision { path, .. } | TreeChange::Removed { path } => path,
         };
+        if crate::sync_write::is_write_part(raw) {
+            return Ok(Recorded::Nothing);
+        }
         let Some(path) = raw.to_str().map(nfc_path) else {
             tracing::warn!(%connection_id, "a file whose name is not UTF-8 is not indexed");
             return Ok(Recorded::Nothing);
