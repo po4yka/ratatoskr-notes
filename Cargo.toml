@@ -21,15 +21,16 @@ ratatoskr-notes-persistence = { version = "0.1.0", path = "crates/persistence" }
 # ---- fleet contracts ----
 # One revision for every `ratatoskr-*` git dependency: Cargo treats two revisions of one git
 # repository as two different crates, so a mixed pin would split the envelope types in two.
-# a9289e27 is the contracts commit that holds `ratatoskr-notes-contracts` (OBS-023, tasks 4.1, 4.2).
-ratatoskr-error-contracts = { git = "https://github.com/po4yka/ratatoskr-contracts.git", rev = "a9289e27bcf53f496b5917889580965d97ff2358" }
-ratatoskr-event-envelope  = { git = "https://github.com/po4yka/ratatoskr-contracts.git", rev = "a9289e27bcf53f496b5917889580965d97ff2358" }
-ratatoskr-identifiers     = { git = "https://github.com/po4yka/ratatoskr-contracts.git", rev = "a9289e27bcf53f496b5917889580965d97ff2358" }
-ratatoskr-notes-contracts = { git = "https://github.com/po4yka/ratatoskr-contracts.git", rev = "a9289e27bcf53f496b5917889580965d97ff2358" }
+# 76a0c35a is the contracts commit that holds `notes/write-request.v1` and `notes/conflict.v1`
+# (OBS-024, group 3) beside the OBS-023 types of `ratatoskr-notes-contracts`.
+ratatoskr-error-contracts = { git = "https://github.com/po4yka/ratatoskr-contracts.git", rev = "76a0c35a53bb4432878d451bcb7b5f08275edbc6" }
+ratatoskr-event-envelope  = { git = "https://github.com/po4yka/ratatoskr-contracts.git", rev = "76a0c35a53bb4432878d451bcb7b5f08275edbc6" }
+ratatoskr-identifiers     = { git = "https://github.com/po4yka/ratatoskr-contracts.git", rev = "76a0c35a53bb4432878d451bcb7b5f08275edbc6" }
+ratatoskr-notes-contracts = { git = "https://github.com/po4yka/ratatoskr-contracts.git", rev = "76a0c35a53bb4432878d451bcb7b5f08275edbc6" }
 # The report of the connect operation, `platform.operation.reported.v1` (workspace design D10).
-ratatoskr-operation-contracts = { git = "https://github.com/po4yka/ratatoskr-contracts.git", rev = "a9289e27bcf53f496b5917889580965d97ff2358" }
+ratatoskr-operation-contracts = { git = "https://github.com/po4yka/ratatoskr-contracts.git", rev = "76a0c35a53bb4432878d451bcb7b5f08275edbc6" }
 # The blob receipt of the device channels: the shared chunked, resumable transfer contract.
-ratatoskr-blob-transfer-contracts = { git = "https://github.com/po4yka/ratatoskr-contracts.git", rev = "a9289e27bcf53f496b5917889580965d97ff2358" }
+ratatoskr-blob-transfer-contracts = { git = "https://github.com/po4yka/ratatoskr-contracts.git", rev = "76a0c35a53bb4432878d451bcb7b5f08275edbc6" }
 
 # ---- persistence ----
 # No `migrate` feature: the schema is one file, `include_str!`d into the binary by
