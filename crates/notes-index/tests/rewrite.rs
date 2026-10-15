@@ -76,3 +76,103 @@ fn two_nested_links_in_one_text_are_both_rewritten() {
         Some("[x [[B\u{e9}]] y [[B\u{e9}]]](B\u{e9}.md)\n")
     );
 }
+
+#[test]
+fn a_markdown_link_in_the_alias_of_a_wikilink_is_rewritten_where_it_stands() {
+    assert_eq!(
+        rewritten("[[A|[x](A.md)]]\n", "A.md", "B\u{e9}.md").as_deref(),
+        Some("[[B\u{e9}|[x](B\u{e9}.md)]]\n"),
+        "the alias moves with the new target, and its link is rewritten"
+    );
+    assert_eq!(
+        rewritten("[[A|`[x](A.md)`[x](A.md)]]\n", "A.md", "ABCDEFGHIJK.md").as_deref(),
+        Some("[[ABCDEFGHIJK|`[x](A.md)`[x](ABCDEFGHIJK.md)]]\n"),
+        "the copy in the code span keeps its text"
+    );
+}
+
+/// The pieces of a random note: each with its text before the rename of `A.md` to `Bé.md`, and
+/// after it. A piece that holds no link to `A.md` is the same after.
+const PIECES: [(&str, &str); 18] = [
+    ("[[A]]", "[[B\u{e9}]]"),
+    ("![[A]]", "![[B\u{e9}]]"),
+    ("[[A#Part|the part]]", "[[B\u{e9}#Part|the part]]"),
+    ("[x](A.md)", "[x](B\u{e9}.md)"),
+    ("![img](A.md)", "![img](B\u{e9}.md)"),
+    ("[[A|[x](A.md)]]", "[[B\u{e9}|[x](B\u{e9}.md)]]"),
+    ("[y [[A]]](A.md)", "[y [[B\u{e9}]]](B\u{e9}.md)"),
+    ("[`[[A]]` [[A]]](A.md)", "[`[[A]]` [[B\u{e9}]]](B\u{e9}.md)"),
+    (
+        "[[A|`[x](A.md)`[x](A.md)]]",
+        "[[B\u{e9}|`[x](A.md)`[x](B\u{e9}.md)]]",
+    ),
+    ("`[[A]]`", "`[[A]]`"),
+    ("<!-- [[A]] -->", "<!-- [[A]] -->"),
+    ("$[[A]]$", "$[[A]]$"),
+    ("[[Other]]", "[[Other]]"),
+    (
+        "\u{fc}ber \u{e9}t\u{e9} \u{1f600}",
+        "\u{fc}ber \u{e9}t\u{e9} \u{1f600}",
+    ),
+    ("\r\n", "\r\n"),
+    ("\n", "\n"),
+    (" ", " "),
+    ("plain text", "plain text"),
+];
+
+/// A small deterministic generator, so that a failure is found again from its seed.
+struct Lcg(u64);
+
+impl Lcg {
+    fn below(&mut self, bound: usize) -> usize {
+        self.0 = self
+            .0
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
+        usize::try_from(self.0 >> 33).unwrap_or(0) % bound
+    }
+}
+
+#[test]
+fn every_link_of_a_random_note_is_rewritten_and_no_other_byte_changes() {
+    for seed in 1..=500_u64 {
+        let mut random = Lcg(seed);
+        let (mut before, mut after) = (String::new(), String::new());
+        for _ in 0..=random.below(12) {
+            let (old, new) = PIECES[random.below(PIECES.len())];
+            // A space between two pieces keeps each one a piece of its own.
+            before.push_str(old);
+            before.push(' ');
+            after.push_str(new);
+            after.push(' ');
+        }
+        before.push('\n');
+        after.push('\n');
+        let paths = vec![
+            "A.md".to_owned(),
+            "Other.md".to_owned(),
+            "Note.md".to_owned(),
+        ];
+        let notes = BTreeMap::from([("Note.md".to_owned(), before.clone())]);
+        let result = std::panic::catch_unwind(AssertUnwindSafe(|| {
+            rewrite_links(
+                &paths,
+                &notes,
+                "A.md",
+                "B\u{e9}.md",
+                NewLinkFormat::Shortest,
+            )
+        }));
+        let got = result.ok().map(|rewritten| {
+            rewritten
+                .get("Note.md")
+                .cloned()
+                .unwrap_or_else(|| before.clone())
+        });
+        assert_eq!(
+            got.as_deref(),
+            Some(after.as_str()),
+            "seed {seed}: {before:?}"
+        );
+    }
+}
