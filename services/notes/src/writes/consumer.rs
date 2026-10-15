@@ -9,9 +9,11 @@
 //!
 //! The consumer hands each command to [`Writes::handle`] and acknowledges it after the write path
 //! committed what it did with it, so a stop between the two delivers the command again, and the
-//! idempotency key of the write makes the repeat a repeat. Each command runs in a task of its own:
-//! a panic of the write path fails that one operation with `notes.write.internal`, terminates the
-//! message, and the consumer goes on. When the consumer ends, for any reason, the service is not
+//! idempotency key of the write makes the repeat a repeat. Each command runs in a task of its own,
+//! and a panic of the write path ends only that command: when the command committed its write
+//! before the panic, the write goes on and the message is acknowledged; otherwise its operation
+//! fails with `notes.write.internal` and the message is terminated; when that failure cannot be
+//! recorded, the message is delivered again. When the consumer ends, for any reason, the service is not
 //! ready.
 
 use std::sync::Arc;
@@ -25,7 +27,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::admin::RuntimeState;
 use crate::outbox::{self, BusSettings};
-use crate::writes::Writes;
+use crate::writes::{Defect, Writes};
 
 /// The command stream that Edge owns.
 pub const COMMAND_STREAM: &str = "ratatoskr_commands";
@@ -202,9 +204,13 @@ impl WriteConsumer {
                 acknowledge(message, AckKind::Nak(Some(RETRY_DELAY))).await;
             }
             Err(defect) => {
-                tracing::error!(%defect, "a write command stopped the write path; its operation fails");
-                self.writes.fail_defect(&command).await;
-                acknowledge(message, AckKind::Term).await;
+                tracing::error!(%defect, "a write command stopped the write path");
+                let kind = match self.writes.fail_defect(&command).await {
+                    Defect::Committed => AckKind::Ack,
+                    Defect::Failed => AckKind::Term,
+                    Defect::Unreported => AckKind::Nak(Some(RETRY_DELAY)),
+                };
+                acknowledge(message, kind).await;
             }
         }
     }

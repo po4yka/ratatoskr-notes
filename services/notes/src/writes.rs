@@ -5,6 +5,7 @@
 
 mod conflict;
 mod consumer;
+mod defect;
 mod group;
 mod merge;
 mod mode;
@@ -28,6 +29,7 @@ use request::Request;
 
 pub(crate) use conflict::MAX_SIDE_BYTES;
 pub use consumer::{COMMAND_STREAM, DurableError, WRITE_DURABLE, WRITE_FILTER, WriteConsumer};
+pub(crate) use defect::Defect;
 pub use mode::{ModeChange, RECONFIGURE_FAILED, WRITE_MODE_OPERATION_KIND};
 
 /// What [`Writes::handle`] did with one command.
@@ -186,36 +188,6 @@ pub(crate) async fn echo(
         .await
         .map_err(|_| RecordError::WRITE)?;
     Ok(acknowledged.then_some(head.write_id))
-}
-
-/// The outcome of the rename `leader` whose write group is `group`: pending while a write of the
-/// group is open; failed when one failed, with `notes.write.partially_applied` when another
-/// succeeded, else with the code of the rename (or of the first failed write) and the conflict of
-/// the group when there is one; else succeeded with the file of the rename.
-fn group_outcome(
-    leader: &ratatoskr_notes_persistence::WriteRow,
-    group: &[ratatoskr_notes_persistence::WriteRow],
-) -> Outcome {
-    if group
-        .iter()
-        .any(|write| matches!(write.state.as_str(), "queued" | "delivering"))
-    {
-        return Outcome::Pending;
-    }
-    if !group.iter().any(|write| write.state == "failed") {
-        return Outcome::Succeeded {
-            revision: leader.revision.clone(),
-        };
-    }
-    let code = if group.iter().any(|write| write.state == "succeeded") {
-        PARTIALLY_APPLIED
-    } else {
-        group::failure_code(group, leader.write_id).unwrap_or_default()
-    };
-    Outcome::Failed {
-        code: code.to_owned(),
-        conflict_id: group.iter().find_map(|write| write.conflict_id),
-    }
 }
 
 /// How the channel ended a delivered write.
@@ -432,17 +404,6 @@ impl Writes {
         );
         self.announce(&raised).await;
         Ok(Handled::Queued { write_id })
-    }
-
-    /// Fail the operation of `command`, which stopped the write path by a defect, with
-    /// `notes.write.internal`. Nothing of the command was committed. A failure is logged.
-    pub(crate) async fn fail_defect(&self, command: &CommandEnvelope) {
-        let Some((owner_id, operation_id)) = Request::operation_of(command) else {
-            return;
-        };
-        if let Err(error) = self.refused(owner_id, operation_id, INTERNAL).await {
-            tracing::error!(%error, %operation_id, "the failure of a write could not be reported");
-        }
     }
 
     /// Give the resolution `request` the path of its conflict, the revision that the conflict
@@ -737,7 +698,7 @@ impl Writes {
                 .database()
                 .group_writes(write.connection_id, group_id)
                 .await?;
-            return Ok(Some(group_outcome(&write, &group)));
+            return Ok(Some(group::outcome(&write, &group)));
         }
         Ok(Some(match write.state.as_str() {
             "succeeded" => Outcome::Succeeded {

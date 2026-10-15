@@ -183,9 +183,11 @@ the command `notes.file.write_requested.v1` (contract `notes/write-request.v1`) 
 on the stream `ratatoskr_commands`, with the filter `cmd.notes.file.write_requested.v1`. Edge
 creates the durable; notes only looks it up and compares its filter, its explicit acknowledgement
 and its ack wait of 30 s. When `RATATOSKR__BUS__URL` is set, `/health/ready` answers `503` until
-that check passed, and again when a later check fails. Each command runs in a task of its own: a defect that
-panics in the write path fails that one operation with `notes.write.internal`, terminates the
-message and leaves the consumer running. When the consumer ends, for any reason, `/health/ready`
+that check passed, and again when a later check fails. Each command runs in a task of its own, and a defect that
+panics in the write path ends only that command: a write that was committed before the panic goes
+on and the message is acknowledged; otherwise the operation fails with `notes.write.internal` and
+the message is terminated, or, when that failure cannot be recorded, delivered again. The consumer
+keeps running. When the consumer ends, for any reason, `/health/ready`
 answers `503`.
 
 **Content.** A command never carries file bytes. The owner's session uploads the content first,
