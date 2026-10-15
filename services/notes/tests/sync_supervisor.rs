@@ -88,6 +88,8 @@ async fn connect_starts_one_unit_in_pull_only_mode() {
         &tree,
         "--mode",
         "pull-only",
+        "--conflict-strategy",
+        "conflict",
         "--configs",
         "",
         "--device-name",
@@ -111,8 +113,8 @@ async fn connect_starts_one_unit_in_pull_only_mode() {
     assert_eq!(
         sync_calls(&ob_of_first_start),
         [configure.clone(), sync.clone()],
-        "the sync unit configures pull-only mode, no configuration sync and the device name, then \
-         syncs continuously"
+        "the sync unit configures pull-only mode, the conflict strategy conflict, no configuration \
+         sync and the device name, then syncs continuously"
     );
     assert_eq!(
         systemd.calls()[calls_of_first_start.len()..],

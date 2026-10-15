@@ -226,6 +226,18 @@ pub(crate) async fn send_tcp(
     owner: Uuid,
     body: Option<Value>,
 ) -> Answer {
+    send_tcp_as(address, method, path, owner, Uuid::now_v7(), body).await
+}
+
+/// [`send_tcp`] with the operation id `operation_id` that Edge minted.
+pub(crate) async fn send_tcp_as(
+    address: SocketAddr,
+    method: Method,
+    path: &str,
+    owner: Uuid,
+    operation_id: Uuid,
+    body: Option<Value>,
+) -> Answer {
     let deadline = Instant::now() + LISTENER_DEADLINE;
     let mut stream = loop {
         match TcpStream::connect(address).await {
@@ -243,7 +255,7 @@ pub(crate) async fn send_tcp(
         "{method} {path} HTTP/1.1\r\nhost: {address}\r\n{USER_HEADER}: {owner}\r\n\
          {OPERATION_HEADER}: {}\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\
          connection: close\r\n\r\n{body}",
-        Uuid::now_v7(),
+        operation_id,
         body.len()
     );
     stream
