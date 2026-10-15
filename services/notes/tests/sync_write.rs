@@ -204,3 +204,98 @@ async fn symlinks_never_lead_out_of_the_tree() {
 
     writer.cleanup().await;
 }
+
+#[tokio::test]
+async fn set_property_changes_only_its_key() {
+    let writer = Writer::new().await;
+    let plan: &[u8] =
+        b"---\ntitle: Plan\nstatus: draft\ntags:\n  - a\n  - b\n---\n# Plan\n\nThe body.\n";
+    let note: &[u8] = b"---\ntitle: Note\n---\nBody: not a key.\n";
+    let bare: &[u8] = b"# Bare\n\nNo frontmatter.\n";
+    let connection = writer
+        .sync_vault(&[("Plan.md", plan), ("Note.md", note), ("Bare.md", bare)])
+        .await;
+    let trees = tempfile::tempdir().expect("a trees root");
+    let tree = trees.path().join(connection.to_string());
+    std::fs::create_dir_all(&tree).expect("the working tree");
+    for (name, bytes) in [("Plan.md", plan), ("Note.md", note), ("Bare.md", bare)] {
+        std::fs::write(tree.join(name), bytes).expect("the file is in the tree");
+    }
+    let done: &[u8] = br#""done""#;
+    let owner: &[u8] = br#"["Ann","Bo"]"#;
+    writer.keep_for_sync(connection, done).await;
+    writer.keep_for_sync(connection, owner).await;
+    let set = |path: &str, base: &[u8], key: &str, value: &[u8]| {
+        command(
+            connection,
+            &serde_json::json!({ "set_property": {
+                "path": path,
+                "base_hash": sha256(base),
+                "property_key": key,
+                "property_change": { "set": blob_ref(value, "application/json") },
+            } }),
+        )
+    };
+    let settings = [
+        // Replace the value of a key, and keep every other line byte for byte.
+        set("Plan.md", plan, "status", done),
+        // Add a key that the frontmatter does not have.
+        set("Note.md", note, "owner", owner),
+        // Give a file without frontmatter one.
+        set("Bare.md", bare, "status", done),
+    ];
+    let removal = command(
+        connection,
+        &serde_json::json!({ "set_property": {
+            "path": "Plan.md",
+            "base_hash": sha256(
+                b"---\ntitle: Plan\nstatus: \"done\"\ntags:\n  - a\n  - b\n---\n# Plan\n\nThe body.\n"
+            ),
+            "property_key": "tags",
+            "property_change": "remove",
+        } }),
+    );
+    for write in settings.iter().chain([&removal]) {
+        assert!(matches!(writer.send(write).await, Handled::Queued { .. }));
+    }
+
+    let sync = SyncWriter::new(writer.recorder(), trees.path());
+    sync.deliver(connection).await.expect("the delivery runs");
+    sync.deliver(connection).await.expect("the delivery runs");
+
+    let expected: [(&str, &[u8]); 3] = [
+        (
+            "Plan.md",
+            b"---\ntitle: Plan\nstatus: \"done\"\n---\n# Plan\n\nThe body.\n",
+        ),
+        (
+            "Note.md",
+            b"---\ntitle: Note\nowner: [\"Ann\",\"Bo\"]\n---\nBody: not a key.\n",
+        ),
+        (
+            "Bare.md",
+            b"---\nstatus: \"done\"\n---\n# Bare\n\nNo frontmatter.\n",
+        ),
+    ];
+    for (name, bytes) in expected {
+        assert_eq!(
+            String::from_utf8_lossy(&std::fs::read(tree.join(name)).expect("the file")),
+            String::from_utf8_lossy(bytes),
+            "{name} changes only its property"
+        );
+        assert_eq!(
+            writer.current(connection, name).await,
+            Some(sha256(bytes)),
+            "the new bytes of {name} are current"
+        );
+    }
+    for write in settings.iter().chain([&removal]) {
+        assert!(
+            matches!(writer.outcome(write).await, Some(Outcome::Succeeded { .. })),
+            "{:?}",
+            writer.outcome(write).await
+        );
+    }
+
+    writer.cleanup().await;
+}
