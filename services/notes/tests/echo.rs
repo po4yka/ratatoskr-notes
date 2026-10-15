@@ -11,6 +11,7 @@
 
 mod support;
 
+use ratatoskr_notes::sync_write::SyncWriter;
 use ratatoskr_notes::writes::{Handled, Outcome};
 
 use crate::support::channel::sha256;
@@ -123,6 +124,60 @@ async fn different_ack_hash_becomes_current() {
     let reports = writer.reports(write.operation_id).await;
     let ended = reports.last().expect("a report");
     assert_eq!(ended["status"], "succeeded", "{ended:?}");
+    assert_eq!(
+        ended["warnings"][0]["code"], "notes.write.transformed",
+        "{ended:?}"
+    );
+
+    writer.cleanup().await;
+}
+
+#[tokio::test]
+async fn formatted_echo_after_the_write_landed_acknowledges_it() {
+    let writer = Writer::new().await;
+    let base: &[u8] = b"# Plan\n\nIn the vault.\n";
+    let mine: &[u8] = b"# Plan\n\nWritten through Ratatoskr.\n";
+    // Obsidian formats the file after the write landed in the working tree.
+    let formatted: &[u8] = b"# Plan\n\nWritten through Ratatoskr.\n\n";
+    let connection = writer.sync_vault(&[("Plan.md", base)]).await;
+    let trees = tempfile::tempdir().expect("a trees root");
+    let tree = trees.path().join(connection.to_string());
+    std::fs::create_dir_all(&tree).expect("the working tree");
+    std::fs::write(tree.join("Plan.md"), base).expect("the file is in the tree");
+    writer.keep_for_sync(connection, mine).await;
+    let write = command(
+        connection,
+        &update("Plan.md", &sha256(base), &blob_ref(mine, "text/markdown")),
+    );
+    assert!(matches!(writer.send(&write).await, Handled::Queued { .. }));
+
+    SyncWriter::new(writer.recorder(), trees.path())
+        .deliver(connection)
+        .await
+        .expect("the delivery runs");
+    assert_eq!(
+        std::fs::read(tree.join("Plan.md")).expect("the file"),
+        mine,
+        "the write landed"
+    );
+    // The first change of the path that the watcher reports has the formatted bytes.
+    std::fs::write(tree.join("Plan.md"), formatted).expect("Obsidian formats the file");
+    writer.tree_change(connection, "Plan.md", formatted).await;
+
+    assert_eq!(
+        writer.outcome(&write).await,
+        Some(Outcome::Succeeded {
+            revision: Some(sha256(formatted)),
+        }),
+        "the change after the write landed acknowledges it"
+    );
+    assert_eq!(
+        writer.changed(connection).await,
+        [sha256(base), sha256(formatted)],
+        "one event names the formatted bytes, and none the bytes of the write"
+    );
+    let reports = writer.reports(write.operation_id).await;
+    let ended = reports.last().expect("a report");
     assert_eq!(
         ended["warnings"][0]["code"], "notes.write.transformed",
         "{ended:?}"
