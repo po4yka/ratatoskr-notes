@@ -115,13 +115,24 @@ async fn send_from(
     path: &str,
     peer: &str,
 ) -> (StatusCode, Vec<u8>) {
+    send_with_headers(writer, method, path, peer, &[]).await
+}
+
+/// [`send_from`] with the request headers `headers`.
+async fn send_with_headers(
+    writer: &Writer,
+    method: Method,
+    path: &str,
+    peer: &str,
+    headers: &[(&str, &str)],
+) -> (StatusCode, Vec<u8>) {
     use http_body_util::BodyExt as _;
     use tower::ServiceExt as _;
-    let mut request = axum::http::Request::builder()
-        .method(method)
-        .uri(path)
-        .body(axum::body::Body::empty())
-        .expect("a request");
+    let mut builder = axum::http::Request::builder().method(method).uri(path);
+    for (name, value) in headers {
+        builder = builder.header(*name, *value);
+    }
+    let mut request = builder.body(axum::body::Body::empty()).expect("a request");
     let address: std::net::SocketAddr = peer.parse().expect("a peer address");
     request
         .extensions_mut()
@@ -169,6 +180,39 @@ async fn internal_route_refuses_a_non_loopback_peer() {
             send_from(&writer, Method::POST, &route, peer).await,
             send_from(&writer, Method::POST, "/internal/unknown", peer).await,
             "another method from {peer} is also an unknown route"
+        );
+    }
+
+    writer.cleanup().await;
+}
+
+#[tokio::test]
+async fn the_peer_address_alone_decides() {
+    let writer = Writer::new().await;
+    let connection = writer.vault(&[("Home.md", HOME)]).await;
+    let route = format!("/internal/connections/{connection}/files");
+    let unknown = get_from(&writer, "/internal/unknown", "192.0.2.10:50000").await;
+
+    let (status, _) = get_from(&writer, &route, "[::ffff:127.0.0.1]:50000").await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "an IPv4-mapped loopback peer reads the index"
+    );
+    assert_eq!(
+        get_from(&writer, &route, "[::ffff:192.0.2.10]:50000").await,
+        unknown,
+        "an IPv4-mapped peer that is not loopback gets an unknown route"
+    );
+    for header in [
+        ("x-forwarded-for", "127.0.0.1"),
+        ("forwarded", "for=127.0.0.1"),
+        ("x-real-ip", "127.0.0.1"),
+    ] {
+        assert_eq!(
+            send_with_headers(&writer, Method::GET, &route, "192.0.2.10:50000", &[header]).await,
+            unknown,
+            "the header {header:?} does not make a remote peer loopback"
         );
     }
 
