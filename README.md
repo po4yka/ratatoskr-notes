@@ -54,7 +54,8 @@ also at `?revision=<sha256>`) and `GET /v1/notes/connections/{id}/index/{path}` 
 links and backlinks). The device channels use `POST /v1/notes/connections/{id}/changes`,
 `POST /v1/notes/connections/{id}/manifest` and the upload routes under
 `/v1/notes/connections/{id}/blobs` (see Device channels). `GET /v1/notes/conflicts/{id}` reads a
-conflict of a write (see Writes). Every route answers only for the owner in the claim of Edge.
+conflict of a write, and `PUT /v1/notes/connections/{id}/write-mode` sets the write mode of a
+connection (see Writes). Every route answers only for the owner in the claim of Edge.
 
 ## Connections
 
@@ -270,6 +271,17 @@ plain text, `texts` with the text of each side (`base`, `current`, `writer`, `me
 holds. A side larger than 1 MiB, the cap of a merge, is not read: `texts_over_limit` names it. A
 base or current side that is a revision of the file stays readable at
 `GET .../files/{path}?revision=<hash>`. Any other id answers `404` `notes.conflict.not_found`.
+
+**Write mode.** Every connection starts with write mode off. Edge proxies
+`PUT /v1/notes/connections/{id}/write-mode` with the body `{"write_mode": "on"}` or
+`{"write_mode": "off"}` and the operation `notes.connection.write_mode`, which it mints and sends in
+`x-ratatoskr-operation-id`. Notes is the only reporter of that operation (lane `ratatoskr-notes`).
+It sets the mode under the lock of the connection row and answers `202` with the connection id, the
+mode and the operation. Off fails each write that waits in a queue and was not delivered with
+`notes.write.disabled`; a delivered write finishes, because the vault may already hold it. A
+connection of another owner, or one that is not `connecting` or `active`, answers `404`
+`notes.connection.not_found` and writes no report: Edge fails the operation with the code it
+relays.
 
 ## Template units
 

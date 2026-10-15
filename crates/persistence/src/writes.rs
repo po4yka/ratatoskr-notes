@@ -497,6 +497,43 @@ impl FileTransaction {
         Ok(())
     }
 
+    /// Set the write mode of this connection: `on` when `on`, `off` otherwise.
+    ///
+    /// # Errors
+    ///
+    /// [`PersistenceError::Query`] when the statement fails.
+    pub async fn set_write_mode(&mut self, on: bool) -> Result<(), PersistenceError> {
+        sqlx::query(
+            "update notes.connections set write_mode = $2, updated_at = now()
+             where connection_id = $1",
+        )
+        .bind(self.connection_id)
+        .bind(if on { "on" } else { "off" })
+        .execute(&mut *self.transaction)
+        .await
+        .map_err(query_error)?;
+        Ok(())
+    }
+
+    /// The writes of this connection that wait in a queue and were not delivered, in the order of
+    /// acceptance.
+    ///
+    /// # Errors
+    ///
+    /// [`PersistenceError::Query`] when the statement fails.
+    pub async fn queued_writes(&mut self) -> Result<Vec<WriteRow>, PersistenceError> {
+        let rows: Vec<WriteTuple> = sqlx::query_as(&format!(
+            "select {WRITE_COLUMNS} from notes.writes
+             where connection_id = $1 and state = 'queued'
+             order by position"
+        ))
+        .bind(self.connection_id)
+        .fetch_all(&mut *self.transaction)
+        .await
+        .map_err(query_error)?;
+        Ok(rows.into_iter().map(write_row).collect())
+    }
+
     /// The operations that report the outcome of the write `write_id`, the first one first.
     ///
     /// # Errors

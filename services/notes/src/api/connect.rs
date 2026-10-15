@@ -64,7 +64,7 @@ struct OperationView {
 }
 
 /// The operation id that Edge minted.
-fn operation_id(headers: &HeaderMap) -> Result<Uuid, ApiFault> {
+pub(super) fn operation_id(headers: &HeaderMap) -> Result<Uuid, ApiFault> {
     headers
         .get(OPERATION_HEADER)
         .and_then(|value| value.to_str().ok())

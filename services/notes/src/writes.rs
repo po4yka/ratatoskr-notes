@@ -6,6 +6,7 @@
 mod conflict;
 mod consumer;
 mod merge;
+mod mode;
 mod queue;
 mod report;
 mod request;
@@ -26,6 +27,7 @@ use request::Request;
 
 pub(crate) use conflict::MAX_SIDE_BYTES;
 pub use consumer::{COMMAND_STREAM, DurableError, WRITE_DURABLE, WRITE_FILTER, WriteConsumer};
+pub use mode::{ModeChange, WRITE_MODE_OPERATION_KIND};
 
 /// What [`Writes::handle`] did with one command.
 #[derive(Debug, Clone, PartialEq, Eq)]

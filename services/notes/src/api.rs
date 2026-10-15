@@ -41,6 +41,7 @@ mod device_connect;
 mod fault;
 mod read;
 mod removals;
+mod write_mode;
 
 use crate::systemd::{JobResult, SystemdBus, UnitName};
 use fault::ApiFault;
@@ -445,6 +446,10 @@ pub fn domain_router<B: SystemdBus>(state: ApiState<B>) -> Router {
         .route(
             "/v1/notes/connections/{connection_id}/excluded-folders",
             put(set_excluded_folders::<B>),
+        )
+        .route(
+            "/v1/notes/connections/{connection_id}/write-mode",
+            put(write_mode::put_write_mode::<B>),
         )
         .route(
             "/v1/notes/connections/{connection_id}/blobs",
