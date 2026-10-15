@@ -204,3 +204,70 @@ async fn foreign_device_reads_nothing() {
 
     writer.cleanup().await;
 }
+
+#[tokio::test]
+async fn cursor_never_skips_a_later_delivered_write() {
+    let writer = Writer::new().await;
+    let x0: &[u8] = b"# X\n\nIn the vault.\n";
+    let x1: &[u8] = b"# X\n\nThe first edit.\n";
+    let x2: &[u8] = b"# X\n\nThe second edit.\n";
+    let y0: &[u8] = b"# Y\n\nIn the vault.\n";
+    let y1: &[u8] = b"# Y\n\nAn edit.\n";
+    let connection = writer.vault(&[("X.md", x0), ("Y.md", y0)]).await;
+    // W1 and W2 edit X.md in turn; W3 edits Y.md. W2 is accepted before W3 and waits behind W1.
+    let mut sent = Vec::new();
+    for (path, base, bytes) in [("X.md", x0, x1), ("X.md", x1, x2), ("Y.md", y0, y1)] {
+        let blob = writer.stage(connection, bytes).await;
+        let write = command(connection, &update(path, &sha256(base), &blob));
+        assert!(matches!(writer.send(&write).await, Handled::Queued { .. }));
+        sent.push(write);
+    }
+    let device = device_of(OWNER);
+
+    let first = writer
+        .device_operations(OWNER, device, connection, None)
+        .await;
+    let ids: Vec<Value> = operations(&first.body)
+        .iter()
+        .map(|operation| operation["operation_id"].clone())
+        .collect();
+    assert_eq!(
+        ids,
+        [
+            json!(sent[0].operation_id.to_string()),
+            json!(sent[2].operation_id.to_string())
+        ],
+        "the device reads W1 and W3"
+    );
+    let answer = writer
+        .device_result(
+            OWNER,
+            device,
+            connection,
+            &sent[0].operation_id.to_string(),
+            json!({ "outcome": "applied", "sha256": sha256(x1) }),
+        )
+        .await;
+    assert_eq!(answer.status, StatusCode::OK, "{:?}", answer.body);
+
+    // W1 is acknowledged, so W2 is delivered now; the cursor of the first read must not hide it.
+    let next = writer
+        .device_operations(
+            OWNER,
+            device,
+            connection,
+            first.body["next_cursor"].as_str(),
+        )
+        .await;
+    let ids: Vec<Value> = operations(&next.body)
+        .iter()
+        .map(|operation| operation["operation_id"].clone())
+        .collect();
+    assert_eq!(
+        ids,
+        [json!(sent[1].operation_id.to_string())],
+        "the device reads W2 after the cursor of its first read"
+    );
+
+    writer.cleanup().await;
+}
