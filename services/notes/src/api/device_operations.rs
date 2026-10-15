@@ -157,7 +157,7 @@ pub(super) async fn read_content<B: SystemdBus>(
 /// device did. An `applied` result names bytes that the device uploaded to this connection first;
 /// otherwise the answer is `409` `notes.channel.bytes_missing` with the hash, and the device sends
 /// the result again after the upload. A result for an operation that already ended answers its end
-/// again.
+/// again; for a rename whose rewrites did not all end, it ends those that are still delivering.
 pub(super) async fn post_result<B: SystemdBus>(
     State(state): State<ApiState<B>>,
     headers: HeaderMap,
@@ -177,7 +177,12 @@ pub(super) async fn post_result<B: SystemdBus>(
         ApiFault::Unavailable
     };
     let rewrites = rewrites_of(&state, &write).await?;
-    if write.state == "delivering" {
+    // The rename and each rewrite end in transactions of their own. When the service failed
+    // between two of them, the device sends the result again: the writes that are still
+    // delivering end then, and a write that ended stays as it ended.
+    let open =
+        write.state == "delivering" || rewrites.iter().any(|member| member.state == "delivering");
+    if open {
         match result {
             DeviceResult::Applied {
                 sha256,

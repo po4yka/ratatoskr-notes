@@ -308,7 +308,9 @@ always comes after that read's `next_cursor`. Each operation has `operation_id`,
   "<typed code>"}`, and answers `{"operation_id": ..., "state": "succeeded" | "failed" |
   "delivering"}`. An `applied` hash names bytes that the device uploaded to the connection first;
   otherwise the answer is `409` `notes.channel.bytes_missing` with the hash, and the device sends
-  the result again after the upload. A result for an operation that ended answers its end again.
+  the result again after the upload. A result for an operation that ended answers its end again;
+  for a rename whose rewrites did not all end, a result sent again ends those still delivering, so
+  a device sends a result again until it gets `200`.
   An unknown operation answers `404` `notes.device_operation.not_found`.
 
 **Reports.** Notes is the only reporter of `notes.file.write`. Each report goes to the outbox as
