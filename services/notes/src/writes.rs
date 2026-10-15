@@ -122,6 +122,9 @@ const INVALID: &str = "notes.request.invalid";
 /// The code of a connection that the tenant does not hold.
 const CONNECTION_NOT_FOUND: &str = "notes.connection.not_found";
 
+/// The code of a write whose content notes does not hold for its connection.
+const CONTENT_MISSING: &str = "notes.write.content_missing";
+
 /// The code of a write that met a revision that its writer did not see.
 const CONFLICT: &str = "notes.write.conflict";
 
@@ -139,7 +142,9 @@ impl Writes {
     }
 
     /// Take one write command: queue it at the end of the queue of its file, and deliver it when
-    /// it is the head.
+    /// it is the head. The content that the write names must be bytes that the connection
+    /// uploaded or holds as a revision, with the declared length; otherwise the command is
+    /// refused with `notes.write.content_missing`.
     ///
     /// # Errors
     ///
@@ -156,6 +161,17 @@ impl Writes {
                 code: CONNECTION_NOT_FOUND,
             });
         };
+        if let Some(digest) = &request.content_hash {
+            let usable = self
+                .recorder
+                .usable_length(&mut transaction, digest)
+                .await?;
+            if usable != request.content_length {
+                return Ok(Handled::Refused {
+                    code: CONTENT_MISSING,
+                });
+            }
+        }
         let write_id = Uuid::now_v7();
         transaction
             .insert_write(&request.new_write(write_id))

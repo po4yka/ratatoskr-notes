@@ -649,6 +649,20 @@ const DEVICE_ID_HEADER: &str = "x-ratatoskr-device-id";
 /// The claim that names the kind of that device, for example `obsidian_plugin`.
 const DEVICE_KIND_HEADER: &str = "x-ratatoskr-device-kind";
 
+/// The claim that names the kind of the session of a request without a device, for example
+/// `browser` (OBS-024: the owner's session uploads the content of a write).
+const SESSION_KIND_HEADER: &str = "x-ratatoskr-session-kind";
+
+/// Whether the request comes from a session of the owner and not from a paired device: Edge minted
+/// a session kind and no device id.
+fn is_session(headers: &HeaderMap) -> bool {
+    headers.get(DEVICE_ID_HEADER).is_none()
+        && headers
+            .get(SESSION_KIND_HEADER)
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|kind| !kind.is_empty() && kind != "device")
+}
+
 /// The device of a request on a device route, from the claims that Edge mints.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct DeviceClaim<'a> {

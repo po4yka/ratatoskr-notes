@@ -7,7 +7,9 @@
 //! - `GET .../blobs/{token}/status` answers the resume view;
 //! - `POST .../blobs/{token}/finalize` answers `stored` or `digest_mismatch` at `200`.
 //!
-//! Only the device of the connection uploads, as for its change batches.
+//! The device of the connection uploads the bytes of its changes. The owner's session uploads the
+//! content of a write (OBS-024): an upload registers the bytes for the connection, and only a
+//! write that the channel acknowledges makes them a revision.
 
 use axum::Json;
 use axum::body::Bytes;
@@ -20,7 +22,7 @@ use ratatoskr_blob_transfer_contracts::{
 };
 use uuid::Uuid;
 
-use super::{ApiFault, ApiState, device_claim, owner};
+use super::{ApiFault, ApiState, device_claim, is_session, owner};
 use crate::channel::device_kind_of;
 use crate::systemd::SystemdBus;
 use crate::uploads::UploadRefusal;
@@ -29,15 +31,26 @@ use crate::uploads::UploadRefusal;
 pub(super) const MAX_CHUNK_BYTES: usize =
     ratatoskr_blob_transfer_contracts::CHUNK_SIZE_MAX_BYTES as usize;
 
-/// The connection exists for this owner, and the request comes from its device, of the kind of
-/// its channel. A connection of another owner answers `404`; another device or kind answers
-/// `notes.channel_mismatch`.
+/// The connection exists for this owner, and the request comes from the owner's session or from
+/// the device of the connection, of the kind of its channel. A connection of another owner
+/// answers `404`; another device or kind answers `notes.channel_mismatch`.
 async fn authorize<B: SystemdBus>(
     state: &ApiState<B>,
     headers: &HeaderMap,
     connection_id: Uuid,
 ) -> Result<(), ApiFault> {
     let owner_id = owner(headers)?;
+    if is_session(headers) {
+        let connection = state
+            .database
+            .connection_of_owner(owner_id, connection_id)
+            .await
+            .map_err(|error| {
+                tracing::error!(%error, "a connection could not be read");
+                ApiFault::Unavailable
+            })?;
+        return connection.map(|_| ()).ok_or(ApiFault::NotFound);
+    }
     let device = device_claim(headers)?;
     let connection = state
         .database

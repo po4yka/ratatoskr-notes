@@ -8,7 +8,7 @@ use axum::extract::{Path, State};
 use axum::http::HeaderMap;
 use uuid::Uuid;
 
-use super::{ApiFault, ApiState, DeviceClaim, device_claim, owner};
+use super::{ApiFault, ApiState, DeviceClaim, device_claim, is_session, owner};
 use crate::channel::{self, BatchOutcome, DeviceChange, Sender};
 use crate::manifest::{self, ManifestEntry, ManifestOutcome};
 use crate::systemd::SystemdBus;
@@ -43,6 +43,10 @@ pub(super) async fn post_changes<B: SystemdBus>(
     body: Result<Json<ChangeBatch>, JsonRejection>,
 ) -> Result<Json<BatchCommitted>, ApiFault> {
     let owner_id = owner(&headers)?;
+    // A session uploads the content of a write; only the device sends changes.
+    if is_session(&headers) {
+        return Err(ApiFault::ChannelMismatch);
+    }
     let device = device_claim(&headers)?;
     let sender = sender(owner_id, device);
     let Path(connection_id) = connection_id.map_err(|_| ApiFault::NotFound)?;
@@ -110,6 +114,10 @@ pub(super) async fn post_manifest<B: SystemdBus>(
     body: Result<Json<Manifest>, JsonRejection>,
 ) -> Result<Json<ManifestAnswer>, ApiFault> {
     let owner_id = owner(&headers)?;
+    // A session uploads the content of a write; only the device sends changes.
+    if is_session(&headers) {
+        return Err(ApiFault::ChannelMismatch);
+    }
     let device = device_claim(&headers)?;
     let sender = sender(owner_id, device);
     let Path(connection_id) = connection_id.map_err(|_| ApiFault::NotFound)?;
