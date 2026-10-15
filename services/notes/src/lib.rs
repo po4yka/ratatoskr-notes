@@ -28,6 +28,7 @@ pub mod systemd;
 mod tree_sync;
 pub mod uploads;
 pub mod watcher;
+pub mod writes;
 
 use std::future::Future;
 use std::path::PathBuf;
