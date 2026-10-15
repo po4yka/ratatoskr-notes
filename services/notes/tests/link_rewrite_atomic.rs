@@ -375,3 +375,63 @@ async fn a_retried_result_settles_the_rest_of_the_group() {
 
     writer.cleanup().await;
 }
+
+#[tokio::test]
+async fn a_rename_that_the_device_fails_ends_the_group_with_its_code() {
+    let writer = Writer::new().await;
+    let a = b"# A\n";
+    let x0 = b"[[A]]\n";
+    let connection = writer.vault(&[("A.md", a), ("X.md", x0)]).await;
+    let renamed = command(connection, &rename("A.md", &sha256(a), "B.md"));
+    assert!(matches!(
+        writer.send(&renamed).await,
+        Handled::Queued { .. }
+    ));
+    let device = device_of(OWNER);
+    let read = writer
+        .device_operations(OWNER, device, connection, None)
+        .await;
+    let operation_id = read.body["operations"][0]["operation_id"]
+        .as_str()
+        .expect("the rename is in the queue")
+        .to_owned();
+
+    let answer = writer
+        .device_result(
+            OWNER,
+            device,
+            connection,
+            &operation_id,
+            json!({ "outcome": "failed", "code": "notes.write.unsupported" }),
+        )
+        .await;
+    assert_eq!(answer.status, StatusCode::OK, "{:?}", answer.body);
+
+    assert_eq!(
+        writer.outcome(&renamed).await,
+        Some(Outcome::Failed {
+            code: "notes.write.unsupported".to_owned(),
+            conflict_id: None
+        })
+    );
+    let terminal: Vec<Value> = writer
+        .reports(renamed.operation_id)
+        .await
+        .into_iter()
+        .filter(|report| report["status"] == "failed")
+        .map(|report| report["error"]["code"].clone())
+        .collect();
+    assert_eq!(
+        terminal,
+        [json!("notes.write.unsupported")],
+        "one terminal report with the code of the device"
+    );
+    assert_eq!(
+        writer.events_of(connection, RAISED).await,
+        Vec::<Value>::new(),
+        "a failure of the device is no conflict"
+    );
+    assert_eq!(writer.current(connection, "X.md").await, Some(sha256(x0)));
+
+    writer.cleanup().await;
+}
