@@ -253,8 +253,8 @@ impl Ended<'_> {
         }
     }
 
-    /// `applied`: acknowledge the write with `sha256` and each rewrite as `results` says. Every
-    /// hash is checked before anything is recorded.
+    /// `applied`: end each rewrite as `results` says, then acknowledge the write with `sha256`.
+    /// Every hash is checked before anything is recorded.
     async fn applied(
         &self,
         sha256: Option<String>,
@@ -275,10 +275,8 @@ impl Ended<'_> {
             Some(digest)
         };
         let fault = |error: crate::writes::WriteError| unavailable(self.connection_id, &error);
-        self.writes
-            .acknowledge(self.connection_id, self.write.write_id, revision.as_deref())
-            .await
-            .map_err(fault)?;
+        // Each rewrite ends before the rename: when a step fails, the rename is still delivering,
+        // so the operation stays in the queue and the device sends its result again.
         for (member, end) in ends {
             match end {
                 RewriteEnd::Applied(digest) => {
@@ -294,6 +292,10 @@ impl Ended<'_> {
             }
             .map_err(fault)?;
         }
+        self.writes
+            .acknowledge(self.connection_id, self.write.write_id, revision.as_deref())
+            .await
+            .map_err(fault)?;
         Ok(())
     }
 

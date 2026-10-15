@@ -298,7 +298,8 @@ always comes after that read's `next_cursor`. Each operation has `operation_id`,
   knows it). A `rename` or a `move` whose links notes rewrites also has `rewrites`: for each
   linking note, `path`, `base_hash` and `expected_sha256`; the rewrites themselves are no
   operations of the queue, because Obsidian rewrites the links when the device renames the file.
-  An operation stays in the queue until its result arrives.
+  An operation stays in the queue until its result arrives; a rename with rewrites stays
+  while any of them is open.
 - `GET .../device-operations/{operation_id}/content` streams the bytes of `content`.
 - `POST .../device-operations/{operation_id}/result` takes `{"outcome": "applied", "sha256": "<hash
   of the file at the path, or at the target of a rename>"}` (no hash after a `delete`; a rename

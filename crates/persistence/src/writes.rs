@@ -687,7 +687,8 @@ impl Database {
     /// The delivering writes of `connection_id` after the delivery sequence `after`, at most
     /// `limit`, in the order of delivery: the queue that the device of a `plugin` or `cli`
     /// connection reads. A link rewrite of a write group is not in it: the device applies the
-    /// rename, and Obsidian rewrites the links.
+    /// rename, and Obsidian rewrites the links. The rename of a group stays in it while any write
+    /// of the group is delivering, so that a device sends its result again.
     ///
     /// # Errors
     ///
@@ -699,10 +700,14 @@ impl Database {
         limit: i64,
     ) -> Result<Vec<WriteRow>, PersistenceError> {
         sqlx::query_as(&format!(
-            "select {WRITE_COLUMNS} from notes.writes
-             where connection_id = $1 and state = 'delivering' and delivery_sequence > $2
-               and (group_id is null or group_id = write_id)
-             order by delivery_sequence limit $3"
+            "select {WRITE_COLUMNS} from notes.writes w
+             where w.connection_id = $1 and w.delivery_sequence > $2
+               and ((w.group_id is null and w.state = 'delivering')
+                    or (w.group_id = w.write_id
+                        and exists (select 1 from notes.writes m
+                                    where m.connection_id = $1 and m.group_id = w.write_id
+                                      and m.state = 'delivering')))
+             order by w.delivery_sequence limit $3"
         ))
         .bind(connection_id)
         .bind(after)
