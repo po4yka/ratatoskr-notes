@@ -363,10 +363,12 @@ impl<B: SystemdBus> ApiState<B> {
                 .fail_connection_reporting(connection_id, &operation::events_of(&report))
                 .await
             {
-                Ok(_) => {
+                Ok(true) => {
                     tracing::info!(%connection_id, "a login that a stop interrupted is failed");
                     self.after_terminal_state(connection_id).await;
                 }
+                // The connection is no longer `connecting`: nothing was failed or reported.
+                Ok(false) => {}
                 Err(error) => {
                     tracing::error!(%error, %connection_id, "an interrupted login could not be failed");
                 }
