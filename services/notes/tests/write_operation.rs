@@ -54,7 +54,7 @@ async fn write_reports_to_success() {
         steps(&reports),
         vec![
             ("running".to_owned(), Some("queued".to_owned())),
-            ("running".to_owned(), Some("delivering".to_owned())),
+            ("running".to_owned(), Some("awaiting_device".to_owned())),
             ("succeeded".to_owned(), None),
         ]
     );

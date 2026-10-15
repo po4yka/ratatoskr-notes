@@ -56,6 +56,26 @@ async fn own_write_is_acknowledged_once() {
         writer.current(connection, "Plan.md").await,
         Some(sha256(mine))
     );
+    let stages: Vec<(String, String)> = writer
+        .reports(write.operation_id)
+        .await
+        .iter()
+        .map(|report| {
+            (
+                report["status"].as_str().unwrap_or_default().to_owned(),
+                report["stage"].as_str().unwrap_or_default().to_owned(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        stages,
+        [
+            ("running".to_owned(), "queued".to_owned()),
+            ("running".to_owned(), "awaiting_obsidian".to_owned()),
+            ("succeeded".to_owned(), String::new()),
+        ],
+        "a sync write waits for Obsidian Sync"
+    );
 
     writer.cleanup().await;
 }

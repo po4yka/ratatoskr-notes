@@ -33,13 +33,13 @@ async fn offline_device_delivers_on_reconnect() {
     let write = command(connection, &update("Plan.md", &sha256(base), &blob));
     assert!(matches!(writer.send(&write).await, Handled::Queued { .. }));
 
-    // The device has not connected: the write waits for it.
+    // The device has not connected: the write waits for it, and its stage names the wait.
     assert_eq!(writer.outcome(&write).await, Some(Outcome::Pending));
     let reports = writer.reports(write.operation_id).await;
     let last = reports.last().expect("a report");
     assert_eq!(
         (&last["status"], &last["stage"]),
-        (&json!("running"), &json!("delivering")),
+        (&json!("running"), &json!("awaiting_device")),
         "{reports:?}"
     );
 
