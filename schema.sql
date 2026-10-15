@@ -64,6 +64,11 @@ create table notes.connections (
     -- Whether Ratatoskr may write into the vault (OBS-024 design D8). Every connection starts
     -- `off`; the owner turns it on.
     write_mode         text        not null default 'off',
+    -- The delivery sequence of the last write of this connection that became `delivering`. Each
+    -- delivery takes the next number under the lock of this row, so the numbers of one connection
+    -- grow in the order of delivery; the device of a `plugin` or `cli` connection reads its queue
+    -- by them (OBS-024 design D5).
+    last_delivery      bigint      not null default 0,
     created_at         timestamptz not null,
     updated_at         timestamptz not null,
 
@@ -90,7 +95,9 @@ create table notes.connections (
     constraint connections_excluded_folders_are_bounded
         check (cardinality(excluded_folders) <= 64),
     constraint connections_write_mode_is_known
-        check (write_mode in ('off', 'on'))
+        check (write_mode in ('off', 'on')),
+    constraint connections_last_delivery_is_not_negative
+        check (last_delivery >= 0)
 );
 
 comment on table notes.connections is
@@ -246,8 +253,10 @@ comment on table notes.path_collisions is
 -- that key. Only the head of a queue is delivered, and a `rename` or a `move` only when it is the
 -- head of both queues; the next write waits until the channel acknowledged or refused the head
 -- (OBS-024 design D1). A write keeps its row after it ended. The delivering writes of a `plugin` or
--- `cli` connection, in the order of `position`, are the queue that its device reads (design D5);
--- `position` is the cursor of that queue.
+-- `cli` connection, in the order of `delivery_sequence`, are the queue that its device reads (design
+-- D5); `delivery_sequence` is the cursor of that queue. It is not `position`: a write is delivered
+-- only after the writes before it on its path, so the order of delivery differs from the order of
+-- acceptance across paths.
 create table notes.writes (
     write_id       uuid        primary key,
     connection_id  uuid        not null references notes.connections (connection_id),
@@ -285,6 +294,9 @@ create table notes.writes (
     property_change text,
     -- `queued`, then `delivering`, then `succeeded` or `failed`.
     state          text        not null,
+    -- The number of the delivery of this write in its connection, from `connections.last_delivery`;
+    -- null until the write is delivering.
+    delivery_sequence bigint,
     -- The SHA-256 of the file after a write that succeeded; null after a delete.
     revision       text,
     -- The error code of a write that failed.
@@ -311,6 +323,9 @@ create table notes.writes (
         check ((kind = 'resolve_conflict') = (resolves is not null and choice is not null)),
     constraint writes_choice_is_known
         check (choice in ('keep_current', 'keep_writer', 'accept_merge', 'custom')),
+    constraint writes_one_per_delivery unique (connection_id, delivery_sequence),
+    constraint writes_delivery_is_numbered
+        check (state <> 'delivering' or delivery_sequence is not null),
     constraint writes_target_has_its_key
         check ((target_path is null) = (target_path_key is null)),
     constraint writes_property_names_its_change
@@ -331,7 +346,7 @@ create index writes_open_target_idx on notes.writes (connection_id, target_path_
     where state in ('queued', 'delivering') and target_path_key is not null;
 
 -- The queue that the device of a `plugin` or `cli` connection reads.
-create index writes_delivering_idx on notes.writes (connection_id, position)
+create index writes_delivering_idx on notes.writes (connection_id, delivery_sequence)
     where state = 'delivering';
 
 -- Every operation that waits for a write: the first one, and each one that repeated its

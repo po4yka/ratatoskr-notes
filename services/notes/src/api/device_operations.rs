@@ -60,7 +60,8 @@ pub(super) enum DeviceResult {
 }
 
 /// `GET /v1/notes/connections/{id}/device-operations?after=<cursor>`: at most 256 delivered writes
-/// after the cursor, and the cursor to read on.
+/// after the cursor, in the order of delivery, and the cursor to read on. The cursor is the delivery
+/// sequence of the connection, so a write that is delivered later always has a later cursor.
 pub(super) async fn list_operations<B: SystemdBus>(
     State(state): State<ApiState<B>>,
     headers: HeaderMap,
@@ -85,7 +86,10 @@ pub(super) async fn list_operations<B: SystemdBus>(
             tracing::error!(%error, %connection_id, "the queue of a device could not be read");
             ApiFault::Unavailable
         })?;
-    let next = writes.last().map_or(after, |write| write.position);
+    let next = writes
+        .last()
+        .and_then(|write| write.delivery_sequence)
+        .unwrap_or(after);
     Ok(Json(json!({
         "operations": writes.iter().map(operation_view).collect::<Vec<_>>(),
         "next_cursor": next.to_string(),
@@ -285,7 +289,7 @@ fn operation_view(write: &WriteRow) -> Value {
     };
     json!({
         "operation_id": write.operation_id,
-        "cursor": write.position.to_string(),
+        "cursor": write.delivery_sequence.unwrap_or_default().to_string(),
         "kind": kind,
         "path": write.path,
         "target_path": write.target_path,

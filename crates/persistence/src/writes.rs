@@ -87,8 +87,11 @@ pub struct WriteRow {
     pub property_key: Option<String>,
     /// `set` or `remove` for a `set_property`.
     pub property_change: Option<String>,
-    /// The order of acceptance in the connection: the cursor of the queue of a device.
+    /// The order of acceptance in the connection.
     pub position: i64,
+    /// The number of the delivery of the write in its connection: the cursor of the queue of a
+    /// device. `None` until the write is delivering.
+    pub delivery_sequence: Option<i64>,
 }
 
 /// An open conflict of a connection, as a resolution reads it.
@@ -156,7 +159,7 @@ pub struct ConflictRow {
 const WRITE_COLUMNS: &str =
     "write_id, connection_id, operation_id, origin, kind, path, path_key, target_path,
      base_hash, content_hash, content_length, state, revision, error_code, conflict_id, resolves,
-     choice, target_path_key, property_key, property_change, position";
+     choice, target_path_key, property_key, property_change, position, delivery_sequence";
 
 impl<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow> for WriteRow {
     fn from_row(row: &'r sqlx::postgres::PgRow) -> Result<Self, sqlx::Error> {
@@ -185,6 +188,7 @@ impl<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow> for WriteRow {
             property_key: row.try_get("property_key")?,
             property_change: row.try_get("property_change")?,
             position: row.try_get("position")?,
+            delivery_sequence: row.try_get("delivery_sequence")?,
         })
     }
 }
@@ -321,14 +325,30 @@ impl FileTransaction {
         Ok(row)
     }
 
-    /// Mark the write `write_id` `delivering`.
+    /// Mark the write `write_id` `delivering`, with the next delivery sequence of its connection.
     ///
     /// # Errors
     ///
     /// [`PersistenceError::Query`] when the statement fails.
     pub async fn deliver_write(&mut self, write_id: Uuid) -> Result<(), PersistenceError> {
-        self.set_write_state(write_id, "delivering", None, None)
-            .await
+        // The lock of the connection row orders the deliveries of one connection, so the numbers
+        // grow in the order in which the deliveries commit.
+        sqlx::query(
+            "with next as (
+                 update notes.connections set last_delivery = last_delivery + 1
+                 where connection_id = $1
+                 returning last_delivery)
+             update notes.writes
+                set state = 'delivering', delivery_sequence = (select last_delivery from next),
+                    updated_at = now()
+              where connection_id = $1 and write_id = $2",
+        )
+        .bind(self.connection_id)
+        .bind(write_id)
+        .execute(&mut *self.transaction)
+        .await
+        .map_err(query_error)?;
+        Ok(())
     }
 
     /// End the write `write_id` as `succeeded` with the file at `revision`, or no file after a
@@ -606,8 +626,9 @@ impl Database {
         .map_err(query_error)
     }
 
-    /// The delivering writes of `connection_id` after the position `after`, at most `limit`, in
-    /// the order of acceptance: the queue that the device of a `plugin` or `cli` connection reads.
+    /// The delivering writes of `connection_id` after the delivery sequence `after`, at most
+    /// `limit`, in the order of delivery: the queue that the device of a `plugin` or `cli`
+    /// connection reads.
     ///
     /// # Errors
     ///
@@ -620,8 +641,8 @@ impl Database {
     ) -> Result<Vec<WriteRow>, PersistenceError> {
         sqlx::query_as(&format!(
             "select {WRITE_COLUMNS} from notes.writes
-             where connection_id = $1 and state = 'delivering' and position > $2
-             order by position limit $3"
+             where connection_id = $1 and state = 'delivering' and delivery_sequence > $2
+             order by delivery_sequence limit $3"
         ))
         .bind(connection_id)
         .bind(after)

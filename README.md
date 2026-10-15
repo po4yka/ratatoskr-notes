@@ -241,7 +241,7 @@ read-only group access of owner decision B does not give: the deploy role must c
 write mode is turned on for a `sync` connection.
 
 **Device queue.** The delivered writes of a `plugin` or `cli` connection, in the order of
-acceptance, are the queue that its device reads through Edge, with the device claims. Only the
+delivery, are the queue that its device reads through Edge, with the device claims. Only the
 device that the connection registered, of the kind of its channel, reads or answers it; any other
 device, also one of the owner, gets `404` `notes.connection.not_found`. A `rename` or a `move` is in
 the queue of its path and of its target, and is delivered only at the head of both, so a later write
@@ -249,7 +249,9 @@ of the new path reaches the device after it.
 
 - `GET /v1/notes/connections/{id}/device-operations?after=<cursor>` answers
   `{"operations": [...], "next_cursor": "<cursor>"}` with at most 256 operations after the cursor
-  (from the start when it is absent). Each operation has `operation_id`, `cursor`, `kind`
+  (from the start when it is absent). The cursor is the delivery sequence of the connection: each
+write takes the next number when it becomes delivering, so a write that is delivered after a read
+always comes after that read's `next_cursor`. Each operation has `operation_id`, `cursor`, `kind`
   (`create`, `update`, `rename`, `move`, `delete` or `set_property`; a conflict resolution is an
   `update`, or a `create` of a deleted file), `path`, `target_path`, `base_hash` (the hash that the
   local file must have; `null` for a `create`), `content` (the notes-owned `BlobRef` of the bytes
