@@ -283,11 +283,15 @@ fn spawn_server(
     mut stop: tokio::sync::watch::Receiver<bool>,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
-        let served = axum::serve(listener, router)
-            .with_graceful_shutdown(async move {
-                let _ = stop.wait_for(|stopping| *stopping).await;
-            })
-            .await;
+        // The peer address reaches the routes, so that `/internal/` answers only loopback.
+        let served = axum::serve(
+            listener,
+            router.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+        )
+        .with_graceful_shutdown(async move {
+            let _ = stop.wait_for(|stopping| *stopping).await;
+        })
+        .await;
         if let Err(error) = served {
             tracing::error!(%error, "a listener stopped with an error");
         }

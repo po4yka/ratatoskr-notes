@@ -105,10 +105,20 @@ async fn index_route_returns_resolved_links_embeds_frontmatter_and_revision() {
 
 /// The status and the body of `GET path` on the domain router, from the peer `peer`.
 async fn get_from(writer: &Writer, path: &str, peer: &str) -> (StatusCode, Vec<u8>) {
+    send_from(writer, Method::GET, path, peer).await
+}
+
+/// The status and the body of `method path` on the domain router, from the peer `peer`.
+async fn send_from(
+    writer: &Writer,
+    method: Method,
+    path: &str,
+    peer: &str,
+) -> (StatusCode, Vec<u8>) {
     use http_body_util::BodyExt as _;
     use tower::ServiceExt as _;
     let mut request = axum::http::Request::builder()
-        .method(Method::GET)
+        .method(method)
         .uri(path)
         .body(axum::body::Body::empty())
         .expect("a request");
@@ -154,6 +164,11 @@ async fn internal_route_refuses_a_non_loopback_peer() {
             get_from(&writer, &route, peer).await,
             unknown,
             "the route answers {peer} exactly as an unknown route"
+        );
+        assert_eq!(
+            send_from(&writer, Method::POST, &route, peer).await,
+            send_from(&writer, Method::POST, "/internal/unknown", peer).await,
+            "another method from {peer} is also an unknown route"
         );
     }
 

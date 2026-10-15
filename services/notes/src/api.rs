@@ -496,7 +496,8 @@ pub fn domain_router<B: SystemdBus>(state: ApiState<B>) -> Router {
         )
         .route(
             "/internal/connections/{connection_id}/files",
-            get(internal::list_indexed_files::<B>),
+            get(internal::list_indexed_files::<B>)
+                .layer(axum::middleware::from_fn(internal::loopback_only)),
         )
         .route(
             "/v1/notes/connections/{connection_id}/changes",

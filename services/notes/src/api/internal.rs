@@ -4,7 +4,9 @@
 //!
 //! The route is under `/internal/`, as Knowledge serves `/internal/search`. It is on the domain
 //! listener, which binds loopback, and it is not reached through Edge: Edge proxies only
-//! `/v1/notes`. It reads no claim of Edge, because no user calls it.
+//! `/v1/notes`. It reads no claim of Edge, because no user calls it. It also answers only a
+//! loopback peer: any other peer, and a request whose peer is not known, gets exactly the answer of
+//! an unknown route, so the route is not disclosed when the listener is bound wider by mistake.
 //!
 //! The answer is `{"files": [...]}`, in the order of the paths. Each file has `path`, `revision`
 //! (the notes-owned `BlobRef` of its current revision), `frontmatter` (an object, or `null`),
@@ -13,9 +15,14 @@
 //! resolver finds for it, or `null` when it is unresolved. The resolution is the one of the read
 //! routes (workspace change `add-notes-vault-connections`).
 
+use std::net::SocketAddr;
+
 use axum::Json;
 use axum::extract::rejection::PathRejection;
-use axum::extract::{Path, State};
+use axum::extract::{ConnectInfo, Path, Request, State};
+use axum::http::StatusCode;
+use axum::middleware::Next;
+use axum::response::{IntoResponse as _, Response};
 use ratatoskr_notes_index::{Link, NoteIndex, Vault};
 use ratatoskr_notes_persistence::IndexedRow;
 use serde_json::{Value, json};
@@ -23,6 +30,20 @@ use uuid::Uuid;
 
 use super::{ApiFault, ApiState};
 use crate::systemd::SystemdBus;
+
+/// Pass a request from a loopback peer to the route, and answer any other as an unknown route:
+/// `404` with an empty body.
+pub(super) async fn loopback_only(request: Request, next: Next) -> Response {
+    let loopback = request
+        .extensions()
+        .get::<ConnectInfo<SocketAddr>>()
+        .is_some_and(|ConnectInfo(peer)| peer.ip().to_canonical().is_loopback());
+    if loopback {
+        next.run(request).await
+    } else {
+        StatusCode::NOT_FOUND.into_response()
+    }
+}
 
 /// `GET /internal/connections/{connection_id}/files`. A connection that does not exist, or that
 /// failed or was removed, answers `404` `notes.connection.not_found`.
