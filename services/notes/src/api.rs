@@ -199,6 +199,30 @@ impl<B: SystemdBus> ApiState<B> {
         self
     }
 
+    /// The answer to a device request for a connection that takes no changes: `410`
+    /// `notes.connection.removed` when its owner removed it and its own device asks, so that the
+    /// device stops; `404` `notes.connection.not_found` otherwise, for a connection that failed,
+    /// of another owner or of another device, so that nothing leaks.
+    async fn missing_connection(
+        &self,
+        owner_id: Uuid,
+        device_id: Uuid,
+        connection_id: Uuid,
+    ) -> ApiFault {
+        match self
+            .database
+            .removed_for_device(owner_id, connection_id, device_id)
+            .await
+        {
+            Ok(true) => ApiFault::ConnectionRemoved,
+            Ok(false) => ApiFault::NotFound,
+            Err(error) => {
+                tracing::error!(%error, %connection_id, "a connection could not be read");
+                ApiFault::Unavailable
+            }
+        }
+    }
+
     /// The recorder of the file changes, with the blob store and the size limit of the settings.
     fn recorder(&self) -> FileRecorder {
         FileRecorder::new(self.database.clone(), self.blobs.clone())

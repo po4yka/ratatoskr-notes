@@ -46,8 +46,12 @@ async fn authorize<B: SystemdBus>(
         .map_err(|error| {
             tracing::error!(%error, "a connection could not be read");
             ApiFault::Unavailable
-        })?
-        .ok_or(ApiFault::NotFound)?;
+        })?;
+    let Some(connection) = connection else {
+        return Err(state
+            .missing_connection(owner_id, device.device_id, connection_id)
+            .await);
+    };
     if device_kind_of(&connection.channel) != Some(device.kind)
         || connection.device_id != Some(device.device_id)
     {

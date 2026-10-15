@@ -58,6 +58,9 @@ pub(super) async fn post_changes<B: SystemdBus>(
         BatchOutcome::Committed(committed_sequence) => {
             Ok(Json(BatchCommitted { committed_sequence }))
         }
+        BatchOutcome::NotFound => Err(state
+            .missing_connection(owner_id, sender.device_id, connection_id)
+            .await),
         refused => Err(fault(refused)),
     }
 }
@@ -134,6 +137,9 @@ pub(super) async fn post_manifest<B: SystemdBus>(
                 committed_sequence: committed,
             }))
         }
+        ManifestOutcome::Refused(BatchOutcome::NotFound) => Err(state
+            .missing_connection(owner_id, sender.device_id, connection_id)
+            .await),
         ManifestOutcome::Refused(refused) => Err(fault(refused)),
     }
 }

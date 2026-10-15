@@ -113,7 +113,9 @@ owner can send the request again.
 
 The plugin and the export agent send the changes of a vault in one format (workspace design D5 and
 D6). Each request carries the owner claim and the device claims of Edge. A connection of another
-owner answers `404` with `notes.connection.not_found`. A device of another kind than the channel,
+owner, or one that failed, answers `404` with `notes.connection.not_found`. A connection that its
+owner removed answers `410` with `notes.connection.removed` to its own device, so that the device
+stops and does not connect again. A device of another kind than the channel,
 or another device than the one that created the connection, answers `409` with
 `notes.channel_mismatch`.
 

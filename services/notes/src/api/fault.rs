@@ -43,6 +43,7 @@ pub(super) enum ApiFault {
         channel: String,
     },
     NotFound,
+    ConnectionRemoved,
     FileNotFound,
     ChannelMismatch,
     SequenceGap {
@@ -76,6 +77,7 @@ impl ApiFault {
             | Self::SequenceGap { .. }
             | Self::BytesMissing { .. } => StatusCode::CONFLICT,
             Self::BatchTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
+            Self::ConnectionRemoved => StatusCode::GONE,
             Self::Login(_) => StatusCode::UNPROCESSABLE_ENTITY,
             Self::CleanupFailed | Self::Unavailable => StatusCode::SERVICE_UNAVAILABLE,
         }
@@ -120,6 +122,11 @@ impl ApiFault {
             Self::BytesMissing { .. } => (
                 "notes.channel.bytes_missing",
                 "Upload the bytes of the listed hashes, then send the batch again.",
+                false,
+            ),
+            Self::ConnectionRemoved => (
+                "notes.connection.removed",
+                "The owner removed this connection. Stop sending changes for it.",
                 false,
             ),
             Self::FileNotFound => (

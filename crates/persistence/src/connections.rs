@@ -508,6 +508,31 @@ impl Database {
         Ok(())
     }
 
+    /// Whether `connection_id` is a connection of `owner_id` and `device_id` that the owner
+    /// removed.
+    ///
+    /// # Errors
+    ///
+    /// [`PersistenceError::Query`] when the statement fails.
+    pub async fn removed_for_device(
+        &self,
+        owner_id: Uuid,
+        connection_id: Uuid,
+        device_id: Uuid,
+    ) -> Result<bool, PersistenceError> {
+        sqlx::query_scalar(
+            "select exists (select 1 from notes.connections
+                            where connection_id = $1 and owner_id = $2 and device_id = $3
+                              and state = 'removed')",
+        )
+        .bind(connection_id)
+        .bind(owner_id)
+        .bind(device_id)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(PersistenceError::Query)
+    }
+
     /// Write one event to the outbox.
     ///
     /// # Errors
