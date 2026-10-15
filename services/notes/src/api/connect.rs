@@ -367,8 +367,11 @@ async fn log_in<B: SystemdBus>(
             ApiFault::Unavailable
         }
     };
-    state.supervisor.forget(connection_id);
-    clean_up_sync_client(state.systemd.as_ref(), connection_id).await?;
+    {
+        let _held = state.supervisor.lock(connection_id).await;
+        state.supervisor.forget(connection_id);
+        clean_up_sync_client(state.systemd.as_ref(), connection_id).await?;
+    }
     // The failure and the end of the operation are one transaction.
     let report: Vec<ReportRow> =
         ReportRow::failure(connect.owner_id, Some(connect.operation_id), fault.fields())

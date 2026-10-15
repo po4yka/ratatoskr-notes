@@ -132,7 +132,13 @@ pub(crate) struct Supervisor<B> {
     pipelines: Arc<Mutex<HashMap<Uuid, CancellationToken>>>,
     /// A pause after a login expired, for tests.
     after_terminal_state: Option<TestHook>,
+    /// One lock for each connection: every start, stop and write-mode change of its sync units
+    /// holds it, so that two of them never interleave and leave both units running.
+    locks: ConnectionLocks,
 }
+
+/// The lock of the sync units of each connection.
+type ConnectionLocks = Arc<Mutex<HashMap<Uuid, Arc<tokio::sync::Mutex<()>>>>>;
 
 impl<B> Clone for Supervisor<B> {
     fn clone(&self) -> Self {
@@ -146,6 +152,7 @@ impl<B> Clone for Supervisor<B> {
             pipeline: self.pipeline.clone(),
             pipelines: Arc::clone(&self.pipelines),
             after_terminal_state: self.after_terminal_state.clone(),
+            locks: Arc::clone(&self.locks),
         }
     }
 }
@@ -163,7 +170,24 @@ impl<B: SystemdBus> Supervisor<B> {
             pipeline,
             pipelines: Arc::new(Mutex::new(HashMap::new())),
             after_terminal_state: None,
+            locks: Arc::new(Mutex::new(HashMap::new())),
         }
+    }
+
+    /// Take the lock of the sync units of `connection_id`. A start, a stop and a write-mode change
+    /// of those units each hold it for their whole length, and a write-mode change holds it also
+    /// while it sets the mode, so that a start reads the mode that its units get.
+    pub(crate) async fn lock(&self, connection_id: Uuid) -> tokio::sync::OwnedMutexGuard<()> {
+        let lock = {
+            let mut locks = self
+                .locks
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            // A lock that nobody holds or waits for is not kept.
+            locks.retain(|_, lock| Arc::strong_count(lock) > 1);
+            Arc::clone(locks.entry(connection_id).or_default())
+        };
+        lock.lock_owned().await
     }
 
     /// Wait for `hook` after a login expired, before the rest of the step. For tests.
@@ -183,6 +207,8 @@ impl<B: SystemdBus> Supervisor<B> {
     /// When the unit runs, the pipeline of its working tree starts: the watcher feeds the recorder,
     /// and, when `completion` is given, the first full scan completes the connect operation.
     pub(crate) async fn start(&self, connection_id: Uuid, completion: Option<Completion>) -> bool {
+        let _held = self.lock(connection_id).await;
+        // The mode is read under the lock, so a write-mode change cannot slip in between.
         // A mode that cannot be read starts the unit pull-only: Ratatoskr then writes nothing.
         let bidirectional = match self.database.write_mode_on(connection_id).await {
             Ok(on) => on,
@@ -199,7 +225,7 @@ impl<B: SystemdBus> Supervisor<B> {
     /// a sync unit of the connection: stop the unit of the other mode, then start the unit of this
     /// one, so that its `ob sync-config` applies the mode. A connection whose unit does not run gets
     /// the mode at its next start, which reads the write mode. Returns whether the unit of the mode
-    /// runs, or no unit had to run; a failure is logged.
+    /// runs, or no unit had to run; a failure is logged. The caller holds [`Self::lock`].
     pub(crate) async fn reconfigure(&self, connection_id: Uuid, bidirectional: bool) -> bool {
         let runs = self.watched.lock().is_ok_and(|watched| {
             [true, false]
@@ -488,6 +514,7 @@ impl<B: SystemdBus> Supervisor<B> {
         if let Some(hook) = &self.after_terminal_state {
             (hook.0)(connection_id).await;
         }
+        let _held = self.lock(connection_id).await;
         self.forget(connection_id);
         for bidirectional in [false, true] {
             let unit = UnitName::sync(connection_id, bidirectional);

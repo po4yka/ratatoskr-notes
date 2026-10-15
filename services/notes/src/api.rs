@@ -541,6 +541,7 @@ async fn remove_connection<B: SystemdBus>(
     // A connect whose login this disconnect stops waits for the end of the disconnect.
     let _removal = state.removals.begin(connection_id);
     if connection.channel == "sync" {
+        let _held = state.supervisor.lock(connection_id).await;
         state.supervisor.forget(connection_id);
         clean_up_sync_client(state.systemd.as_ref(), connection_id).await?;
     }

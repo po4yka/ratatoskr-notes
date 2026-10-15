@@ -12,7 +12,7 @@
 | Boundary | Rule |
 |---|---|
 | Edge to Notes | Notes listens on loopback only and trusts only the claims that Edge mints. A connection of another owner answers `404`. |
-| Notes to systemd | Notes reaches systemd only through D-Bus, and one polkit rule allows exactly the three template units. |
+| Notes to systemd | Notes reaches systemd only through D-Bus, and one polkit rule allows exactly the four template units: `ratatoskr-notes-sync-pull@`, `ratatoskr-notes-sync-bidi@`, `ratatoskr-notes-login@` and `ratatoskr-notes-cleanup@`. No unit reads an `EnvironmentFile=` or expands a variable, so no file that another user writes sets the environment of `ob`. |
 | Notes to `ob` | `ob` runs as `ratatoskr-notes-sync`, a user that no other service shares. Secrets reach it only through `LoadCredential=` and standard input. |
 | Notes to Knowledge | Knowledge reads note bytes through the read group `ratatoskr-notes-blobs`. Only Notes writes. |
 

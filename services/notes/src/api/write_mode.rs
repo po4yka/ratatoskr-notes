@@ -147,6 +147,8 @@ async fn change_sync<B: SystemdBus>(state: ApiState<B>, change: Change) {
     } = change;
     let writes = Writes::new(state.recorder());
     let supervisor = &state.supervisor;
+    // The units of the connection and its mode change together: no start of a unit runs between.
+    let _connection = supervisor.lock(connection_id).await;
     let failed = if on {
         if supervisor.reconfigure(connection_id, true).await {
             match writes
