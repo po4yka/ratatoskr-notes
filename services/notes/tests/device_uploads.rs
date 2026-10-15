@@ -11,7 +11,13 @@
 mod support;
 
 use axum::http::StatusCode;
+use ratatoskr_blob_transfer_contracts::{
+    TransferErrorCode, UploadCompletionOutcome, UploadSessionRequest,
+};
+use ratatoskr_notes::blobs::BlobStore;
+use ratatoskr_notes::uploads::{UploadRefusal, Uploads};
 use serde_json::{Value, json};
+use uuid::Uuid;
 
 use crate::support::channel::{Channel, OTHER_OWNER, OWNER, sha256};
 
@@ -95,4 +101,43 @@ async fn burst_of_uploads_never_exceeds_the_cap() {
     );
 
     channel.cleanup().await;
+}
+
+#[tokio::test]
+async fn second_finalize_of_one_token_is_session_unknown() {
+    let root = tempfile::tempdir().expect("a blob root");
+    let blobs = BlobStore::new(root.path());
+    let uploads = Uploads::default();
+    let connection = Uuid::now_v7();
+    let bytes = b"finalized once\n";
+    let request: UploadSessionRequest =
+        serde_json::from_value(declaration(bytes)).expect("a declaration");
+    let opened = uploads
+        .open(&blobs, connection, &request, 1 << 20)
+        .await
+        .expect("a session");
+    let token = opened.resumption_token.as_str().to_owned();
+    uploads
+        .chunk(connection, &token, 0, bytes.to_vec())
+        .await
+        .expect("the chunk is recorded");
+
+    // Both finalize calls take the session before the first one ends it: the second waits for
+    // the lock of the session while the first hashes the staged copy.
+    let (first, second) = tokio::join!(
+        uploads.finalize(&blobs, connection, &token),
+        uploads.finalize(&blobs, connection, &token),
+    );
+
+    assert!(
+        matches!(first, Ok(UploadCompletionOutcome::Stored { .. })),
+        "{first:?}"
+    );
+    assert!(
+        matches!(
+            second,
+            Err(UploadRefusal::Transfer(TransferErrorCode::SessionUnknown))
+        ),
+        "the second finalize finds no open session: {second:?}"
+    );
 }
