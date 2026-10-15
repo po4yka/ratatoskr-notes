@@ -353,8 +353,11 @@ create table notes.conflicts (
     -- the hash of the merged bytes in the blob root, and whether the merge has overlapping hunks.
     merged_hash       text,
     has_overlapping_hunks boolean,
-    -- Whether `notes.conflict.raised.v1` is in the outbox.
-    announced         boolean     not null default true,
+    -- Whether `notes.conflict.raised.v1` is in the outbox. The transaction that fails the write
+    -- records the conflict unannounced; the merge proposal is computed after its commit, outside
+    -- the lock of the connection row, and a second short transaction stores it and writes the
+    -- event. The start of the service announces a conflict that a stop left unannounced.
+    announced         boolean     not null,
     -- `open`, or `resolved` after a resolution that the channel acknowledged.
     state             text        not null,
     created_at        timestamptz not null,
@@ -374,6 +377,8 @@ comment on table notes.conflicts is
     'A write that met a revision its writer did not see: the three sides, by hash.';
 
 create index conflicts_connection_idx on notes.conflicts (connection_id, created_at);
+
+create index conflicts_unannounced_idx on notes.conflicts (created_at) where not announced;
 
 -- ---------------------------------------------------------------------------------------------
 -- outbox: events Notes owes the bus, written in the same transaction as their cause

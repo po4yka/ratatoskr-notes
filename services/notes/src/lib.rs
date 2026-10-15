@@ -177,6 +177,17 @@ pub async fn serve<B: SystemdBus>(
     let admin = bind(config.admin.bind, "operator").await?;
     let api = bind(config.api.listen_address, "domain").await?;
 
+    // A stop between the commit of a conflict and its announcement left it unannounced.
+    let writes = Writes::new(
+        FileRecorder::new(database.clone(), blobs.clone())
+            .with_max_file_bytes(config.files.max_file_bytes),
+    );
+    match writes.announce_pending().await {
+        Ok(0) => {}
+        Ok(announced) => tracing::info!(announced, "conflicts that a stop left are announced"),
+        Err(error) => tracing::error!(%error, "the unannounced conflicts could not be announced"),
+    }
+
     // The relay publishes what the outbox holds, also the events of an earlier process.
     let relay_stop = tokio_util::sync::CancellationToken::new();
     let relay = config.bus.url.as_ref().map(|url| {
@@ -185,11 +196,7 @@ pub async fn serve<B: SystemdBus>(
             nkey_seed_path: config.bus.nkey_seed_path.clone(),
         };
         // Readiness needs the durable of the write commands from now on.
-        let writes = Writes::new(
-            FileRecorder::new(database.clone(), blobs.clone())
-                .with_max_file_bytes(config.files.max_file_bytes),
-        );
-        let consumer = WriteConsumer::new(settings.clone(), Arc::clone(&runtime), writes);
+        let consumer = WriteConsumer::new(settings.clone(), Arc::clone(&runtime), writes.clone());
         let relay = OutboxRelay::new(database.clone(), settings);
         (
             tokio::spawn(relay.run(relay_stop.clone())),

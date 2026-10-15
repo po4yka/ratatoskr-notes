@@ -107,8 +107,6 @@ pub struct NewConflict<'a> {
     pub current_hash: Option<&'a str>,
     /// The writer's content.
     pub writer_hash: Option<&'a str>,
-    /// The hash of the merged bytes of a merge proposal, and whether it has overlapping hunks.
-    pub proposal: Option<(&'a str, bool)>,
 }
 
 /// One recorded conflict.
@@ -367,7 +365,8 @@ impl FileTransaction {
             .await
     }
 
-    /// Record `conflict` as open, and end its write as `failed` with `notes.write.conflict`.
+    /// Record `conflict` as open and not announced, and end its write as `failed` with
+    /// `notes.write.conflict`.
     ///
     /// # Errors
     ///
@@ -380,9 +379,9 @@ impl FileTransaction {
         sqlx::query(
             "insert into notes.conflicts
                  (conflict_id, connection_id, write_id, operation_id, path, path_key, origin,
-                  media_type, base_hash, current_hash, writer_hash, merged_hash,
-                  has_overlapping_hunks, state, created_at)
-             values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, 'open', now())",
+                  media_type, base_hash, current_hash, writer_hash, announced, state,
+                  created_at)
+             values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, false, 'open', now())",
         )
         .bind(conflict.conflict_id)
         .bind(self.connection_id)
@@ -395,8 +394,6 @@ impl FileTransaction {
         .bind(conflict.base_hash)
         .bind(conflict.current_hash)
         .bind(conflict.writer_hash)
-        .bind(conflict.proposal.map(|(merged_hash, _)| merged_hash))
-        .bind(conflict.proposal.map(|(_, overlapping)| overlapping))
         .execute(&mut *self.transaction)
         .await
         .map_err(query_error)?;
@@ -413,6 +410,32 @@ impl FileTransaction {
         .await
         .map_err(query_error)?;
         Ok(())
+    }
+
+    /// Store the merge `proposal` of the conflict `conflict_id` of this connection and mark it
+    /// announced. Returns `false` and changes nothing when it is announced already.
+    ///
+    /// # Errors
+    ///
+    /// [`PersistenceError::Query`] when the statement fails.
+    pub async fn announce_conflict(
+        &mut self,
+        conflict_id: Uuid,
+        proposal: Option<(&str, bool)>,
+    ) -> Result<bool, PersistenceError> {
+        let announced = sqlx::query(
+            "update notes.conflicts
+                set announced = true, merged_hash = $3, has_overlapping_hunks = $4
+              where connection_id = $1 and conflict_id = $2 and not announced",
+        )
+        .bind(self.connection_id)
+        .bind(conflict_id)
+        .bind(proposal.map(|(merged_hash, _)| merged_hash))
+        .bind(proposal.map(|(_, overlapping)| overlapping))
+        .execute(&mut *self.transaction)
+        .await
+        .map_err(query_error)?;
+        Ok(announced.rows_affected() == 1)
     }
 
     /// The open conflict `conflict_id` of this connection.
@@ -566,7 +589,24 @@ impl Database {
         owner_id: Uuid,
         conflict_id: Uuid,
     ) -> Result<Option<ConflictRow>, PersistenceError> {
+        Ok(self
+            .conflict(conflict_id)
+            .await?
+            .filter(|(owner, _)| *owner == owner_id)
+            .map(|(_, conflict)| conflict))
+    }
+
+    /// The conflict `conflict_id` and the owner of its connection.
+    ///
+    /// # Errors
+    ///
+    /// [`PersistenceError::Query`] when the statement fails.
+    pub async fn conflict(
+        &self,
+        conflict_id: Uuid,
+    ) -> Result<Option<(Uuid, ConflictRow)>, PersistenceError> {
         type Row = (
+            Uuid,
             Uuid,
             Uuid,
             Uuid,
@@ -581,20 +621,20 @@ impl Database {
             String,
         );
         let row: Option<Row> = sqlx::query_as(
-            "select c.conflict_id, c.connection_id, c.operation_id, c.path, c.origin,
+            "select n.owner_id, c.conflict_id, c.connection_id, c.operation_id, c.path, c.origin,
                     c.media_type, c.base_hash, c.current_hash, c.writer_hash, c.merged_hash,
                     c.has_overlapping_hunks, c.state
              from notes.conflicts c
              join notes.connections n on n.connection_id = c.connection_id
-             where c.conflict_id = $1 and n.owner_id = $2",
+             where c.conflict_id = $1",
         )
         .bind(conflict_id)
-        .bind(owner_id)
         .fetch_optional(self.pool())
         .await
         .map_err(query_error)?;
         Ok(row.map(
             |(
+                owner_id,
                 conflict_id,
                 connection_id,
                 operation_id,
@@ -607,20 +647,43 @@ impl Database {
                 merged_hash,
                 has_overlapping_hunks,
                 state,
-            )| ConflictRow {
-                conflict_id,
-                connection_id,
-                operation_id,
-                path,
-                origin,
-                media_type,
-                base_hash,
-                current_hash,
-                writer_hash,
-                merged_hash,
-                has_overlapping_hunks,
-                state,
+            )| {
+                (
+                    owner_id,
+                    ConflictRow {
+                        conflict_id,
+                        connection_id,
+                        operation_id,
+                        path,
+                        origin,
+                        media_type,
+                        base_hash,
+                        current_hash,
+                        writer_hash,
+                        merged_hash,
+                        has_overlapping_hunks,
+                        state,
+                    },
+                )
             },
         ))
+    }
+
+    /// The oldest conflicts that are not announced, at most `limit`.
+    ///
+    /// # Errors
+    ///
+    /// [`PersistenceError::Query`] when the statement fails.
+    pub async fn unannounced_conflicts(&self, limit: i64) -> Result<Vec<Uuid>, PersistenceError> {
+        sqlx::query_scalar(
+            "select conflict_id from notes.conflicts
+             where not announced
+             order by created_at, conflict_id
+             limit $1",
+        )
+        .bind(limit)
+        .fetch_all(self.pool())
+        .await
+        .map_err(query_error)
     }
 }

@@ -10,10 +10,16 @@ mod queue;
 mod report;
 mod request;
 
+use std::sync::Arc;
+
 use ratatoskr_event_envelope::CommandEnvelope;
+use ratatoskr_notes_persistence::{FileTransaction, OutboxEvent};
+use tokio::sync::Semaphore;
 use uuid::Uuid;
 
+use crate::events::EnvelopeBuildError;
 use crate::files::{FileRecorder, RecordError};
+use conflict::{Raised, Sides};
 use queue::Locked;
 use report::{ReportRow, Step};
 use request::Request;
@@ -120,6 +126,16 @@ enum End<'a> {
     Refused(&'a Refusal),
 }
 
+/// The event type of a raised conflict.
+const RAISED: &str = "notes.conflict.raised.v1";
+
+/// How many unannounced conflicts one pass of [`Writes::announce_pending`] reads.
+const ANNOUNCE_BATCH: i64 = 256;
+
+/// How many merge proposals run at the same time. One merge of sides at the caps of
+/// `writes::conflict` peaks at about 12 MiB, so two stay within 25 MiB.
+const MERGES: usize = 2;
+
 /// The code of a command that is not a valid write command.
 const INVALID: &str = "notes.request.invalid";
 
@@ -142,13 +158,18 @@ const CONFLICT: &str = "notes.write.conflict";
 #[derive(Debug, Clone)]
 pub struct Writes {
     recorder: FileRecorder,
+    /// At most [`MERGES`] merge proposals are computed at the same time.
+    merges: Arc<Semaphore>,
 }
 
 impl Writes {
     /// The writes of the database and the blob store of `recorder`.
     #[must_use]
-    pub const fn new(recorder: FileRecorder) -> Self {
-        Self { recorder }
+    pub fn new(recorder: FileRecorder) -> Self {
+        Self {
+            recorder,
+            merges: Arc::new(Semaphore::new(MERGES)),
+        }
     }
 
     /// Take one write command: queue it at the end of the queue of its file, and deliver it when
@@ -199,6 +220,7 @@ impl Writes {
             transaction: &mut transaction,
             connection: &connection,
             connection_id: request.connection_id,
+            raised: Vec::new(),
         };
         if let Some((write_id, digest)) = locked
             .transaction
@@ -224,36 +246,12 @@ impl Writes {
         let uploaded = request
             .resolution
             .is_none_or(|(_, choice)| choice == "custom");
-        if let Some((conflict_id, choice)) = request.resolution {
-            let Some(conflict) = locked.transaction.open_conflict(conflict_id).await? else {
-                drop(transaction);
-                return self.refuse_request(&request, CONFLICT_NOT_FOUND).await;
-            };
-            let content = match choice {
-                "keep_writer" => conflict.writer_hash,
-                "accept_merge" => conflict.merged_hash,
-                _ => request.content_hash.clone(),
-            };
-            // `keep_writer` needs content and `accept_merge` a proposal, and the resolved event
-            // needs a revision, which `keep_current` of a deleted file does not have.
-            let usable = match choice {
-                "keep_current" => conflict.current_hash.is_some(),
-                _ => content.is_some(),
-            };
-            if !usable {
-                drop(transaction);
-                return self.refuse_request(&request, INVALID).await;
-            }
-            if !uploaded {
-                request.content_length = match &content {
-                    Some(digest) => self.recorder.blob_length(digest).await,
-                    None => None,
-                };
-            }
-            request.content_hash = content;
-            request.path_key = conflict.path_key;
-            request.path = conflict.path;
-            request.base_hash = conflict.current_hash;
+        if let Err(code) = self
+            .resolution_sides(locked.transaction, &mut request)
+            .await?
+        {
+            drop(transaction);
+            return self.refuse_request(&request, code).await;
         }
         if let Some(digest) = request.content_hash.as_ref().filter(|_| uploaded) {
             let usable = self
@@ -272,8 +270,51 @@ impl Writes {
             .await?;
         locked.report(write_id, Step::Queued).await?;
         locked.advance(&request.path_key).await?;
+        let raised = std::mem::take(&mut locked.raised);
         transaction.commit().await?;
+        self.announce(&raised).await;
         Ok(Handled::Queued { write_id })
+    }
+
+    /// Give the resolution `request` the path of its conflict, the revision that the conflict
+    /// recorded as current as its base, and the content of its choice. A request that is no
+    /// resolution changes nothing. `Err` holds the code of a refusal: no open conflict, or a
+    /// choice without its side (`keep_writer` without content, `accept_merge` without a proposal,
+    /// `keep_current` of a deleted file, whose resolved event has no revision).
+    async fn resolution_sides(
+        &self,
+        transaction: &mut FileTransaction,
+        request: &mut Request,
+    ) -> Result<Result<(), &'static str>, WriteError> {
+        let Some((conflict_id, choice)) = request.resolution else {
+            return Ok(Ok(()));
+        };
+        let Some(conflict) = transaction.open_conflict(conflict_id).await? else {
+            return Ok(Err(CONFLICT_NOT_FOUND));
+        };
+        let content = match choice {
+            "keep_writer" => conflict.writer_hash,
+            "accept_merge" => conflict.merged_hash,
+            _ => request.content_hash.clone(),
+        };
+        let usable = match choice {
+            "keep_current" => conflict.current_hash.is_some(),
+            _ => content.is_some(),
+        };
+        if !usable {
+            return Ok(Err(INVALID));
+        }
+        if choice != "custom" {
+            request.content_length = match &content {
+                Some(digest) => self.recorder.blob_length(digest).await,
+                None => None,
+            };
+        }
+        request.content_hash = content;
+        request.path_key = conflict.path_key;
+        request.path = conflict.path;
+        request.base_hash = conflict.current_hash;
+        Ok(Ok(()))
     }
 
     /// Fail the operation of `request` with `code`, and answer that the command is refused.
@@ -387,6 +428,7 @@ impl Writes {
             transaction: &mut transaction,
             connection: &connection,
             connection_id,
+            raised: Vec::new(),
         };
         match end {
             End::Acknowledged(revision) => {
@@ -407,7 +449,9 @@ impl Writes {
             }
         }
         locked.advance(&write.path_key).await?;
+        let raised = std::mem::take(&mut locked.raised);
         transaction.commit().await?;
+        self.announce(&raised).await;
         Ok(true)
     }
 
@@ -437,14 +481,100 @@ impl Writes {
         }))
     }
 
-    /// Announce every conflict that is recorded and not announced yet: compute its merge proposal
-    /// and write `notes.conflict.raised.v1`. Returns how many it announced. Announces nothing yet.
+    /// Announce every conflict that is recorded and not announced yet, as a stop of the process
+    /// between the commit of a conflict and its announcement leaves it: compute its merge proposal
+    /// and write `notes.conflict.raised.v1`. The service calls it at start. Returns how many it
+    /// announced.
     ///
     /// # Errors
     ///
     /// [`WriteError`] when the database fails.
     pub async fn announce_pending(&self) -> Result<usize, WriteError> {
-        let _ = &self.recorder;
-        Ok(0)
+        let pending = self
+            .recorder
+            .database()
+            .unannounced_conflicts(ANNOUNCE_BATCH)
+            .await?;
+        let mut announced = 0;
+        for conflict_id in pending {
+            if self.announce_one(conflict_id).await? {
+                announced += 1;
+            }
+        }
+        Ok(announced)
+    }
+
+    /// Announce the conflicts `raised` of a transaction that committed. A failure is logged: the
+    /// next start of the service announces them.
+    async fn announce(&self, raised: &[Uuid]) {
+        for conflict_id in raised {
+            if let Err(error) = self.announce_one(*conflict_id).await {
+                tracing::warn!(%error, %conflict_id, "a conflict is announced at the next start");
+            }
+        }
+    }
+
+    /// Compute the merge proposal of the conflict `conflict_id` outside any lock, then store it
+    /// and write `notes.conflict.raised.v1` in one short transaction under the lock of its
+    /// connection. Returns whether this call announced it.
+    async fn announce_one(&self, conflict_id: Uuid) -> Result<bool, WriteError> {
+        let database = self.recorder.database();
+        let Some((owner_id, conflict)) = database.conflict(conflict_id).await? else {
+            return Ok(false);
+        };
+        let sides = Sides {
+            base: conflict.base_hash.as_deref(),
+            current: conflict.current_hash.as_deref(),
+            writer: conflict.writer_hash.as_deref(),
+        };
+        let proposal = {
+            let _merge = self
+                .merges
+                .acquire()
+                .await
+                .map_err(|_| WriteError("the merge"))?;
+            conflict::propose(&self.recorder, &conflict.media_type, sides).await
+        };
+        let Some((mut transaction, _)) = database.begin_file_change(conflict.connection_id).await?
+        else {
+            return Ok(false);
+        };
+        let stored = proposal
+            .as_ref()
+            .map(|(merged_hash, overlapping)| (merged_hash.as_str(), *overlapping));
+        if !transaction.announce_conflict(conflict_id, stored).await? {
+            return Ok(false);
+        }
+        let event_id = Uuid::now_v7();
+        let envelope = conflict::raised_envelope(
+            event_id,
+            &Raised {
+                conflict_id,
+                owner_id,
+                operation_id: conflict.operation_id,
+                connection_id: conflict.connection_id,
+                path: &conflict.path,
+                origin: &conflict.origin,
+                media_type: &conflict.media_type,
+                sides,
+                proposal: proposal.as_ref(),
+            },
+        )
+        .and_then(|envelope| {
+            serde_json::to_value(envelope).map_err(|_| EnvelopeBuildError::SERIALIZE)
+        })
+        .map_err(|_| WriteError("the conflict event"))?;
+        let aggregate_id = conflict::conflict_aggregate(conflict_id);
+        transaction
+            .write_event(&OutboxEvent {
+                event_id,
+                event_type: RAISED,
+                aggregate_type: conflict::CONFLICT_AGGREGATE,
+                aggregate_id: &aggregate_id,
+                envelope: &envelope,
+            })
+            .await?;
+        transaction.commit().await?;
+        Ok(true)
     }
 }

@@ -4,8 +4,10 @@
 //! `notes.conflict.raised.v1` names the three sides by hash and never carries file content. Its
 //! aggregate is `notes_conflict:<conflict id>`, and it correlates to the operation of the write.
 //! For `text/markdown` and `text/plain`, when notes holds the bytes of all three sides as UTF-8
-//! text, the conflict carries a merge proposal: the merged bytes go to the blob root, and the event
-//! names their hash and whether the merge has overlapping hunks.
+//! text within the caps of a merge, the conflict carries a merge proposal: the merged bytes go to
+//! the blob root, and the event names their hash and whether the merge has overlapping hunks. The
+//! merge runs after the commit that records the conflict, outside the lock of the connection row;
+//! a second short transaction stores the proposal and writes the event.
 //!
 //! `notes.conflict.resolved.v1` follows the acknowledgement of the `resolve_conflict` write, with
 //! the operation and the origin of that write and the revision after it.
@@ -31,6 +33,19 @@ pub(super) const CONFLICT_AGGREGATE: &str = "notes_conflict";
 /// The media types that get a merge proposal.
 const MERGEABLE: [&str; 2] = ["text/markdown", "text/plain"];
 
+/// The largest side of a merge, in bytes. A larger side gets no proposal and is not read.
+///
+/// Measured on the merge of three sides whose lines are two thirds equal (macOS, release build):
+/// 1 MiB and 20 000 lines per side peak at about 11 MiB above the process baseline and take about
+/// 8 ms; 4 MiB and 100 000 lines at about 50 MiB; 16 MiB and 600 000 lines at about 300 MiB, which a
+/// service of the 512 MiB class cannot afford. A Markdown note is rarely larger than 1 MiB.
+pub(super) const MAX_SIDE_BYTES: u64 = 1024 * 1024;
+
+/// The most lines of a side of a merge. The cost of the line diff grows with the lines more than
+/// with the bytes, so a side of short lines also needs a bound: 20 000 lines fit the measurement
+/// of [`MAX_SIDE_BYTES`].
+pub(super) const MAX_SIDE_LINES: usize = 20_000;
+
 /// The hash of the merged bytes and whether the merge has overlapping hunks.
 pub(super) type Proposal = (String, bool);
 
@@ -44,7 +59,8 @@ pub(super) struct Sides<'a> {
 
 /// The merge proposal of a conflict on a file of `media_type`, with its bytes stored in the blob
 /// root, or `None`: another media type, a missing side, bytes that notes does not hold or that are
-/// not UTF-8, or bytes over the size limit of the service.
+/// not UTF-8, or a side over [`MAX_SIDE_BYTES`] or [`MAX_SIDE_LINES`]. It runs outside the lock of
+/// the connection row.
 pub(super) async fn propose(
     recorder: &FileRecorder,
     media_type: &str,
@@ -78,16 +94,19 @@ pub(super) async fn propose(
     }
 }
 
-/// The UTF-8 text of the blob `digest`, when the store holds it within the size limit.
+/// The UTF-8 text of the blob `digest`, when the store holds it within [`MAX_SIDE_BYTES`] and it
+/// has at most [`MAX_SIDE_LINES`] lines. The length is read from the file system first, so a
+/// larger blob is never read.
 async fn text_of(recorder: &FileRecorder, digest: &str) -> Option<String> {
     let length = recorder.blob_length(digest).await?;
-    if length > recorder.max_file_bytes() {
+    if length > MAX_SIDE_BYTES {
         return None;
     }
     let bytes = tokio::fs::read(recorder.blobs().path_of(digest)?)
         .await
         .ok()?;
-    String::from_utf8(bytes).ok()
+    let text = String::from_utf8(bytes).ok()?;
+    (text.lines().count() <= MAX_SIDE_LINES).then_some(text)
 }
 
 /// What a raised conflict names.

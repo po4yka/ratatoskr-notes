@@ -162,4 +162,69 @@ mod tests {
             }
         );
     }
+
+    #[test]
+    fn adjacent_changes_of_two_sides_overlap() {
+        let merged = merge("a\nb\nc\nd\n", "a\nB\nc\nd\n", "a\nb\nC\nd\n");
+
+        assert_eq!(
+            merged,
+            Merged {
+                text: "a\n<<<<<<< current\nB\nc\n=======\nb\nC\n>>>>>>> writer\nd\n".to_owned(),
+                overlapping: true,
+            }
+        );
+    }
+
+    #[test]
+    fn a_deletion_and_a_distant_edit_merge() {
+        let merged = merge("a\nb\nc\nd\ne\n", "a\nc\nd\ne\n", "a\nb\nc\nD\ne\n");
+
+        assert_eq!(
+            merged,
+            Merged {
+                text: "a\nc\nD\ne\n".to_owned(),
+                overlapping: false,
+            }
+        );
+    }
+
+    #[test]
+    fn the_same_deletion_on_both_sides_is_taken_once() {
+        let merged = merge("a\nb\nc\n", "a\nc\n", "a\nc\n");
+
+        assert_eq!(
+            merged,
+            Merged {
+                text: "a\nc\n".to_owned(),
+                overlapping: false,
+            }
+        );
+    }
+
+    #[test]
+    fn a_last_line_without_a_line_break_keeps_it_missing() {
+        let merged = merge("a\nb\nc", "A\nb\nc", "a\nb\nC");
+
+        assert_eq!(
+            merged,
+            Merged {
+                text: "A\nb\nC".to_owned(),
+                overlapping: false,
+            }
+        );
+    }
+
+    #[test]
+    fn a_conflict_on_a_last_line_without_a_line_break_ends_each_side() {
+        let merged = merge("a\nb\nc", "a\nb\nX", "a\nb\nY");
+
+        assert_eq!(
+            merged,
+            Merged {
+                text: "a\nb\n<<<<<<< current\nX\n=======\nY\n>>>>>>> writer\n".to_owned(),
+                overlapping: true,
+            }
+        );
+    }
 }
