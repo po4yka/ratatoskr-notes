@@ -8,8 +8,9 @@
 //! bytes with the declared SHA-256 get their content name in the store, other bytes are deleted
 //! and the answer is the outcome `digest_mismatch`. No blob is registered then.
 //!
-//! The sessions are kept in memory and are bounded: at most [`MAX_OPEN_SESSIONS`] at a time, each
-//! for [`SESSION_LIFETIME`]. A restart forgets them, and the store deletes their staged copies at
+//! The sessions are kept in memory and are bounded: at most [`MAX_SESSIONS_PER_CONNECTION`] for
+//! one connection and [`MAX_OPEN_SESSIONS`] for the service at a time, each for
+//! [`SESSION_LIFETIME`]. The count and the insert of a new session are one step under one lock. A restart forgets them, and the store deletes their staged copies at
 //! its next open; a device then opens a new session, as for an expired one.
 
 use std::collections::HashMap;
@@ -30,8 +31,12 @@ use uuid::Uuid;
 use crate::blobs::BlobStore;
 use crate::events::PRODUCER;
 
+/// The most upload sessions of one connection that are open at the same time, so that one device
+/// cannot hold the sessions of every owner.
+pub const MAX_SESSIONS_PER_CONNECTION: usize = 4;
+
 /// The most upload sessions that are open at the same time, over all connections.
-pub const MAX_OPEN_SESSIONS: usize = 32;
+pub const MAX_OPEN_SESSIONS: usize = 64;
 
 /// How long an upload session stays open.
 pub const SESSION_LIFETIME: Duration = Duration::from_hours(1);
@@ -44,7 +49,8 @@ pub enum UploadRefusal {
     /// The declaration is larger than the largest file that is indexed, or its chunking is not
     /// one that the contract allows.
     Invalid,
-    /// [`MAX_OPEN_SESSIONS`] sessions are open.
+    /// The connection has [`MAX_SESSIONS_PER_CONNECTION`] open sessions, or the service has
+    /// [`MAX_OPEN_SESSIONS`].
     Busy,
     /// The blob store failed.
     Store(std::io::Error),
@@ -67,10 +73,19 @@ struct Session {
     expires: Instant,
 }
 
+/// The place of one session in the table: its connection and its expiry, which the table reads
+/// without the lock of the session, and the session.
+#[derive(Debug, Clone)]
+struct Slot {
+    connection_id: Uuid,
+    expires: Instant,
+    session: Arc<tokio::sync::Mutex<Session>>,
+}
+
 /// The open upload sessions of the service.
 #[derive(Debug, Clone, Default)]
 pub struct Uploads {
-    sessions: Arc<Mutex<HashMap<String, Arc<tokio::sync::Mutex<Session>>>>>,
+    sessions: Arc<Mutex<HashMap<String, Slot>>>,
 }
 
 impl Uploads {
@@ -94,10 +109,6 @@ impl Uploads {
         let plan = UploadPlan::new(request.declared_size_bytes, request.chunk_size_bytes)
             .map_err(|_| UploadRefusal::Invalid)?;
         let reference = UploadSession::new(request).map_err(|_| UploadRefusal::Invalid)?;
-        self.forget_expired();
-        if self.lock().len() >= MAX_OPEN_SESSIONS {
-            return Err(UploadRefusal::Busy);
-        }
         let store = blobs.clone();
         let part = tokio::task::spawn_blocking(move || store.create_part())
             .await
@@ -113,18 +124,25 @@ impl Uploads {
                 i64::try_from(SESSION_LIFETIME.as_secs()).unwrap_or(i64::MAX),
             ))
             .map_or_else(|_| WireTimestamp::now(), WireTimestamp::from_jiff);
+        let expires = Instant::now() + SESSION_LIFETIME;
         let session = Session {
             connection_id,
             reference,
             plan,
             declared: request.digest.hex.as_str().to_owned(),
             part,
-            expires: Instant::now() + SESSION_LIFETIME,
+            expires,
         };
-        self.lock().insert(
-            token.as_str().to_owned(),
-            Arc::new(tokio::sync::Mutex::new(session)),
-        );
+        let part = session.part.clone();
+        let slot = Slot {
+            connection_id,
+            expires,
+            session: Arc::new(tokio::sync::Mutex::new(session)),
+        };
+        if !self.admit(token.as_str(), slot) {
+            BlobStore::discard_part(&part);
+            return Err(UploadRefusal::Busy);
+        }
         Ok(UploadSessionOpened {
             resumption_token: token,
             chunk_size_bytes: plan.chunk_size_bytes(),
@@ -226,8 +244,8 @@ impl Uploads {
     ) -> Result<(UploadResumptionToken, OwnedMutexGuard<Session>), UploadRefusal> {
         let unknown = || UploadRefusal::Transfer(TransferErrorCode::SessionUnknown);
         let resumption_token = UploadResumptionToken::parse(token).map_err(|_| unknown())?;
-        let session = self.lock().get(token).cloned().ok_or_else(unknown)?;
-        let session = session.lock_owned().await;
+        let slot = self.lock().get(token).cloned().ok_or_else(unknown)?;
+        let session = slot.session.lock_owned().await;
         if session.connection_id != connection_id {
             return Err(unknown());
         }
@@ -239,19 +257,36 @@ impl Uploads {
         Ok((resumption_token, session))
     }
 
-    /// Forget each expired session that no step holds, and delete its staged copy.
-    fn forget_expired(&self) {
+    /// Insert `slot` under `token` when its connection and the service are under their caps, in
+    /// one step under the lock of the table. Each expired session that no step holds is forgotten
+    /// first, and its staged copy deleted. Returns whether the slot is in the table.
+    fn admit(&self, token: &str, slot: Slot) -> bool {
         let now = Instant::now();
-        self.lock().retain(|_, session| match session.try_lock() {
-            Ok(open) if open.expires <= now => {
-                BlobStore::discard_part(&open.part);
-                false
+        let mut sessions = self.lock();
+        sessions.retain(|_, held| {
+            if held.expires > now {
+                return true;
             }
-            _ => true,
+            match held.session.try_lock() {
+                Ok(open) => {
+                    BlobStore::discard_part(&open.part);
+                    false
+                }
+                Err(_) => true,
+            }
         });
+        let of_connection = sessions
+            .values()
+            .filter(|held| held.connection_id == slot.connection_id)
+            .count();
+        if of_connection >= MAX_SESSIONS_PER_CONNECTION || sessions.len() >= MAX_OPEN_SESSIONS {
+            return false;
+        }
+        sessions.insert(token.to_owned(), slot);
+        true
     }
 
-    fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<String, Arc<tokio::sync::Mutex<Session>>>> {
+    fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<String, Slot>> {
         self.sessions.lock().unwrap_or_else(PoisonError::into_inner)
     }
 }

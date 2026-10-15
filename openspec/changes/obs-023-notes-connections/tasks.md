@@ -138,4 +138,4 @@ file, and a batch or a manifest that names one could never be committed.
 ## 8 (continued). Hardening of the upload sessions and the device connect (workspace tasks 8.27 to 8.34)
 
 - [x] 8.27 RED: in `services/notes/tests/device_uploads.rs`, `upload_sessions_are_bounded_per_connection` asserts that a connection with 4 open upload sessions gets `503` with `notes.service.unavailable` for a fifth, while a connection of another owner still opens one; `burst_of_uploads_never_exceeds_the_cap` asserts that exactly 4 of 10 concurrent opens of one connection succeed. Confirm that both fail by assertion, because the only cap is 32 sessions for the whole service.
-- [ ] 8.28 GREEN: cap the open upload sessions at 4 per connection and 64 for the service, and check the count and insert the session under one lock. Verify 8.27 and every test of `device_channel.rs`.
+- [x] 8.28 GREEN: cap the open upload sessions at 4 per connection and 64 for the service, and check the count and insert the session under one lock. Verify 8.27 and every test of `device_channel.rs`.
