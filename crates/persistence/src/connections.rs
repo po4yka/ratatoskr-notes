@@ -324,6 +324,21 @@ impl Database {
     ///
     /// [`PersistenceError::Query`] when a statement fails; nothing is committed then.
     pub async fn fail_connection(&self, connection_id: Uuid) -> Result<bool, PersistenceError> {
+        self.fail_connection_reporting(connection_id, &[]).await
+    }
+
+    /// [`Self::fail_connection`], and write `events` to the outbox in the same transaction, for
+    /// example the terminal report of its connect operation, so that no stop of the process can
+    /// leave a failed connection without it.
+    ///
+    /// # Errors
+    ///
+    /// [`PersistenceError::Query`] when a statement fails; nothing is committed then.
+    pub async fn fail_connection_reporting(
+        &self,
+        connection_id: Uuid,
+        events: &[OutboxEvent<'_>],
+    ) -> Result<bool, PersistenceError> {
         let mut transaction = self.pool.begin().await.map_err(PersistenceError::Query)?;
         let failed = sqlx::query(
             "update notes.connections set state = 'failed', updated_at = now()
@@ -341,6 +356,9 @@ impl Database {
             .execute(&mut *transaction)
             .await
             .map_err(PersistenceError::Query)?;
+        for event in events {
+            insert_outbox(&mut transaction, event).await?;
+        }
         transaction
             .commit()
             .await

@@ -63,7 +63,8 @@ impl<B: SystemdBus> ApiState<B> {
         }
     }
 
-    /// Fail a device connect that is still `connecting` after its bound, and its operation. The
+    /// Fail a device connect that is still `connecting` after its bound, and its operation, in one
+    /// transaction, so that a stop of the process cannot leave the failure without its report. The
     /// wait of the bound calls it; a test calls it to run the end of the bound at one step.
     pub async fn expire_device_connect(&self, connection_id: Uuid) {
         let operation = match self.database.connect_operation(connection_id).await {
@@ -74,28 +75,48 @@ impl<B: SystemdBus> ApiState<B> {
                 return;
             }
         };
-        match self.database.fail_connection(connection_id).await {
+        // The failure and its terminal report are one transaction.
+        let (code, message) = MANIFEST_MISSING;
+        let report_id = Uuid::now_v7();
+        let report = operation.operation_id.map(|operation_id| {
+            let envelope = operation::outbox_value(operation::report_envelope(
+                report_id,
+                operation.owner_id,
+                operation_id,
+                Report::Failed(code, message, true),
+            ));
+            (operation::operation_aggregate(operation_id), envelope)
+        });
+        let report = match report {
+            Some((aggregate_id, Ok(envelope))) => Some((aggregate_id, envelope)),
+            Some((_, Err(error))) => {
+                tracing::error!(%error, %connection_id, "the report of a failed device connect could not be built");
+                return;
+            }
+            None => None,
+        };
+        let events: Vec<_> = report
+            .iter()
+            .map(|(aggregate_id, envelope)| {
+                operation::report_event(report_id, aggregate_id, envelope)
+            })
+            .collect();
+        match self
+            .database
+            .fail_connection_reporting(connection_id, &events)
+            .await
+        {
             Ok(true) => {
                 tracing::info!(%connection_id, code = MANIFEST_MISSING.0, "a device connect failed: no manifest in time");
                 if let Some(after_device_fail) = &self.after_device_fail {
                     (after_device_fail.0)(connection_id).await;
                 }
             }
-            Ok(false) => return,
+            // The connection is active or removed already.
+            Ok(false) => {}
             Err(error) => {
                 tracing::error!(%error, %connection_id, "a device connect could not be failed");
-                return;
             }
-        }
-        if let Some(operation_id) = operation.operation_id {
-            let (code, message) = MANIFEST_MISSING;
-            operation::report(
-                &self.database,
-                operation.owner_id,
-                operation_id,
-                Report::Failed(code, message, true),
-            )
-            .await;
         }
     }
 }
