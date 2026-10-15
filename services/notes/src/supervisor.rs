@@ -357,26 +357,30 @@ impl<B: SystemdBus> Supervisor<B> {
         }
     }
 
-    /// Count one failure line of a watched unit. Returns the connection when its login expired;
-    /// the unit is then no longer watched.
+    /// Count one failure line of a watched unit. Returns the connection when its login expired.
+    /// The unit stays watched until the expiry is recorded, so that a failed expiry is tried again
+    /// at the next failure line.
     fn count_failure(&self, line: &JournalLine) -> Option<Uuid> {
         let mut watched = self.watched.lock().ok()?;
         let unit = watched.get_mut(&line.unit)?;
-        if !unit.failures.observe(line.monotonic) {
-            return None;
-        }
-        watched.remove(&line.unit).map(|unit| unit.connection_id)
+        unit.failures
+            .observe(line.monotonic)
+            .then_some(unit.connection_id)
     }
 
     /// Mark the connection `login_expired`, then stop its unit. A connection that the owner
-    /// removed meanwhile is left to the disconnect.
+    /// removed meanwhile is left to the disconnect. When the connect operation cannot be read, or
+    /// the expiry cannot be recorded, nothing changes and the next failure line tries again: an
+    /// expiry without the report of a connect that waits for its first scan would leave that
+    /// operation without an end.
     async fn expire_login(&self, connection_id: Uuid) {
-        let operation = self
-            .database
-            .connect_operation(connection_id)
-            .await
-            .ok()
-            .flatten();
+        let operation = match self.database.connect_operation(connection_id).await {
+            Ok(operation) => operation,
+            Err(error) => {
+                tracing::error!(%error, %connection_id, "the connect operation of an expired login could not be read; the next failure line tries again");
+                return;
+            }
+        };
         // A connect whose first scan did not end fails with the code of the expired login, in the
         // transaction of the expiry.
         let report: Vec<ReportRow> = operation
@@ -396,9 +400,13 @@ impl<B: SystemdBus> Supervisor<B> {
             .await
         {
             Ok(true) => {}
-            Ok(false) => return,
+            Ok(false) => {
+                // Removed or failed meanwhile: the disconnect or the connect owns its end.
+                self.forget(connection_id);
+                return;
+            }
             Err(error) => {
-                tracing::error!(%error, %connection_id, "an expired login could not be recorded");
+                tracing::error!(%error, %connection_id, "an expired login could not be recorded; the next failure line tries again");
                 return;
             }
         }
