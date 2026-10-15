@@ -3,7 +3,9 @@
 //! Edge publishes each write as `notes.file.write_requested.v1` on the command stream. Notes reads
 //! the commands through the durable that Edge creates for it.
 
+mod conflict;
 mod consumer;
+mod merge;
 mod queue;
 mod report;
 mod request;

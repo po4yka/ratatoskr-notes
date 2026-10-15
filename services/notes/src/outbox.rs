@@ -58,6 +58,8 @@ fn subject_of(event_type: &str) -> Option<&'static str> {
         "notes.vault.connected.v1" => "evt.notes.vault.connected.v1",
         "notes.vault.disconnected.v1" => "evt.notes.vault.disconnected.v1",
         "notes.file.changed.v1" => "evt.notes.file.changed.v1",
+        "notes.conflict.raised.v1" => "evt.notes.conflict.raised.v1",
+        "notes.conflict.resolved.v1" => "evt.notes.conflict.resolved.v1",
         "platform.operation.reported.v1" => "evt.platform.operation.reported.v1",
         _ => return None,
     })

@@ -11,12 +11,19 @@
 //! `notes.file.changed.v1`, so no consumer of note events sees bytes that the vault refused.
 
 use ratatoskr_notes_index::paths::path_key;
-use ratatoskr_notes_persistence::{FileTransaction, LockedConnection, NewConflict, WriteRow};
+use ratatoskr_notes_persistence::{
+    FileTransaction, LockedConnection, NewConflict, OutboxEvent, WriteRow,
+};
 use uuid::Uuid;
 
 use super::CONFLICT;
+use super::conflict::{self, Raised, Sides};
 use super::report::{FileResult, ReportRow, Step};
+use crate::events::EnvelopeBuildError;
 use crate::files::{FileRecorder, RecordError, Revision, media_type};
+
+/// The event type of a raised conflict.
+const RAISED: &str = "notes.conflict.raised.v1";
 
 /// The changes of the files of one connection, under the lock of its row.
 pub(super) struct Locked<'a> {
@@ -84,22 +91,59 @@ impl Locked<'_> {
         Ok(if taken { Err(current) } else { Ok(()) })
     }
 
-    /// Record a conflict of `write` with the revision `current` of the vault, end the write as
-    /// `failed` with `notes.write.conflict`, and report it with the conflict id.
+    /// Record a conflict of `write` with the revision `current` of the vault, with a merge
+    /// proposal for text, end the write as `failed` with `notes.write.conflict`, and write
+    /// `notes.conflict.raised.v1` and the report with the conflict id.
     pub(super) async fn conflict(
         &mut self,
         write: &WriteRow,
         current: Option<&str>,
     ) -> Result<(), RecordError> {
         let conflict_id = Uuid::now_v7();
+        let media_type = media_type(&write.path);
+        let sides = Sides {
+            base: write.base_hash.as_deref(),
+            current,
+            writer: write.content_hash.as_deref(),
+        };
+        let proposal = conflict::propose(self.recorder, media_type, sides).await;
         self.transaction
             .raise_conflict(&NewConflict {
                 conflict_id,
                 write,
-                media_type: media_type(&write.path),
-                base_hash: write.base_hash.as_deref(),
-                current_hash: current,
-                writer_hash: write.content_hash.as_deref(),
+                media_type,
+                base_hash: sides.base,
+                current_hash: sides.current,
+                writer_hash: sides.writer,
+                proposal: proposal
+                    .as_ref()
+                    .map(|(merged_hash, overlapping)| (merged_hash.as_str(), *overlapping)),
+            })
+            .await?;
+        let event_id = Uuid::now_v7();
+        let raised = conflict::raised_envelope(
+            event_id,
+            &Raised {
+                conflict_id,
+                owner_id: self.connection.owner_id,
+                operation_id: write.operation_id,
+                connection_id: self.connection_id,
+                path: &write.path,
+                origin: &write.origin,
+                media_type,
+                sides,
+                proposal: proposal.as_ref(),
+            },
+        )?;
+        let envelope = serde_json::to_value(raised).map_err(|_| EnvelopeBuildError::SERIALIZE)?;
+        let aggregate_id = conflict::conflict_aggregate(conflict_id);
+        self.transaction
+            .write_event(&OutboxEvent {
+                event_id,
+                event_type: RAISED,
+                aggregate_type: conflict::CONFLICT_AGGREGATE,
+                aggregate_id: &aggregate_id,
+                envelope: &envelope,
             })
             .await?;
         self.report(write.write_id, Step::Failed(CONFLICT, Some(conflict_id)))

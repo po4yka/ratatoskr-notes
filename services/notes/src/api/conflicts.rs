@@ -1,8 +1,9 @@
 //! `GET /v1/notes/conflicts/{conflict_id}`: one conflict of the owner (workspace design D2).
 //!
-//! The answer names the three sides by hash, as `notes.conflict.raised.v1` does, and carries the
-//! text of each side of a Markdown or plain-text file, so that a client can show them. The bus
-//! never carries this text; only this route of the owner does.
+//! The answer names the three sides and the merge proposal by hash, as
+//! `notes.conflict.raised.v1` does, and carries the text of each side and of the proposal of a
+//! Markdown or plain-text file, so that a client can show them. The bus never carries this text;
+//! only this route of the owner does.
 
 use axum::Json;
 use axum::extract::rejection::PathRejection;
@@ -41,6 +42,7 @@ pub(super) async fn read_conflict<B: SystemdBus>(
             ("base", &conflict.base_hash),
             ("current", &conflict.current_hash),
             ("writer", &conflict.writer_hash),
+            ("merged", &conflict.merged_hash),
         ] {
             if let Some(text) = text_of(&state, hash.as_deref()).await {
                 texts.insert(side.to_owned(), Value::String(text));
@@ -66,6 +68,14 @@ pub(super) async fn read_conflict<B: SystemdBus>(
             if let Some(hash) = hash {
                 members.insert(name.to_owned(), Value::String(hash));
             }
+        }
+        if let (Some(merged_hash), Some(overlapping)) =
+            (conflict.merged_hash, conflict.has_overlapping_hunks)
+        {
+            members.insert(
+                "merge_proposal".to_owned(),
+                json!({ "merged_hash": merged_hash, "has_overlapping_hunks": overlapping }),
+            );
         }
     }
     Ok(Json(answer))

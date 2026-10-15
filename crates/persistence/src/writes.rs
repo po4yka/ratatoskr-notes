@@ -86,6 +86,8 @@ pub struct NewConflict<'a> {
     pub current_hash: Option<&'a str>,
     /// The writer's content.
     pub writer_hash: Option<&'a str>,
+    /// The hash of the merged bytes of a merge proposal, and whether it has overlapping hunks.
+    pub proposal: Option<(&'a str, bool)>,
 }
 
 /// One recorded conflict.
@@ -109,6 +111,10 @@ pub struct ConflictRow {
     pub current_hash: Option<String>,
     /// The writer's content.
     pub writer_hash: Option<String>,
+    /// The hash of the merged bytes of the merge proposal.
+    pub merged_hash: Option<String>,
+    /// Whether the merge proposal has overlapping hunks.
+    pub has_overlapping_hunks: Option<bool>,
     /// `open` or `resolved`.
     pub state: String,
 }
@@ -344,8 +350,9 @@ impl FileTransaction {
         sqlx::query(
             "insert into notes.conflicts
                  (conflict_id, connection_id, write_id, operation_id, path, path_key, origin,
-                  media_type, base_hash, current_hash, writer_hash, state, created_at)
-             values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'open', now())",
+                  media_type, base_hash, current_hash, writer_hash, merged_hash,
+                  has_overlapping_hunks, state, created_at)
+             values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, 'open', now())",
         )
         .bind(conflict.conflict_id)
         .bind(self.connection_id)
@@ -358,6 +365,8 @@ impl FileTransaction {
         .bind(conflict.base_hash)
         .bind(conflict.current_hash)
         .bind(conflict.writer_hash)
+        .bind(conflict.proposal.map(|(merged_hash, _)| merged_hash))
+        .bind(conflict.proposal.map(|(_, overlapping)| overlapping))
         .execute(&mut *self.transaction)
         .await
         .map_err(query_error)?;
@@ -482,11 +491,14 @@ impl Database {
             Option<String>,
             Option<String>,
             Option<String>,
+            Option<String>,
+            Option<bool>,
             String,
         );
         let row: Option<Row> = sqlx::query_as(
             "select c.conflict_id, c.connection_id, c.operation_id, c.path, c.origin,
-                    c.media_type, c.base_hash, c.current_hash, c.writer_hash, c.state
+                    c.media_type, c.base_hash, c.current_hash, c.writer_hash, c.merged_hash,
+                    c.has_overlapping_hunks, c.state
              from notes.conflicts c
              join notes.connections n on n.connection_id = c.connection_id
              where c.conflict_id = $1 and n.owner_id = $2",
@@ -507,6 +519,8 @@ impl Database {
                 base_hash,
                 current_hash,
                 writer_hash,
+                merged_hash,
+                has_overlapping_hunks,
                 state,
             )| ConflictRow {
                 conflict_id,
@@ -518,6 +532,8 @@ impl Database {
                 base_hash,
                 current_hash,
                 writer_hash,
+                merged_hash,
+                has_overlapping_hunks,
                 state,
             },
         ))

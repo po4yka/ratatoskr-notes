@@ -80,6 +80,9 @@ caseless = "0.2.2"
 pulldown-cmark = { version = "0.13.4", default-features = false }
 # The frontmatter. YAML 1.2 core schema, so `2024-01-01` stays a string, as in Obsidian.
 yaml-rust2 = { version = "0.13", default-features = false }
+# The line diff under the three-way merge proposal of a text conflict (OBS-024 design D2). Myers
+# with a deadline, no dependencies with `std` alone.
+similar = { version = "3.2", default-features = false, features = ["std"] }
 
 # ---- the bus ----
 # The outbox relay publishes to JetStream under the NOTES identity, with its own inbox prefix

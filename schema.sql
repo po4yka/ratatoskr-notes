@@ -341,6 +341,10 @@ create table notes.conflicts (
     base_hash         text,
     current_hash      text,
     writer_hash       text,
+    -- The three-way merge proposal of a Markdown or plain-text file whose three sides notes holds:
+    -- the hash of the merged bytes in the blob root, and whether the merge has overlapping hunks.
+    merged_hash       text,
+    has_overlapping_hunks boolean,
     -- `open`, or `resolved` after a resolution that the channel acknowledged.
     state             text        not null,
     created_at        timestamptz not null,
@@ -350,7 +354,10 @@ create table notes.conflicts (
     constraint conflicts_base_hash_is_sha256 check (base_hash ~ '^[0-9a-f]{64}$'),
     constraint conflicts_current_hash_is_sha256 check (current_hash ~ '^[0-9a-f]{64}$'),
     constraint conflicts_writer_hash_is_sha256 check (writer_hash ~ '^[0-9a-f]{64}$'),
-    constraint conflicts_resolution_has_a_time check ((state = 'resolved') = (resolved_at is not null))
+    constraint conflicts_resolution_has_a_time check ((state = 'resolved') = (resolved_at is not null)),
+    constraint conflicts_merged_hash_is_sha256 check (merged_hash ~ '^[0-9a-f]{64}$'),
+    constraint conflicts_proposal_is_whole
+        check ((merged_hash is null) = (has_overlapping_hunks is null))
 );
 
 comment on table notes.conflicts is
@@ -380,7 +387,8 @@ create table notes.outbox (
     -- A CLOSED list: a type that Notes does not produce yet cannot be inserted.
     constraint outbox_event_type_is_known
         check (event_type in ('notes.vault.connected.v1', 'notes.vault.disconnected.v1',
-                              'notes.file.changed.v1', 'platform.operation.reported.v1')),
+                              'notes.file.changed.v1', 'notes.conflict.raised.v1',
+                              'notes.conflict.resolved.v1', 'platform.operation.reported.v1')),
     constraint outbox_aggregate_type_is_bounded
         check (length(aggregate_type) between 1 and 64)
 );

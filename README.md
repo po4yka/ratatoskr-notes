@@ -224,11 +224,23 @@ channel is a conflict.
 | `succeeded` | | The channel acknowledged the write. The one result has the kind `notes.file`, the target `notes_file:<file id>`, and the `BlobRef` of the new revision (none after a delete). |
 | `failed` | | A refusal above, a refusal of the channel with its own code, or the non-retryable `notes.write.conflict` with the error extension `conflict_id`. |
 
-**Conflicts.** `GET /v1/notes/conflicts/{conflict_id}` answers a conflict of a connection of the
-owner: `conflict_id`, `operation_id`, `connection_id`, `path`, `origin`, `media_type`, `state`
-(`open` or `resolved`), the hashes `base_hash`, `current_hash` and `writer_hash` (a side that does
-not exist is left out), and, for `text/markdown` and `text/plain`, `texts` with the text of each
-side that notes holds. Any other id answers `404` `notes.conflict.not_found`.
+**Conflicts.** A conflict is a record with three sides by hash: the base that the writer saw,
+the current revision of the vault, and the writer's content (a side that does not exist is left
+out). For `text/markdown` and `text/plain`, when notes holds the bytes of all three sides as UTF-8
+text within the size limit, notes computes a line-based three-way merge (diff3). The merged bytes go
+to the blob root, and the proposal names their hash and `has_overlapping_hunks`; a region that both
+sides changed differently holds both between the markers `<<<<<<< current`, `=======` and
+`>>>>>>> writer`. Notes never applies a proposal on its own. In the transaction that fails the write,
+notes writes `notes.conflict.raised.v1` (contract `notes/conflict.v1`, aggregate
+`notes_conflict:<conflict id>`, correlated to the operation) with the conflict id, the operation,
+the connection, the path, the origin, the media type, the three hashes and the proposal. The event
+carries hashes and never file content.
+
+`GET /v1/notes/conflicts/{conflict_id}` answers a conflict of a connection of the owner:
+`conflict_id`, `operation_id`, `connection_id`, `path`, `origin`, `media_type`, `state` (`open` or
+`resolved`), `base_hash`, `current_hash`, `writer_hash`, `merge_proposal`, and, for Markdown and
+plain text, `texts` with the text of each side (`base`, `current`, `writer`, `merged`) that notes
+holds. Any other id answers `404` `notes.conflict.not_found`.
 
 ## Template units
 
