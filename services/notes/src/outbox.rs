@@ -19,7 +19,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
-/// The inbox prefix of the one NATS connection of this service.
+/// The inbox prefix of every NATS connection of this service.
 const INBOX_PREFIX: &str = "_INBOX_notes";
 
 /// How many rows one read of the outbox takes.
@@ -147,21 +147,7 @@ impl OutboxRelay {
     }
 
     async fn connect(&self) -> Result<jetstream::Context, RelayError> {
-        let options = match &self.settings.nkey_seed_path {
-            Some(path) => {
-                let seed = tokio::fs::read_to_string(path).await.map_err(|error| {
-                    RelayError(format!("the nkey seed cannot be read: {error}"))
-                })?;
-                async_nats::ConnectOptions::with_nkey(seed.trim().to_owned())
-            }
-            None => async_nats::ConnectOptions::new(),
-        };
-        let client = options
-            .custom_inbox_prefix(INBOX_PREFIX)
-            .connection_timeout(CONNECT_TIMEOUT)
-            .connect(self.settings.url.as_str())
-            .await
-            .map_err(|error| RelayError(error.to_string()))?;
+        let client = connect(&self.settings).await.map_err(RelayError)?;
         Ok(jetstream::ContextBuilder::new()
             .timeout(PUBLISH_TIMEOUT)
             .build(client))
@@ -186,4 +172,24 @@ impl OutboxRelay {
             }
         }
     }
+}
+
+/// A connection to the server of `settings` under the `NOTES` identity, with the inbox prefix
+/// [`INBOX_PREFIX`]. The seed file is read at each connect.
+pub(crate) async fn connect(settings: &BusSettings) -> Result<async_nats::Client, String> {
+    let options = match &settings.nkey_seed_path {
+        Some(path) => {
+            let seed = tokio::fs::read_to_string(path)
+                .await
+                .map_err(|error| format!("the nkey seed cannot be read: {error}"))?;
+            async_nats::ConnectOptions::with_nkey(seed.trim().to_owned())
+        }
+        None => async_nats::ConnectOptions::new(),
+    };
+    options
+        .custom_inbox_prefix(INBOX_PREFIX)
+        .connection_timeout(CONNECT_TIMEOUT)
+        .connect(settings.url.as_str())
+        .await
+        .map_err(|error| error.to_string())
 }

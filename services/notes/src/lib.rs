@@ -49,6 +49,7 @@ use crate::blobs::BlobStore;
 use crate::config::{LogFormat, NotesConfig, TelemetryConfig};
 use crate::outbox::{BusSettings, OutboxRelay};
 use crate::systemd::{DbusSystemd, SystemdBus};
+use crate::writes::WriteConsumer;
 
 /// The whole process lifecycle.
 ///
@@ -59,9 +60,10 @@ use crate::systemd::{DbusSystemd, SystemdBus};
 /// 5. Bind the operator and the domain listeners; on failure exit 1.
 /// 6. Fail each `sync` login that a stop of the previous process interrupted, and start the sync
 ///    unit of each `sync` connection whose login finished, before the listeners accept a request.
-/// 7. Start the outbox relay when `RATATOSKR__BUS__URL` is set.
+/// 7. Start the outbox relay and the consumer of the write commands when `RATATOSKR__BUS__URL` is
+///    set. Readiness then needs the durable of the write commands.
 /// 8. Serve until SIGTERM or SIGINT. Then, within the grace window, let in-flight requests finish,
-///    and fail each connect whose login still runs. Then stop the relay.
+///    and fail each connect whose login still runs. Then stop the relay and the consumer.
 pub async fn run() -> ExitCode {
     let config = match config::load() {
         Ok(config) => config,
@@ -177,14 +179,17 @@ pub async fn serve<B: SystemdBus>(
     // The relay publishes what the outbox holds, also the events of an earlier process.
     let relay_stop = tokio_util::sync::CancellationToken::new();
     let relay = config.bus.url.as_ref().map(|url| {
-        let relay = OutboxRelay::new(
-            database.clone(),
-            BusSettings {
-                url: url.clone(),
-                nkey_seed_path: config.bus.nkey_seed_path.clone(),
-            },
-        );
-        tokio::spawn(relay.run(relay_stop.clone()))
+        let settings = BusSettings {
+            url: url.clone(),
+            nkey_seed_path: config.bus.nkey_seed_path.clone(),
+        };
+        // Readiness needs the durable of the write commands from now on.
+        let consumer = WriteConsumer::new(settings.clone(), Arc::clone(&runtime));
+        let relay = OutboxRelay::new(database.clone(), settings);
+        (
+            tokio::spawn(relay.run(relay_stop.clone())),
+            tokio::spawn(consumer.run(relay_stop.clone())),
+        )
     });
     if relay.is_none() {
         tracing::warn!("RATATOSKR__BUS__URL is not set; the events stay in the outbox");
@@ -232,8 +237,9 @@ pub async fn serve<B: SystemdBus>(
     .await
     .is_ok();
     relay_stop.cancel();
-    if let Some(relay) = relay {
+    if let Some((relay, consumer)) = relay {
         let _ = relay.await;
+        let _ = consumer.await;
     }
     tracing::info!(graceful = drained, "the process stopped");
     database.close().await;
