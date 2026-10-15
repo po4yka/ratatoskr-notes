@@ -484,25 +484,36 @@ impl Writes {
 
     /// Announce every conflict that is recorded and not announced yet, as a stop of the process
     /// between the commit of a conflict and its announcement leaves it: compute its merge proposal
-    /// and write `notes.conflict.raised.v1`. The service calls it at start. Returns how many it
+    /// and write `notes.conflict.raised.v1`. It reads them in batches of [`ANNOUNCE_BATCH`] until
+    /// none is left; a conflict that fails is logged and the others continue. A conflict that is
+    /// no longer open is not announced. The service calls it at start. Returns how many it
     /// announced.
     ///
     /// # Errors
     ///
     /// [`WriteError`] when the database fails.
     pub async fn announce_pending(&self) -> Result<usize, WriteError> {
-        let pending = self
-            .recorder
-            .database()
-            .unannounced_conflicts(ANNOUNCE_BATCH)
-            .await?;
+        let database = self.recorder.database();
         let mut announced = 0;
-        for conflict_id in pending {
-            if self.announce_one(conflict_id).await? {
-                announced += 1;
+        let mut after = None;
+        loop {
+            let pending = database
+                .unannounced_conflicts(after, ANNOUNCE_BATCH)
+                .await?;
+            let Some(last) = pending.last() else {
+                return Ok(announced);
+            };
+            after = Some(*last);
+            for conflict_id in pending {
+                match self.announce_one(conflict_id).await {
+                    Ok(true) => announced += 1,
+                    Ok(false) => {}
+                    Err(error) => {
+                        tracing::warn!(%error, %conflict_id, "a conflict could not be announced; the others continue");
+                    }
+                }
             }
         }
-        Ok(announced)
     }
 
     /// Announce the conflicts `raised` of a transaction that committed. A failure is logged: the
@@ -523,6 +534,10 @@ impl Writes {
         let Some((owner_id, conflict)) = database.conflict(conflict_id).await? else {
             return Ok(false);
         };
+        // A resolved conflict needs no proposal and no raised event.
+        if conflict.state != "open" {
+            return Ok(false);
+        }
         let sides = Sides {
             base: conflict.base_hash.as_deref(),
             current: conflict.current_hash.as_deref(),

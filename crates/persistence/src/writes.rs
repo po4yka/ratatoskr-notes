@@ -413,7 +413,8 @@ impl FileTransaction {
     }
 
     /// Store the merge `proposal` of the conflict `conflict_id` of this connection and mark it
-    /// announced. Returns `false` and changes nothing when it is announced already.
+    /// announced. Returns `false` and changes nothing when it is announced already or no longer
+    /// open.
     ///
     /// # Errors
     ///
@@ -426,7 +427,8 @@ impl FileTransaction {
         let announced = sqlx::query(
             "update notes.conflicts
                 set announced = true, merged_hash = $3, has_overlapping_hunks = $4
-              where connection_id = $1 and conflict_id = $2 and not announced",
+              where connection_id = $1 and conflict_id = $2 and not announced
+                and state = 'open'",
         )
         .bind(self.connection_id)
         .bind(conflict_id)
@@ -475,15 +477,17 @@ impl FileTransaction {
         ))
     }
 
-    /// Mark the open conflict `conflict_id` of this connection `resolved`.
+    /// Mark the open conflict `conflict_id` of this connection `resolved`, and announced: a
+    /// conflict resolved before its announcement gets no `notes.conflict.raised.v1`.
     ///
     /// # Errors
     ///
     /// [`PersistenceError::Query`] when the statement fails.
     pub async fn resolve_conflict(&mut self, conflict_id: Uuid) -> Result<(), PersistenceError> {
         sqlx::query(
-            "update notes.conflicts set state = 'resolved', resolved_at = now()
-             where connection_id = $1 and conflict_id = $2 and state = 'open'",
+            "update notes.conflicts
+                set state = 'resolved', resolved_at = now(), announced = true
+              where connection_id = $1 and conflict_id = $2 and state = 'open'",
         )
         .bind(self.connection_id)
         .bind(conflict_id)
@@ -669,18 +673,25 @@ impl Database {
         ))
     }
 
-    /// The oldest conflicts that are not announced, at most `limit`.
+    /// The open conflicts that are not announced, oldest first, at most `limit`, after the
+    /// conflict `after` (the ids are `UUIDv7`, in the order of their creation).
     ///
     /// # Errors
     ///
     /// [`PersistenceError::Query`] when the statement fails.
-    pub async fn unannounced_conflicts(&self, limit: i64) -> Result<Vec<Uuid>, PersistenceError> {
+    pub async fn unannounced_conflicts(
+        &self,
+        after: Option<Uuid>,
+        limit: i64,
+    ) -> Result<Vec<Uuid>, PersistenceError> {
         sqlx::query_scalar(
             "select conflict_id from notes.conflicts
-             where not announced
-             order by created_at, conflict_id
-             limit $1",
+             where not announced and state = 'open'
+               and ($1::uuid is null or conflict_id > $1)
+             order by conflict_id
+             limit $2",
         )
+        .bind(after)
         .bind(limit)
         .fetch_all(self.pool())
         .await
