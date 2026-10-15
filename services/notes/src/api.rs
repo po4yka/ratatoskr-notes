@@ -114,6 +114,8 @@ pub struct ApiState<B> {
     max_file_bytes: u64,
     uploads: Uploads,
     manifest_deadline: Duration,
+    /// One write-mode change of a `sync` connection runs at a time.
+    write_modes: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl<B> Clone for ApiState<B> {
@@ -137,6 +139,7 @@ impl<B> Clone for ApiState<B> {
             max_file_bytes: self.max_file_bytes,
             uploads: self.uploads.clone(),
             manifest_deadline: self.manifest_deadline,
+            write_modes: Arc::clone(&self.write_modes),
         }
     }
 }
@@ -169,6 +172,7 @@ impl<B: SystemdBus> ApiState<B> {
             max_file_bytes,
             uploads: Uploads::default(),
             manifest_deadline: DEFAULT_MANIFEST_DEADLINE,
+            write_modes: Arc::new(tokio::sync::Mutex::new(())),
         }
     }
 
@@ -394,9 +398,16 @@ impl<B: SystemdBus> ApiState<B> {
 
     /// Write the credential files of a login under `path` instead of [`DEFAULT_CREDENTIALS_DIR`].
     /// For tests: the login unit reads [`DEFAULT_CREDENTIALS_DIR`] on the host.
+    ///
+    /// The mode files of the sync units go to `sync-modes` beside it, under the same runtime
+    /// directory, instead of [`crate::systemd::SYNC_MODES_ROOT`].
     #[must_use]
     pub fn with_credentials_dir(mut self, path: impl Into<PathBuf>) -> Self {
         self.credentials_dir = path.into();
+        if let Some(runtime) = self.credentials_dir.parent() {
+            self.supervisor
+                .set_sync_modes_dir(runtime.join("sync-modes"));
+        }
         self
     }
 }

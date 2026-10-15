@@ -5,7 +5,8 @@
 //! `deploy/systemd/` and runs its `ExecStartPre=` and `ExecStart=` lines, as systemd would, with
 //! `%i` replaced, the host paths moved into a temporary directory, and `/usr/bin/ob` replaced by a
 //! stub. The test therefore checks the shipped unit.
-//! The fake reads `Environment=` and `EnvironmentFile=`, and copies each `LoadCredential=` file
+//! The fake reads `Environment=` and `EnvironmentFile=`, puts the value of each `${NAME}` of a
+//! command in place, and copies each `LoadCredential=` file
 //! into a fresh directory that it names in `$CREDENTIALS_DIRECTORY` and removes after the run.
 //!
 //! When the service starts `ratatoskr-notes-sync@<id>.service`, the fake runs the `ExecStartPre=`
@@ -54,6 +55,9 @@ use crate::support::journal::Journals;
 
 /// Where the service writes the credential files of a login on the host.
 const HOST_CREDENTIALS_ROOT: &str = "/run/ratatoskr-notes/credentials";
+
+/// Where the service writes the mode file of each sync unit on the host.
+const HOST_SYNC_MODES_ROOT: &str = "/run/ratatoskr-notes/sync-modes";
 
 /// Where the shipped units find `ob` on the host.
 const HOST_OB: &str = "/usr/bin/ob";
@@ -420,9 +424,21 @@ impl FakeSystemd {
             ));
         }
 
-        let result = self
-            .run_commands(&unit_name, &unit.commands, &environment)
-            .await;
+        // systemd puts the value of `${NAME}` in place; a later setting of a name wins.
+        let commands: Vec<String> = unit
+            .commands
+            .iter()
+            .map(|command| {
+                // The last setting of a name is the first to replace it.
+                environment
+                    .iter()
+                    .rev()
+                    .fold(command.clone(), |command, (name, value)| {
+                        command.replace(&format!("${{{name}}}"), value)
+                    })
+            })
+            .collect();
+        let result = self.run_commands(&unit_name, &commands, &environment).await;
         // systemd removes the credentials of a unit when the unit stops.
         let _ = std::fs::remove_dir_all(&credentials);
         result
@@ -479,6 +495,15 @@ impl FakeSystemd {
             .replace(
                 HOST_CREDENTIALS_ROOT,
                 &self.credentials_root().display().to_string(),
+            )
+            .replace(
+                HOST_SYNC_MODES_ROOT,
+                &self
+                    .directory
+                    .path()
+                    .join("sync-modes")
+                    .display()
+                    .to_string(),
             )
             .replace(
                 HOST_OB,

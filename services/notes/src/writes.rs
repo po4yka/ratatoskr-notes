@@ -27,7 +27,7 @@ use request::Request;
 
 pub(crate) use conflict::MAX_SIDE_BYTES;
 pub use consumer::{COMMAND_STREAM, DurableError, WRITE_DURABLE, WRITE_FILTER, WriteConsumer};
-pub use mode::{ModeChange, WRITE_MODE_OPERATION_KIND};
+pub use mode::{ModeChange, RECONFIGURE_FAILED, WRITE_MODE_OPERATION_KIND};
 
 /// What [`Writes::handle`] did with one command.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -143,7 +143,7 @@ const MERGES: usize = 2;
 const INVALID: &str = "notes.request.invalid";
 
 /// The code of a connection that the tenant does not hold.
-const CONNECTION_NOT_FOUND: &str = "notes.connection.not_found";
+pub(crate) const CONNECTION_NOT_FOUND: &str = "notes.connection.not_found";
 
 /// The code of a write to a connection whose write mode is off.
 const DISABLED: &str = "notes.write.disabled";

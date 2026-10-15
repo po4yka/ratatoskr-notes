@@ -13,6 +13,9 @@ use super::queue::Locked;
 use super::report::{ReportRow, Step};
 use super::{DISABLED, WriteError, Writes};
 
+/// The code of a write-mode change whose sync client could not be configured.
+pub const RECONFIGURE_FAILED: &str = "notes.sync.reconfigure_failed";
+
 /// The kind of the operation of a write-mode change.
 pub const WRITE_MODE_OPERATION_KIND: &str = "notes.connection.write_mode";
 
@@ -80,6 +83,33 @@ impl Writes {
         Ok(ModeChange::Changed {
             channel: connection.channel,
         })
+    }
+}
+
+impl Writes {
+    /// Write the report `succeeded` of the write-mode operation `operation_id` of `owner_id`, or
+    /// `failed` with `code` when one is given.
+    ///
+    /// # Errors
+    ///
+    /// [`WriteError`] when the database fails.
+    pub async fn report_mode(
+        &self,
+        owner_id: Uuid,
+        operation_id: Uuid,
+        failed: Option<&str>,
+    ) -> Result<(), WriteError> {
+        let step = match failed {
+            Some(code) => Step::Failed(code, None),
+            None => Step::Succeeded(None),
+        };
+        match ReportRow::new(owner_id, operation_id, step) {
+            Ok(row) => self.recorder.database().insert_event(&row.event()).await?,
+            Err(error) => {
+                tracing::error!(%error, %operation_id, "a report of a write-mode change could not be built");
+            }
+        }
+        Ok(())
     }
 }
 

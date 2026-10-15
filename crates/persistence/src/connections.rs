@@ -659,6 +659,24 @@ impl Database {
 }
 
 impl Database {
+    /// Whether the write mode of `connection_id` is on. A connection that does not exist reads as
+    /// off.
+    ///
+    /// # Errors
+    ///
+    /// [`PersistenceError::Query`] when the statement fails.
+    pub async fn write_mode_on(&self, connection_id: Uuid) -> Result<bool, PersistenceError> {
+        let mode: Option<String> =
+            sqlx::query_scalar("select write_mode from notes.connections where connection_id = $1")
+                .bind(connection_id)
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(PersistenceError::Query)?;
+        Ok(mode.as_deref() == Some("on"))
+    }
+}
+
+impl Database {
     /// Mark a `sync` connection `login_expired` when it is `connecting` or `active`: its Sync login
     /// no longer works, and the owner must connect again. When it was `connecting`, its first scan
     /// did not end, and `report_if_connecting`, the end of its connect operation, is written in the

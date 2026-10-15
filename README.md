@@ -300,11 +300,19 @@ the client state `/mnt/nvme/ratatoskr/notes/clients/<id>` (owner decision B of 2
 | Unit | Type | Started | Does |
 |---|---|---|---|
 | `ratatoskr-notes-login@.service` | oneshot | at the connect of a `sync` connection | `ob login`, then `ob sync-setup`. The exit status names the failure: 10 login failed, 11 MFA code needed, 12 end-to-end password wrong, 13 no such remote vault. |
-| `ratatoskr-notes-sync@.service` | long-running | by the Sync supervisor, after the first login and at each start of the service | `ob sync-config --mode pull-only --configs ""` with the device name `ratatoskr-<id>`, then `ob sync --continuous`. It is stopped at a disconnect. `MemoryMax=512M` is provisional until spike 3.1 measures it. |
+| `ratatoskr-notes-sync@.service` | long-running | by the Sync supervisor, after the first login, at each start of the service and after each write-mode change | `ob sync-config --mode <mode> --conflict-strategy conflict --configs ""` with the device name `ratatoskr-<id>`, then `ob sync --continuous`. The mode is `bidirectional` while the write mode is on and `pull-only` while it is off. It is stopped at a disconnect. `MemoryMax=512M` is provisional until spike 3.1 measures it. |
 | `ratatoskr-notes-cleanup@.service` | oneshot | at a disconnect, and after a failed login | `ob sync-unlink`, then removes the working tree and the client state. |
 
 The three units are in `deploy/systemd/`. None of them is enabled: only the service starts them.
-The sync unit runs in pull-only mode, so Notes never writes into a vault.
+The service writes the mode of each sync unit to `/run/ratatoskr-notes/sync-modes/<id>`
+(`RATATOSKR_SYNC_MODE=bidirectional` or `RATATOSKR_SYNC_MODE=pull-only`), which the unit reads with
+`EnvironmentFile=`, before each start of the unit. Without the file the unit is `pull-only`. A
+write-mode change of a `sync` connection runs after the `202`: on writes `bidirectional` and starts
+the unit again, then sets the mode; off sets the mode, then writes `pull-only` and starts the unit
+again. The operation ends `succeeded` after that, or `failed` with the retryable
+`notes.sync.reconfigure_failed` when the unit does not start again; a failed "on" leaves the mode off
+and the unit `pull-only`. The modes and the conflict strategy are the documented flags of `ob`
+0.0.14 and are provisional until spike 3.3 measures how `ob` treats a local write.
 
 An expired or revoked Obsidian login does not stop `ob sync --continuous`: it logs
 `Error: Failed to authenticate: ...` and tries again. The sync units log to the journal namespace

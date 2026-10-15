@@ -5,9 +5,16 @@
 # change add-notes-vault-connections, design D3). The unit is not enabled: only the service starts
 # it.
 #
-# Every start first runs `ob sync-config`: pull-only mode, no sync of the `.obsidian` configuration,
-# and the device name ratatoskr-<id> in the Sync history. Notes never writes into a vault in this
-# phase (OBS-024 adds writes).
+# Every start first runs `ob sync-config`: the mode, the conflict strategy `conflict`, no sync of the
+# `.obsidian` configuration, and the device name ratatoskr-<id> in the Sync history. The mode follows
+# the write mode of the connection (OBS-024 design D5): ratatoskr-notes writes the file
+# /run/ratatoskr-notes/sync-modes/<id> with the line RATATOSKR_SYNC_MODE=bidirectional while the
+# write mode is on, and RATATOSKR_SYNC_MODE=pull-only while it is off, and starts the unit again
+# after each change. Without the file the unit stays pull-only (the Environment= default), so a
+# missing file never lets Ratatoskr write into a vault.
+# PROVISIONAL: the values are the documented flags of ob 0.0.14. Spike 3.3 of
+# add-notes-vault-connections has not run, so how ob treats a local write, its echo and a race in
+# each mode is not measured.
 #
 # The unit logs to the journal namespace ratatoskr-notes-sync, not to the system journal (owner
 # decision A of 2026-10-14). ratatoskr-notes reads that namespace and no other journal; read it
@@ -19,8 +26,8 @@
 #
 # services/notes/tests/sync_supervisor.rs runs the ExecStartPre= and ExecStart= lines of this file
 # through the fake systemd bus. The fake moves the trees root and the clients root into a temporary
-# directory and replaces `ob` by a stub. Keep each command on one line, and use no `$` and no
-# backslash.
+# directory and replaces `ob` by a stub. Keep each command on one line, and use no backslash and no
+# `$` except `${NAME}` for a variable of Environment= or EnvironmentFile=.
 [Unit]
 Description=Ratatoskr notes: continuous Obsidian Sync of connection %i
 Documentation=https://github.com/po4yka/ratatoskr-notes
@@ -43,7 +50,10 @@ UMask=0027
 # ob keeps its state under $XDG_CONFIG_HOME/obsidian-headless on Linux (spike 3.2).
 Environment=HOME=/mnt/nvme/ratatoskr/notes/clients/%i
 Environment=XDG_CONFIG_HOME=/mnt/nvme/ratatoskr/notes/clients/%i
-ExecStartPre=/usr/bin/ob sync-config --path /mnt/nvme/ratatoskr/notes/trees/%i --mode pull-only --configs "" --device-name ratatoskr-%i
+Environment=RATATOSKR_SYNC_MODE=pull-only
+# Read by systemd as root. Its settings override the Environment= lines above.
+EnvironmentFile=-/run/ratatoskr-notes/sync-modes/%i
+ExecStartPre=/usr/bin/ob sync-config --path /mnt/nvme/ratatoskr/notes/trees/%i --mode ${RATATOSKR_SYNC_MODE} --conflict-strategy conflict --configs "" --device-name ratatoskr-%i
 ExecStart=/usr/bin/ob sync --continuous --path /mnt/nvme/ratatoskr/notes/trees/%i
 Restart=on-failure
 RestartSec=30

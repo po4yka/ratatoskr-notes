@@ -67,6 +67,13 @@ pub const TREES_ROOT: &str = "/mnt/nvme/ratatoskr/notes/trees";
 /// end-to-end key in plain text.
 pub const CLIENTS_ROOT: &str = "/mnt/nvme/ratatoskr/notes/clients";
 
+/// Where the service writes the write mode of each sync unit, on tmpfs: one file per connection,
+/// named by the connection id, with the line `RATATOSKR_SYNC_MODE=bidirectional` or
+/// `RATATOSKR_SYNC_MODE=pull-only`. The sync unit reads it with `EnvironmentFile=`. It is a sibling
+/// of [`crate::api::DEFAULT_CREDENTIALS_DIR`] under the runtime directory of the service. A missing
+/// file leaves the unit in its default, `pull-only`.
+pub const SYNC_MODES_ROOT: &str = "/run/ratatoskr-notes/sync-modes";
+
 /// The working tree of a `sync` connection on the host, which `ob` writes and the watcher reads.
 #[must_use]
 pub fn tree_dir(connection_id: Uuid) -> PathBuf {

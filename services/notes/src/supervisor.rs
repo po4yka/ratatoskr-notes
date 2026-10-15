@@ -3,8 +3,11 @@
 //! Each `sync` connection whose first login finished has one unit,
 //! `ratatoskr-notes-sync@<id>.service`. The supervisor starts it after the first login, and again at
 //! each start of the service, because the unit is not enabled and a restart of the host does not
-//! start it. Each start of the unit runs `ob sync-config --mode pull-only` first, so a connection is
-//! in pull-only mode at every start. A disconnect stops the unit (see `api::clean_up_sync_client`).
+//! start it. Each start of the unit runs `ob sync-config` first, with the mode that the supervisor
+//! wrote for it under [`SYNC_MODES_ROOT`]: `bidirectional` while the write mode of the connection is
+//! on, `pull-only` while it is off (OBS-024 design D5). A change of the write mode writes the file
+//! again and starts the unit again ([`Supervisor::reconfigure`]). A disconnect stops the unit (see
+//! `api::clean_up_sync_client`).
 //!
 //! An expired or revoked login does not stop `ob sync --continuous`: it logs the line
 //! [`AUTH_FAILURE`] and tries again. The sync units log to the journal namespace
@@ -23,6 +26,7 @@
 //! the service stops. The run of failures of a unit stays across a new follower.
 
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -37,7 +41,8 @@ use uuid::Uuid;
 use crate::api::TestHook;
 use crate::operation::{self, Completion, Phase, Report, ReportRow};
 use crate::systemd::{
-    JOURNAL_UNREADABLE, JobResult, JournalLine, SYNC_LOG_NAMESPACE, SystemdBus, UnitName,
+    JOURNAL_UNREADABLE, JobResult, JournalLine, SYNC_LOG_NAMESPACE, SYNC_MODES_ROOT, SystemdBus,
+    UnitName,
 };
 use crate::tree_sync::Pipeline;
 
@@ -128,6 +133,8 @@ pub(crate) struct Supervisor<B> {
     pipelines: Arc<Mutex<HashMap<Uuid, CancellationToken>>>,
     /// A pause after a login expired, for tests.
     after_terminal_state: Option<TestHook>,
+    /// Where the mode file of each sync unit is written.
+    sync_modes_dir: PathBuf,
 }
 
 impl<B> Clone for Supervisor<B> {
@@ -142,6 +149,7 @@ impl<B> Clone for Supervisor<B> {
             pipeline: self.pipeline.clone(),
             pipelines: Arc::clone(&self.pipelines),
             after_terminal_state: self.after_terminal_state.clone(),
+            sync_modes_dir: self.sync_modes_dir.clone(),
         }
     }
 }
@@ -159,7 +167,13 @@ impl<B: SystemdBus> Supervisor<B> {
             pipeline,
             pipelines: Arc::new(Mutex::new(HashMap::new())),
             after_terminal_state: None,
+            sync_modes_dir: PathBuf::from(SYNC_MODES_ROOT),
         }
+    }
+
+    /// Write the mode files of the sync units under `directory` instead of [`SYNC_MODES_ROOT`].
+    pub(crate) fn set_sync_modes_dir(&mut self, directory: PathBuf) {
+        self.sync_modes_dir = directory;
     }
 
     /// Wait for `hook` after a login expired, before the rest of the step. For tests.
@@ -179,6 +193,75 @@ impl<B: SystemdBus> Supervisor<B> {
     /// When the unit runs, the pipeline of its working tree starts: the watcher feeds the recorder,
     /// and, when `completion` is given, the first full scan completes the connect operation.
     pub(crate) async fn start(&self, connection_id: Uuid, completion: Option<Completion>) -> bool {
+        // A mode that cannot be read starts the unit pull-only: Ratatoskr then writes nothing.
+        let bidirectional = match self.database.write_mode_on(connection_id).await {
+            Ok(on) => on,
+            Err(error) => {
+                tracing::error!(%error, %connection_id, "the write mode could not be read; the sync unit starts pull-only");
+                false
+            }
+        };
+        self.start_in_mode(connection_id, completion, bidirectional)
+            .await
+    }
+
+    /// Set the mode of the sync unit of `connection_id` for the write mode `bidirectional`, and
+    /// start the unit again when this process runs it, so that `ob sync-config` applies the mode.
+    /// A unit that does not run gets the mode at its next start. Returns whether the mode is set and
+    /// the unit, when it ran, runs again; a failure is logged.
+    pub(crate) async fn reconfigure(&self, connection_id: Uuid, bidirectional: bool) -> bool {
+        let unit = UnitName::sync(connection_id);
+        let runs = self
+            .watched
+            .lock()
+            .is_ok_and(|watched| watched.contains_key(unit.as_str()));
+        if !runs {
+            return self.write_mode_file(connection_id, bidirectional).await;
+        }
+        match self.systemd.stop_unit(&unit).await {
+            Ok(JobResult::Done) => {}
+            Ok(JobResult::NotDone(result)) => {
+                tracing::error!(%unit, %result, "the sync unit did not stop for a write-mode change");
+                return false;
+            }
+            Err(error) => {
+                tracing::error!(%unit, %error, "the sync unit could not be stopped for a write-mode change");
+                return false;
+            }
+        }
+        let completion = match self.database.connect_operation(connection_id).await {
+            Ok(Some(operation)) => completion_of(&operation),
+            Ok(None) => None,
+            Err(error) => {
+                tracing::error!(%error, %connection_id, "the connect operation of a connection could not be read");
+                None
+            }
+        };
+        self.start_in_mode(connection_id, completion, bidirectional)
+            .await
+    }
+
+    /// Write the mode file of the sync unit of `connection_id`: a temporary file in the same
+    /// directory, then a rename, so that systemd never reads a part of it. Returns whether it is
+    /// written; a failure is logged.
+    async fn write_mode_file(&self, connection_id: Uuid, bidirectional: bool) -> bool {
+        let written = write_mode_file(&self.sync_modes_dir, connection_id, bidirectional).await;
+        if let Err(error) = &written {
+            tracing::error!(%error, %connection_id, "the mode file of a sync unit could not be written");
+        }
+        written.is_ok()
+    }
+
+    /// [`Self::start`] with the mode `bidirectional`, which is written to the mode file first.
+    async fn start_in_mode(
+        &self,
+        connection_id: Uuid,
+        completion: Option<Completion>,
+        bidirectional: bool,
+    ) -> bool {
+        if !self.write_mode_file(connection_id, bidirectional).await {
+            return false;
+        }
         let unit = UnitName::sync(connection_id);
         // Before the start, so that no line of this start is lost.
         self.follow();
@@ -426,6 +509,32 @@ impl<B: SystemdBus> Supervisor<B> {
             }
         }
     }
+}
+
+/// The line of the mode file of a sync unit. PROVISIONAL until spike 3.3 (workspace change
+/// `add-notes-vault-connections`) runs `ob` against a real Sync account: `bidirectional` with the
+/// conflict strategy `conflict` that the unit names, and `pull-only`, are the documented values of
+/// `ob sync-config` 0.0.14; how `ob` treats a local write and its echo in each mode is not measured.
+const fn mode_line(bidirectional: bool) -> &'static str {
+    if bidirectional {
+        "RATATOSKR_SYNC_MODE=bidirectional\n"
+    } else {
+        "RATATOSKR_SYNC_MODE=pull-only\n"
+    }
+}
+
+/// Write the mode file of `connection_id` under `directory`, through a temporary file and a
+/// rename.
+async fn write_mode_file(
+    directory: &Path,
+    connection_id: Uuid,
+    bidirectional: bool,
+) -> std::io::Result<()> {
+    tokio::fs::create_dir_all(directory).await?;
+    let file = directory.join(connection_id.to_string());
+    let part = directory.join(format!(".{connection_id}.part"));
+    tokio::fs::write(&part, mode_line(bidirectional)).await?;
+    tokio::fs::rename(&part, &file).await
 }
 
 /// The completion of the connect operation of a connection that is still `connecting`.

@@ -60,11 +60,16 @@ fn text(path: &Path) -> String {
     path.display().to_string()
 }
 
-/// `HOME` and `XDG_CONFIG_HOME` are the client state of the connection.
+/// `HOME` and `XDG_CONFIG_HOME` are the client state of the connection. Other variables, such as
+/// the mode of the sync unit, are not read here.
 fn assert_client_environment(unit: &str, settings: &[(String, String)]) {
     let client = text(&client_dir(ID));
+    let homes: Vec<String> = values(settings, "Environment")
+        .into_iter()
+        .filter(|value| value.starts_with("HOME=") || value.starts_with("XDG_CONFIG_HOME="))
+        .collect();
     assert_eq!(
-        values(settings, "Environment"),
+        homes,
         [
             format!("HOME={client}"),
             format!("XDG_CONFIG_HOME={client}")

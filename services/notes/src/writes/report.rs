@@ -69,6 +69,10 @@ pub(super) fn failure(code: &str) -> (&'static str, bool) {
         "notes.connection.not_found" => ("The connection does not exist.", false),
         "notes.conflict.not_found" => ("The conflict does not exist or is resolved.", false),
         "notes.request.invalid" => ("The request is invalid.", false),
+        "notes.sync.reconfigure_failed" => (
+            "The sync client could not be configured for the write mode. Try again.",
+            true,
+        ),
         _ => ("The vault did not apply the write.", false),
     }
 }
