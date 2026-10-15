@@ -363,3 +363,98 @@ async fn a_failed_write_is_delivered_again() {
     provision(&stream, None).await;
     writer.cleanup().await;
 }
+
+#[tokio::test]
+async fn a_panic_in_one_write_does_not_stop_the_consumer() {
+    let writer = Writer::new().await;
+    let a = b"# A\n";
+    let base = b"# Plan\n\nIn the vault.\n";
+    let mine = b"# Plan\n\nSent through the bus after a defect.\n";
+    let broken = writer.vault(&[("A.md", a), ("Index.md", b"[[A]]\n")]).await;
+    let other = writer.vault(&[("Plan.md", base)]).await;
+    let blob = writer.stage(other, mine).await;
+    let rename = command(
+        broken,
+        &serde_json::json!({ "rename": { "path": "A.md", "base_hash": sha256(a), "target_path": "B.md" } }),
+    );
+    let write = command(other, &update("Plan.md", &sha256(base), &blob));
+    let client = async_nats::connect(nats_url())
+        .await
+        .expect("the test NATS server can be reached");
+    let context = jetstream::new(client);
+    let stream = context
+        .get_or_create_stream(stream::Config {
+            name: COMMAND_STREAM.to_owned(),
+            subjects: vec!["cmd.>".to_owned()],
+            ..Default::default()
+        })
+        .await
+        .expect("the command stream exists");
+    let _bus = BUS.lock().await;
+    stream.purge().await.expect("the command stream is emptied");
+    provision(
+        &stream,
+        Some(durable(WRITE_FILTER, Duration::from_secs(30))),
+    )
+    .await;
+    for command in [&rename, &write] {
+        context
+            .publish(
+                WRITE_FILTER,
+                serde_json::to_vec(&command.envelope)
+                    .expect("the command is JSON")
+                    .into(),
+            )
+            .await
+            .expect("the command is published")
+            .await
+            .expect("the command is stored");
+    }
+    let runtime = Arc::new(RuntimeState::new(writer.channel.fixture.database.clone()));
+    let stop = CancellationToken::new();
+    let defective = writer.writes.clone().with_panic_in_plan("A.md");
+    let consumer = WriteConsumer::new(settings(), Arc::clone(&runtime), defective);
+    let running = tokio::spawn(consumer.run(stop.clone()));
+
+    let mut outcome = None;
+    for _ in 0..100 {
+        outcome = writer.outcome(&write).await;
+        if outcome.is_some() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    let ready_while_running = readiness(&runtime).await;
+    let reports = writer.reports(rename.operation_id).await;
+    stop.cancel();
+    let _ = running.await;
+
+    assert_eq!(
+        outcome,
+        Some(Outcome::Pending),
+        "the write of another connection lands after a write that panicked"
+    );
+    assert_eq!(
+        ready_while_running,
+        StatusCode::OK,
+        "the consumer still runs"
+    );
+    assert_eq!(
+        reports
+            .last()
+            .map(|report| (report["status"].clone(), report["error"]["code"].clone())),
+        Some((
+            serde_json::json!("failed"),
+            serde_json::json!("notes.write.internal")
+        )),
+        "the write that panicked fails its operation: {reports:?}"
+    );
+    assert_eq!(
+        readiness(&runtime).await,
+        StatusCode::SERVICE_UNAVAILABLE,
+        "the service is not ready once the consumer ended"
+    );
+
+    provision(&stream, None).await;
+    writer.cleanup().await;
+}

@@ -263,6 +263,8 @@ pub struct Writes {
     recorder: FileRecorder,
     /// At most [`MERGES`] merge proposals are computed at the same time.
     merges: Arc<Semaphore>,
+    /// A path whose rename panics while its link rewrites are planned. For tests.
+    panic_in_plan: Option<Arc<str>>,
 }
 
 impl Writes {
@@ -272,7 +274,17 @@ impl Writes {
         Self {
             recorder,
             merges: Arc::new(Semaphore::new(MERGES)),
+            panic_in_plan: None,
         }
+    }
+
+    /// Panic while the link rewrites of a rename of `path` are planned. For tests: a defect of the
+    /// write path must not stop the consumer.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn with_panic_in_plan(mut self, path: &str) -> Self {
+        self.panic_in_plan = Some(Arc::from(path));
+        self
     }
 
     /// Take one write command: queue it at the end of the queue of its file, and deliver it when
@@ -295,6 +307,10 @@ impl Writes {
     /// # Errors
     ///
     /// [`WriteError`] when the database fails; the command is delivered again.
+    ///
+    /// # Panics
+    ///
+    /// Only with the test hook [`Self::with_panic_in_plan`], at a rename of its path.
     pub async fn handle(&self, command: &CommandEnvelope) -> Result<Handled, WriteError> {
         let Some(mut request) = Request::parse(command) else {
             if let Some((owner_id, operation_id)) = Request::operation_of(command) {
@@ -368,6 +384,12 @@ impl Writes {
         }
         let write_id = Uuid::now_v7();
         // A rename rewrites the links that named the old path, as one write group (design D7).
+        #[expect(clippy::panic, reason = "the test hook of a defect in the write path")]
+        if request.target_path.is_some()
+            && self.panic_in_plan.as_deref() == Some(request.path.as_str())
+        {
+            panic!("the test hook panics in the plan of a rename");
+        }
         let plan = group::plan(&self.recorder, locked.transaction, &request).await?;
         if let Some((content_hash, content_length)) = &plan.own {
             request.content_hash = Some(content_hash.clone());
