@@ -40,6 +40,8 @@ struct ConnectionView {
     vault_display_name: String,
     state: String,
     excluded_folders: Vec<String>,
+    /// `on` or `off`.
+    write_mode: String,
     conditions: Vec<Condition>,
 }
 
@@ -57,6 +59,7 @@ impl From<ConnectionStatus> for ConnectionView {
             vault_display_name: status.vault_display_name,
             state: status.state,
             excluded_folders: status.excluded_folders,
+            write_mode: status.write_mode,
             conditions: status
                 .collisions
                 .into_iter()

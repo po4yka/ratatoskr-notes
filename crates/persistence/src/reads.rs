@@ -20,6 +20,8 @@ pub struct ConnectionStatus {
     pub state: String,
     /// The folders that the owner excluded.
     pub excluded_folders: Vec<String>,
+    /// `on` or `off`: whether Ratatoskr may write into the vault.
+    pub write_mode: String,
     /// Each collision: the path that got no revision, and the path of the file that holds its key.
     pub collisions: Vec<(String, String)>,
 }
@@ -52,15 +54,16 @@ impl Database {
         &self,
         owner_id: Uuid,
     ) -> Result<Vec<ConnectionStatus>, PersistenceError> {
-        let rows: Vec<(Uuid, String, String, String, Vec<String>)> = sqlx::query_as(&format!(
-            "select connection_id, channel, vault_display_name, state, excluded_folders
+        let rows: Vec<(Uuid, String, String, String, Vec<String>, String)> =
+            sqlx::query_as(&format!(
+            "select connection_id, channel, vault_display_name, state, excluded_folders, write_mode
              from notes.connections where owner_id = $1 and {READABLE}
              order by created_at"
         ))
-        .bind(owner_id)
-        .fetch_all(&self.pool)
-        .await
-        .map_err(PersistenceError::Query)?;
+            .bind(owner_id)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(PersistenceError::Query)?;
         let collisions: Vec<(Uuid, String, String)> = sqlx::query_as(&format!(
             "select c.connection_id, c.path, f.path
              from notes.path_collisions c
@@ -76,13 +79,21 @@ impl Database {
         Ok(rows
             .into_iter()
             .map(
-                |(connection_id, channel, vault_display_name, state, excluded_folders)| {
+                |(
+                    connection_id,
+                    channel,
+                    vault_display_name,
+                    state,
+                    excluded_folders,
+                    write_mode,
+                )| {
                     ConnectionStatus {
                         connection_id,
                         channel,
                         vault_display_name,
                         state,
                         excluded_folders,
+                        write_mode,
                         collisions: collisions
                             .iter()
                             .filter(|(id, _, _)| *id == connection_id)

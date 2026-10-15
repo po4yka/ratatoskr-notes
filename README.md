@@ -282,6 +282,7 @@ mode and the operation. Off fails each write that waits in a queue and was not d
 connection of another owner, or one that is not `connecting` or `active`, answers `404`
 `notes.connection.not_found` and writes no report: Edge fails the operation with the code it
 relays.
+`GET /v1/notes/connections` names the mode of each connection in `write_mode` (`on` or `off`).
 
 ## Template units
 
