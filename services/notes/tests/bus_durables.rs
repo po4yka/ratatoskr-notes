@@ -411,6 +411,7 @@ async fn a_panic_in_one_write_does_not_stop_the_consumer() {
             .expect("the command is stored");
     }
     let runtime = Arc::new(RuntimeState::new(writer.channel.fixture.database.clone()));
+    runtime.mark_started();
     let stop = CancellationToken::new();
     let defective = writer.writes.clone().with_panic_in_plan("A.md");
     let consumer = WriteConsumer::new(settings(), Arc::clone(&runtime), defective);

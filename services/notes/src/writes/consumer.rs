@@ -9,7 +9,10 @@
 //!
 //! The consumer hands each command to [`Writes::handle`] and acknowledges it after the write path
 //! committed what it did with it, so a stop between the two delivers the command again, and the
-//! idempotency key of the write makes the repeat a repeat.
+//! idempotency key of the write makes the repeat a repeat. Each command runs in a task of its own:
+//! a panic of the write path fails that one operation with `notes.write.internal`, terminates the
+//! message, and the consumer goes on. When the consumer ends, for any reason, the service is not
+//! ready.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -138,6 +141,7 @@ impl WriteConsumer {
     /// command is terminated. When the bus or the durable fails, the service is not ready, and
     /// the consumer starts again after [`VERIFY_INTERVAL`].
     pub async fn run(self, stop: CancellationToken) {
+        let _not_ready_at_end = NotReadyAtEnd(Arc::clone(&self.runtime));
         loop {
             match self.consume(&stop).await {
                 Ok(()) => return,
@@ -189,13 +193,31 @@ impl WriteConsumer {
             acknowledge(message, AckKind::Term).await;
             return;
         };
-        match self.writes.handle(&command).await {
-            Ok(_) => acknowledge(message, AckKind::Ack).await,
-            Err(error) => {
+        let writes = self.writes.clone();
+        let taken = command.clone();
+        match tokio::spawn(async move { writes.handle(&taken).await }).await {
+            Ok(Ok(_)) => acknowledge(message, AckKind::Ack).await,
+            Ok(Err(error)) => {
                 tracing::warn!(%error, "a write command is delivered again later");
                 acknowledge(message, AckKind::Nak(Some(RETRY_DELAY))).await;
             }
+            Err(defect) => {
+                tracing::error!(%defect, "a write command stopped the write path; its operation fails");
+                self.writes.fail_defect(&command).await;
+                acknowledge(message, AckKind::Term).await;
+            }
         }
+    }
+}
+
+/// Makes the service not ready when it is dropped: at the end of [`WriteConsumer::run`], also
+/// when it ends by a panic.
+#[derive(Debug)]
+struct NotReadyAtEnd(Arc<RuntimeState>);
+
+impl Drop for NotReadyAtEnd {
+    fn drop(&mut self) {
+        self.0.set_write_durable_verified(false);
     }
 }
 

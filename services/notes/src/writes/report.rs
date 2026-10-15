@@ -75,6 +75,7 @@ pub(super) fn failure(code: &str) -> (&'static str, bool) {
             "The file changed after the writer read it. Resolve the conflict.",
             false,
         ),
+        "notes.write.internal" => ("The write could not be processed.", false),
         "notes.write.partially_applied" => (
             "The vault applied only a part of the rename and its link updates. Resolve the \
              conflict.",

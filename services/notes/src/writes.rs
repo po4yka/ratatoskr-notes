@@ -254,6 +254,9 @@ const CONFLICT_NOT_FOUND: &str = "notes.conflict.not_found";
 /// The code of a write that met a revision that its writer did not see.
 const CONFLICT: &str = "notes.write.conflict";
 
+/// The code of a write that stopped the write path by a defect.
+const INTERNAL: &str = "notes.write.internal";
+
 /// The code of a rename whose link rewrites the channel applied only in part.
 const PARTIALLY_APPLIED: &str = "notes.write.partially_applied";
 
@@ -410,6 +413,17 @@ impl Writes {
         transaction.commit().await?;
         self.announce(&raised).await;
         Ok(Handled::Queued { write_id })
+    }
+
+    /// Fail the operation of `command`, which stopped the write path by a defect, with
+    /// `notes.write.internal`. Nothing of the command was committed. A failure is logged.
+    pub(crate) async fn fail_defect(&self, command: &CommandEnvelope) {
+        let Some((owner_id, operation_id)) = Request::operation_of(command) else {
+            return;
+        };
+        if let Err(error) = self.refused(owner_id, operation_id, INTERNAL).await {
+            tracing::error!(%error, %operation_id, "the failure of a write could not be reported");
+        }
     }
 
     /// Give the resolution `request` the path of its conflict, the revision that the conflict
