@@ -516,6 +516,19 @@ impl Writes {
         Ok(true)
     }
 
+    /// The `sync` connections that are `connecting` or `active` and have a delivered write.
+    ///
+    /// # Errors
+    ///
+    /// [`WriteError`] when the database fails.
+    pub async fn sync_connections_delivering(&self) -> Result<Vec<Uuid>, WriteError> {
+        Ok(self
+            .recorder
+            .database()
+            .sync_connections_delivering()
+            .await?)
+    }
+
     /// Whether a change of `connection_id` may name the bytes with the SHA-256 `digest`: the
     /// connection uploaded them or holds them as a revision, and the blob store holds them.
     ///

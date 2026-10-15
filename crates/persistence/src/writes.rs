@@ -588,6 +588,24 @@ impl Database {
         Ok(rows)
     }
 
+    /// The `sync` connections that are `connecting` or `active` and have a delivering write.
+    ///
+    /// # Errors
+    ///
+    /// [`PersistenceError::Query`] when the statement fails.
+    pub async fn sync_connections_delivering(&self) -> Result<Vec<Uuid>, PersistenceError> {
+        sqlx::query_scalar(
+            "select c.connection_id from notes.connections c
+             where c.channel = 'sync' and c.state in ('connecting', 'active')
+               and exists (select 1 from notes.writes w
+                           where w.connection_id = c.connection_id and w.state = 'delivering')
+             order by c.created_at",
+        )
+        .fetch_all(self.pool())
+        .await
+        .map_err(query_error)
+    }
+
     /// The delivering writes of `connection_id` after the position `after`, at most `limit`, in
     /// the order of acceptance: the queue that the device of a `plugin` or `cli` connection reads.
     ///

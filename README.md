@@ -226,6 +226,20 @@ When a channel acknowledges a write with another hash than the write named (a pl
 file on save), the acknowledged bytes become current and are published once, the expected bytes
 never are, and the operation succeeds with that hash and the warning `notes.write.transformed`.
 
+**Sync delivery.** Every two seconds, and for each `sync` connection with a delivered write, the
+service compares each delivered write with the working tree under a lock of its path. A file with
+the hash that the write produces is the acknowledgement. A file with the base of the write (no file
+for a `create`) gets the write: new bytes go to a temporary file `.ratatoskr-write-<id>.part` in the
+same folder, which is flushed to disk and renamed over the file, so a reader sees the old or the new
+bytes and never a mix; a `delete` removes the file, and a `rename` or a `move` renames it. The
+Headless client sends the change to Obsidian Sync, and the watcher reports it back as the echo. Any
+other file means that the tree changed after the queue check: nothing is written, the bytes of the
+tree go to the blob store, and the write fails with a conflict whose current side is those bytes. A
+`set_property` fails with `notes.write.unsupported` on this channel, because notes does not change
+a frontmatter itself yet. The service must be able to write the working tree on the host, which the
+read-only group access of owner decision B does not give: the deploy role must change that before
+write mode is turned on for a `sync` connection.
+
 **Device queue.** The delivered writes of a `plugin` or `cli` connection, in the order of
 acceptance, are the queue that its device reads through Edge, with the device claims. Only the
 device that the connection registered, of the kind of its channel, reads or answers it; any other

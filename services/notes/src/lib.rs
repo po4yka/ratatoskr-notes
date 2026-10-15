@@ -208,6 +208,16 @@ pub async fn serve<B: SystemdBus>(
         tracing::warn!("RATATOSKR__BUS__URL is not set; the events stay in the outbox");
     }
 
+    // The writes of the `sync` connections go into their working trees.
+    let sync_writer = tokio::spawn(
+        crate::sync_write::SyncWriter::new(
+            FileRecorder::new(database.clone(), blobs.clone())
+                .with_max_file_bytes(config.files.max_file_bytes),
+            crate::systemd::TREES_ROOT,
+        )
+        .run(relay_stop.clone()),
+    );
+
     let state = ApiState::new(database.clone(), systemd)
         .with_blobs(blobs)
         .with_max_file_bytes(config.files.max_file_bytes)
@@ -250,6 +260,7 @@ pub async fn serve<B: SystemdBus>(
     .await
     .is_ok();
     relay_stop.cancel();
+    let _ = sync_writer.await;
     if let Some((relay, consumer)) = relay {
         let _ = relay.await;
         let _ = consumer.await;
