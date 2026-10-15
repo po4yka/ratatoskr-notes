@@ -85,8 +85,8 @@ pub struct NewCollision<'a> {
 /// The changes of the files of one connection, under the lock of its row.
 #[derive(Debug)]
 pub struct FileTransaction {
-    transaction: Transaction<'static, Postgres>,
-    connection_id: Uuid,
+    pub(crate) transaction: Transaction<'static, Postgres>,
+    pub(crate) connection_id: Uuid,
 }
 
 /// The row of a [`LockedConnection`]: owner, channel, device, excluded folders, device sequence,
@@ -102,7 +102,7 @@ type LockedRow = (
     String,
 );
 
-fn query_error(error: sqlx::Error) -> PersistenceError {
+pub(crate) fn query_error(error: sqlx::Error) -> PersistenceError {
     PersistenceError::Query(error)
 }
 

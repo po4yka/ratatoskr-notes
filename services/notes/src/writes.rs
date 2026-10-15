@@ -4,11 +4,15 @@
 //! the commands through the durable that Edge creates for it.
 
 mod consumer;
+mod queue;
+mod request;
 
 use ratatoskr_event_envelope::CommandEnvelope;
 use uuid::Uuid;
 
-use crate::files::FileRecorder;
+use crate::files::{FileRecorder, RecordError};
+use queue::Locked;
+use request::Request;
 
 pub use consumer::{COMMAND_STREAM, DurableError, WRITE_DURABLE, WRITE_FILTER, WriteConsumer};
 
@@ -91,6 +95,36 @@ pub enum Outcome {
 #[error("a write could not be processed: {0}")]
 pub struct WriteError(&'static str);
 
+impl From<ratatoskr_notes_persistence::PersistenceError> for WriteError {
+    fn from(_: ratatoskr_notes_persistence::PersistenceError) -> Self {
+        Self("the database")
+    }
+}
+
+impl From<RecordError> for WriteError {
+    fn from(_: RecordError) -> Self {
+        Self("a file change")
+    }
+}
+
+/// How the channel ended a delivered write.
+#[derive(Debug, Clone, Copy)]
+enum End<'a> {
+    /// The file has this SHA-256 now, or no file is at the path.
+    Acknowledged(Option<&'a str>),
+    /// The channel did not apply the write.
+    Refused(&'a Refusal),
+}
+
+/// The code of a command that is not a valid write command.
+const INVALID: &str = "notes.request.invalid";
+
+/// The code of a connection that the tenant does not hold.
+const CONNECTION_NOT_FOUND: &str = "notes.connection.not_found";
+
+/// The code of a write that met a revision that its writer did not see.
+const CONFLICT: &str = "notes.write.conflict";
+
 /// The pending writes of every connection.
 #[derive(Debug, Clone)]
 pub struct Writes {
@@ -104,16 +138,38 @@ impl Writes {
         Self { recorder }
     }
 
-    /// Take one write command. Queues nothing yet.
+    /// Take one write command: queue it at the end of the queue of its file, and deliver it when
+    /// it is the head.
     ///
     /// # Errors
     ///
     /// [`WriteError`] when the database fails; the command is delivered again.
     pub async fn handle(&self, command: &CommandEnvelope) -> Result<Handled, WriteError> {
-        let _ = (&self.recorder, command);
-        Ok(Handled::Queued {
-            write_id: Uuid::now_v7(),
-        })
+        let Some(request) = Request::parse(command) else {
+            return Ok(Handled::Refused { code: INVALID });
+        };
+        let database = self.recorder.database();
+        let Some((mut transaction, connection)) =
+            database.begin_file_change(request.connection_id).await?
+        else {
+            return Ok(Handled::Refused {
+                code: CONNECTION_NOT_FOUND,
+            });
+        };
+        let write_id = Uuid::now_v7();
+        transaction
+            .insert_write(&request.new_write(write_id))
+            .await?;
+        Locked {
+            recorder: &self.recorder,
+            transaction: &mut transaction,
+            connection: &connection,
+            connection_id: request.connection_id,
+        }
+        .advance(&request.path_key)
+        .await?;
+        transaction.commit().await?;
+        Ok(Handled::Queued { write_id })
     }
 
     /// The writes of `connection_id` that its channel delivers now, in the order of acceptance.
@@ -122,13 +178,28 @@ impl Writes {
     ///
     /// [`WriteError`] when the database fails.
     pub async fn deliveries(&self, connection_id: Uuid) -> Result<Vec<Delivery>, WriteError> {
-        let _ = connection_id;
-        Ok(Vec::new())
+        let rows = self
+            .recorder
+            .database()
+            .delivering_writes(connection_id)
+            .await?;
+        Ok(rows
+            .into_iter()
+            .map(|row| Delivery {
+                write_id: row.write_id,
+                operation_id: row.operation_id,
+                kind: row.kind,
+                path: row.path,
+                target_path: row.target_path,
+                base_hash: row.base_hash,
+                content_hash: row.content_hash,
+            })
+            .collect())
     }
 
     /// The channel acknowledged the delivered write `write_id` of `connection_id`; the file has
-    /// the SHA-256 `revision` now, or no file is at the path after a delete. Returns whether a
-    /// delivered write was acknowledged.
+    /// the SHA-256 `revision` now, or no file is at the path after a delete. The next write of
+    /// the queue of the file is delivered. Returns whether a delivered write was acknowledged.
     ///
     /// # Errors
     ///
@@ -139,12 +210,13 @@ impl Writes {
         write_id: Uuid,
         revision: Option<&str>,
     ) -> Result<bool, WriteError> {
-        let _ = (connection_id, write_id, revision);
-        Ok(false)
+        self.end(connection_id, write_id, End::Acknowledged(revision))
+            .await
     }
 
-    /// The channel refused the delivered write `write_id` of `connection_id`. Returns whether a
-    /// delivered write was refused.
+    /// The channel refused the delivered write `write_id` of `connection_id`: a base mismatch
+    /// fails it as a conflict, any other refusal with the code of the channel. The next write of
+    /// the queue of the file is delivered. Returns whether a delivered write was refused.
     ///
     /// # Errors
     ///
@@ -155,8 +227,54 @@ impl Writes {
         write_id: Uuid,
         refusal: Refusal,
     ) -> Result<bool, WriteError> {
-        let _ = (connection_id, write_id, refusal);
-        Ok(false)
+        self.end(connection_id, write_id, End::Refused(&refusal))
+            .await
+    }
+
+    /// End the delivered write `write_id`, and deliver the next write of its queue.
+    async fn end(
+        &self,
+        connection_id: Uuid,
+        write_id: Uuid,
+        end: End<'_>,
+    ) -> Result<bool, WriteError> {
+        let database = self.recorder.database();
+        let Some((mut transaction, connection)) = database.begin_file_change(connection_id).await?
+        else {
+            return Ok(false);
+        };
+        let Some(write) = transaction.write(write_id).await? else {
+            return Ok(false);
+        };
+        if write.state != "delivering" {
+            return Ok(false);
+        }
+        match end {
+            End::Acknowledged(revision) => {
+                let revision = if write.kind == "delete" {
+                    None
+                } else {
+                    revision
+                };
+                transaction.succeed_write(write_id, revision).await?;
+            }
+            End::Refused(Refusal::BaseMismatch { .. }) => {
+                transaction.fail_write(write_id, CONFLICT).await?;
+            }
+            End::Refused(Refusal::Failed { code }) => {
+                transaction.fail_write(write_id, code).await?;
+            }
+        }
+        Locked {
+            recorder: &self.recorder,
+            transaction: &mut transaction,
+            connection: &connection,
+            connection_id,
+        }
+        .advance(&write.path_key)
+        .await?;
+        transaction.commit().await?;
+        Ok(true)
     }
 
     /// The outcome of the write of `operation_id`, or `None` when no write has it.
@@ -165,7 +283,23 @@ impl Writes {
     ///
     /// [`WriteError`] when the database fails.
     pub async fn outcome(&self, operation_id: Uuid) -> Result<Option<Outcome>, WriteError> {
-        let _ = operation_id;
-        Ok(None)
+        let Some(write) = self
+            .recorder
+            .database()
+            .write_of_operation(operation_id)
+            .await?
+        else {
+            return Ok(None);
+        };
+        Ok(Some(match write.state.as_str() {
+            "succeeded" => Outcome::Succeeded {
+                revision: write.revision,
+            },
+            "failed" => Outcome::Failed {
+                code: write.error_code.unwrap_or_default(),
+                conflict_id: None,
+            },
+            _ => Outcome::Pending,
+        }))
     }
 }

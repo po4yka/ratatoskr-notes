@@ -238,6 +238,66 @@ comment on table notes.path_collisions is
     'The condition notes.file.path_collision of a connection, with the path that got no revision.';
 
 -- ---------------------------------------------------------------------------------------------
+-- writes: the writes that Ratatoskr asked for, and the queue of each file (OBS-024)
+-- ---------------------------------------------------------------------------------------------
+
+-- The queue of a file is the open writes (`queued` or `delivering`) of one connection with one
+-- path key, in the order of `position`. Only the head of a queue is delivered; the next write
+-- waits until the channel acknowledged or refused the head (OBS-024 design D1). A write keeps its
+-- row after it ended.
+create table notes.writes (
+    write_id       uuid        primary key,
+    connection_id  uuid        not null references notes.connections (connection_id),
+    -- The order of acceptance.
+    position       bigint      generated always as identity,
+    -- The operation that Edge minted for the write (kind `notes.file.write`).
+    operation_id   uuid        not null,
+    -- `platform` or `site:<site id>`.
+    origin         text        not null,
+    kind           text        not null,
+    -- The NFC path that the write changes, and its case-folded key, which names the queue.
+    path           text        not null,
+    path_key       text        not null,
+    -- The new path of a `rename` or a `move`.
+    target_path    text,
+    -- The revision that the writer saw.
+    base_hash      text,
+    -- The SHA-256 and the length of the uploaded bytes that the write puts at the path.
+    content_hash   text,
+    content_length bigint,
+    -- `queued`, then `delivering`, then `succeeded` or `failed`.
+    state          text        not null,
+    -- The SHA-256 of the file after a write that succeeded; null after a delete.
+    revision       text,
+    -- The error code of a write that failed.
+    error_code     text,
+    created_at     timestamptz not null,
+    updated_at     timestamptz not null,
+
+    constraint writes_kind_is_known
+        check (kind in ('create', 'update', 'rename', 'move', 'delete', 'set_property',
+                        'resolve_conflict')),
+    constraint writes_state_is_known
+        check (state in ('queued', 'delivering', 'succeeded', 'failed')),
+    constraint writes_origin_is_known
+        check (origin ~ '^(platform|site:[a-z0-9-]{3,40})$'),
+    constraint writes_base_hash_is_sha256 check (base_hash ~ '^[0-9a-f]{64}$'),
+    constraint writes_content_hash_is_sha256 check (content_hash ~ '^[0-9a-f]{64}$'),
+    constraint writes_revision_is_sha256 check (revision ~ '^[0-9a-f]{64}$'),
+    constraint writes_content_length_is_not_negative check (content_length >= 0),
+    constraint writes_path_is_bounded check (length(path) between 1 and 1024),
+    constraint writes_failure_has_a_code check ((state = 'failed') = (error_code is not null))
+);
+
+comment on table notes.writes is
+    'Each write of a vault file that Ratatoskr asked for; the open ones form one queue per file.';
+
+create index writes_open_idx on notes.writes (connection_id, path_key, position)
+    where state in ('queued', 'delivering');
+
+create index writes_operation_idx on notes.writes (operation_id);
+
+-- ---------------------------------------------------------------------------------------------
 -- outbox: events Notes owes the bus, written in the same transaction as their cause
 -- ---------------------------------------------------------------------------------------------
 

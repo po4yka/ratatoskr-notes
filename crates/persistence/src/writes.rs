@@ -1,0 +1,300 @@
+//! The writes that Ratatoskr asked for, and the queue of each file (OBS-024).
+//!
+//! Every change of a write runs in the [`FileTransaction`] of its connection, which holds the lock
+//! of the connection row. So the queue of a file changes in one order, and a write that reaches
+//! the head of its queue is checked against revisions that no other change can move meanwhile.
+
+use uuid::Uuid;
+
+use crate::files::{FileTransaction, query_error};
+use crate::{Database, PersistenceError};
+
+/// One write to record.
+#[derive(Debug, Clone, Copy)]
+pub struct NewWrite<'a> {
+    /// The write.
+    pub write_id: Uuid,
+    /// The operation that Edge minted for it.
+    pub operation_id: Uuid,
+    /// `platform` or `site:<site id>`.
+    pub origin: &'a str,
+    /// The wire word of the operation.
+    pub kind: &'a str,
+    /// The NFC path that the write changes.
+    pub path: &'a str,
+    /// The path key of `path`, which names the queue.
+    pub path_key: &'a str,
+    /// The new path of a `rename` or a `move`.
+    pub target_path: Option<&'a str>,
+    /// The revision that the writer saw.
+    pub base_hash: Option<&'a str>,
+    /// The SHA-256 of the uploaded bytes that the write puts at the path.
+    pub content_hash: Option<&'a str>,
+    /// The number of those bytes.
+    pub content_length: Option<u64>,
+}
+
+/// One recorded write.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WriteRow {
+    /// The write.
+    pub write_id: Uuid,
+    /// Its operation.
+    pub operation_id: Uuid,
+    /// Its origin.
+    pub origin: String,
+    /// The wire word of its operation.
+    pub kind: String,
+    /// The NFC path that it changes.
+    pub path: String,
+    /// The path key of `path`.
+    pub path_key: String,
+    /// The new path of a `rename` or a `move`.
+    pub target_path: Option<String>,
+    /// The revision that the writer saw.
+    pub base_hash: Option<String>,
+    /// The SHA-256 of the bytes that it puts at the path.
+    pub content_hash: Option<String>,
+    /// The number of those bytes.
+    pub content_length: Option<u64>,
+    /// `queued`, `delivering`, `succeeded` or `failed`.
+    pub state: String,
+    /// The SHA-256 of the file after a write that succeeded.
+    pub revision: Option<String>,
+    /// The error code of a write that failed.
+    pub error_code: Option<String>,
+}
+
+/// The columns of a [`WriteRow`], in its order.
+const WRITE_COLUMNS: &str = "write_id, operation_id, origin, kind, path, path_key, target_path,
+     base_hash, content_hash, content_length, state, revision, error_code";
+
+/// The row of a [`WriteRow`].
+type WriteTuple = (
+    Uuid,
+    Uuid,
+    String,
+    String,
+    String,
+    String,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<i64>,
+    String,
+    Option<String>,
+    Option<String>,
+);
+
+fn write_row(
+    (
+        write_id,
+        operation_id,
+        origin,
+        kind,
+        path,
+        path_key,
+        target_path,
+        base_hash,
+        content_hash,
+        content_length,
+        state,
+        revision,
+        error_code,
+    ): WriteTuple,
+) -> WriteRow {
+    WriteRow {
+        write_id,
+        operation_id,
+        origin,
+        kind,
+        path,
+        path_key,
+        target_path,
+        base_hash,
+        content_hash,
+        // A CHECK keeps the length at 0 or more.
+        content_length: content_length.map(|length| u64::try_from(length).unwrap_or_default()),
+        state,
+        revision,
+        error_code,
+    }
+}
+
+impl FileTransaction {
+    /// Record `write` as `queued` at the end of the queue of its file.
+    ///
+    /// # Errors
+    ///
+    /// [`PersistenceError::Query`] when the statement fails.
+    pub async fn insert_write(&mut self, write: &NewWrite<'_>) -> Result<(), PersistenceError> {
+        sqlx::query(
+            "insert into notes.writes
+                 (write_id, connection_id, operation_id, origin, kind, path, path_key,
+                  target_path, base_hash, content_hash, content_length, state, created_at,
+                  updated_at)
+             values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'queued', now(), now())",
+        )
+        .bind(write.write_id)
+        .bind(self.connection_id)
+        .bind(write.operation_id)
+        .bind(write.origin)
+        .bind(write.kind)
+        .bind(write.path)
+        .bind(write.path_key)
+        .bind(write.target_path)
+        .bind(write.base_hash)
+        .bind(write.content_hash)
+        .bind(
+            write
+                .content_length
+                .map(|length| i64::try_from(length).unwrap_or(i64::MAX)),
+        )
+        .execute(&mut *self.transaction)
+        .await
+        .map_err(query_error)?;
+        Ok(())
+    }
+
+    /// The head of the queue of the path key `path_key`: its oldest open write.
+    ///
+    /// # Errors
+    ///
+    /// [`PersistenceError::Query`] when the statement fails.
+    pub async fn queue_head(
+        &mut self,
+        path_key: &str,
+    ) -> Result<Option<WriteRow>, PersistenceError> {
+        let row: Option<WriteTuple> = sqlx::query_as(&format!(
+            "select {WRITE_COLUMNS} from notes.writes
+             where connection_id = $1 and path_key = $2 and state in ('queued', 'delivering')
+             order by position limit 1"
+        ))
+        .bind(self.connection_id)
+        .bind(path_key)
+        .fetch_optional(&mut *self.transaction)
+        .await
+        .map_err(query_error)?;
+        Ok(row.map(write_row))
+    }
+
+    /// The write `write_id` of this connection.
+    ///
+    /// # Errors
+    ///
+    /// [`PersistenceError::Query`] when the statement fails.
+    pub async fn write(&mut self, write_id: Uuid) -> Result<Option<WriteRow>, PersistenceError> {
+        let row: Option<WriteTuple> = sqlx::query_as(&format!(
+            "select {WRITE_COLUMNS} from notes.writes
+             where connection_id = $1 and write_id = $2"
+        ))
+        .bind(self.connection_id)
+        .bind(write_id)
+        .fetch_optional(&mut *self.transaction)
+        .await
+        .map_err(query_error)?;
+        Ok(row.map(write_row))
+    }
+
+    /// Mark the write `write_id` `delivering`.
+    ///
+    /// # Errors
+    ///
+    /// [`PersistenceError::Query`] when the statement fails.
+    pub async fn deliver_write(&mut self, write_id: Uuid) -> Result<(), PersistenceError> {
+        self.set_write_state(write_id, "delivering", None, None)
+            .await
+    }
+
+    /// End the write `write_id` as `succeeded` with the file at `revision`, or no file after a
+    /// delete.
+    ///
+    /// # Errors
+    ///
+    /// [`PersistenceError::Query`] when the statement fails.
+    pub async fn succeed_write(
+        &mut self,
+        write_id: Uuid,
+        revision: Option<&str>,
+    ) -> Result<(), PersistenceError> {
+        self.set_write_state(write_id, "succeeded", revision, None)
+            .await
+    }
+
+    /// End the write `write_id` as `failed` with the error code `code`.
+    ///
+    /// # Errors
+    ///
+    /// [`PersistenceError::Query`] when the statement fails.
+    pub async fn fail_write(&mut self, write_id: Uuid, code: &str) -> Result<(), PersistenceError> {
+        self.set_write_state(write_id, "failed", None, Some(code))
+            .await
+    }
+
+    async fn set_write_state(
+        &mut self,
+        write_id: Uuid,
+        state: &str,
+        revision: Option<&str>,
+        error_code: Option<&str>,
+    ) -> Result<(), PersistenceError> {
+        sqlx::query(
+            "update notes.writes
+                set state = $3, revision = $4, error_code = $5, updated_at = now()
+              where connection_id = $1 and write_id = $2",
+        )
+        .bind(self.connection_id)
+        .bind(write_id)
+        .bind(state)
+        .bind(revision)
+        .bind(error_code)
+        .execute(&mut *self.transaction)
+        .await
+        .map_err(query_error)?;
+        Ok(())
+    }
+}
+
+impl Database {
+    /// The writes of `connection_id` that are `delivering`, in the order of acceptance.
+    ///
+    /// # Errors
+    ///
+    /// [`PersistenceError::Query`] when the statement fails.
+    pub async fn delivering_writes(
+        &self,
+        connection_id: Uuid,
+    ) -> Result<Vec<WriteRow>, PersistenceError> {
+        let rows: Vec<WriteTuple> = sqlx::query_as(&format!(
+            "select {WRITE_COLUMNS} from notes.writes
+             where connection_id = $1 and state = 'delivering'
+             order by position"
+        ))
+        .bind(connection_id)
+        .fetch_all(self.pool())
+        .await
+        .map_err(query_error)?;
+        Ok(rows.into_iter().map(write_row).collect())
+    }
+
+    /// The write of the operation `operation_id`.
+    ///
+    /// # Errors
+    ///
+    /// [`PersistenceError::Query`] when the statement fails.
+    pub async fn write_of_operation(
+        &self,
+        operation_id: Uuid,
+    ) -> Result<Option<WriteRow>, PersistenceError> {
+        let row: Option<WriteTuple> = sqlx::query_as(&format!(
+            "select {WRITE_COLUMNS} from notes.writes
+             where operation_id = $1
+             order by position limit 1"
+        ))
+        .bind(operation_id)
+        .fetch_optional(self.pool())
+        .await
+        .map_err(query_error)?;
+        Ok(row.map(write_row))
+    }
+}

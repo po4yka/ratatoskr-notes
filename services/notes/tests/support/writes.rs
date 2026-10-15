@@ -187,7 +187,7 @@ pub(crate) fn command_with(
     connection_id: Uuid,
     origin: &str,
     key: &str,
-    operation: Value,
+    operation: &Value,
 ) -> Command {
     let operation_id = Uuid::now_v7();
     let reference = format!("operation:{operation_id}");
@@ -223,7 +223,7 @@ pub(crate) fn command_with(
 
 /// The command of `operation` for `connection_id` of [`OWNER`] from `platform`, with a key of its
 /// own.
-pub(crate) fn command(connection_id: Uuid, operation: Value) -> Command {
+pub(crate) fn command(connection_id: Uuid, operation: &Value) -> Command {
     command_with(
         OWNER,
         connection_id,
@@ -234,11 +234,11 @@ pub(crate) fn command(connection_id: Uuid, operation: Value) -> Command {
 }
 
 /// `update` of `path` on `base` with the content `blob`.
-pub(crate) fn update(path: &str, base: &str, blob: Value) -> Value {
+pub(crate) fn update(path: &str, base: &str, blob: &Value) -> Value {
     json!({ "update": { "path": path, "base_hash": base, "blob": blob } })
 }
 
 /// `create` of `path` with the content `blob`.
-pub(crate) fn create(path: &str, blob: Value) -> Value {
+pub(crate) fn create(path: &str, blob: &Value) -> Value {
     json!({ "create": { "path": path, "blob": blob } })
 }

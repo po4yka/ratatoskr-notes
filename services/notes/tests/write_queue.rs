@@ -25,8 +25,8 @@ async fn chained_edits_apply_in_order() {
     let second_blob = writer.stage(connection, second).await;
 
     // An editor that saves twice: B names the hash that A will produce.
-    let a = command(connection, update("Plan.md", &sha256(base), first_blob));
-    let b = command(connection, update("Plan.md", &sha256(first), second_blob));
+    let a = command(connection, &update("Plan.md", &sha256(base), &first_blob));
+    let b = command(connection, &update("Plan.md", &sha256(first), &second_blob));
     let a_handled = writer.send(&a).await;
     let b_handled = writer.send(&b).await;
     let before_ack = writer.deliveries(connection).await;
