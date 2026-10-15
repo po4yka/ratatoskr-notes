@@ -68,7 +68,8 @@ impl Locked<'_> {
                     }
                     Check::Deliver => {
                         self.transaction.deliver_write(head.write_id).await?;
-                        self.report(head.write_id, Step::Delivering).await?;
+                        let wait = self.wait();
+                        self.report(head.write_id, Step::Awaiting(wait)).await?;
                         break;
                     }
                     Check::Conflict(current) => self.conflict(&head, current.as_deref()).await?,
@@ -78,6 +79,15 @@ impl Locked<'_> {
             }
         }
         Ok(())
+    }
+
+    /// The stage of a delivered write of this connection: what its channel waits for.
+    fn wait(&self) -> &'static str {
+        if self.connection.channel == "sync" {
+            "awaiting_obsidian"
+        } else {
+            "awaiting_device"
+        }
     }
 
     /// Whether `write` is the head of every queue it is in: the queue of its path, and for a
@@ -236,7 +246,10 @@ impl Locked<'_> {
     ) -> Result<(), RecordError> {
         match write.state.as_str() {
             "queued" => self.report_one(operation_id, Step::Queued).await,
-            "delivering" => self.report_one(operation_id, Step::Delivering).await,
+            "delivering" => {
+                let wait = self.wait();
+                self.report_one(operation_id, Step::Awaiting(wait)).await
+            }
             "succeeded" => {
                 let path = write.target_path.as_deref().unwrap_or(&write.path);
                 let file = self.transaction.file_by_key(&path_key(path)).await?;

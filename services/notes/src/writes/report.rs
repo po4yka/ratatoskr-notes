@@ -5,7 +5,8 @@
 //! `operation:<operation id>`:
 //!
 //! - `running` with the stage `queued` when the write waits in the queue of its file;
-//! - `running` with the stage `delivering` when the channel of the connection delivers it;
+//! - `running` with the stage `awaiting_device` (`plugin`, `cli`) or `awaiting_obsidian` (`sync`)
+//!   when the channel of the connection delivers it: the stage names what the write waits for;
 //! - `succeeded` after the acknowledgement, with one result `notes.file` that names the file and
 //!   the `BlobRef` of its new revision (no `BlobRef` after a delete), and the warning
 //!   `notes.write.transformed` when the vault acknowledged other bytes than the write named;
@@ -55,8 +56,9 @@ pub(super) struct FileResult<'a> {
 pub(super) enum Step<'a> {
     /// The write waits in the queue of its file.
     Queued,
-    /// The channel delivers the write.
-    Delivering,
+    /// The channel delivers the write: the stage names what it waits for, `awaiting_device` on the
+    /// `plugin` and `cli` channels and `awaiting_obsidian` on `sync`.
+    Awaiting(&'a str),
     /// The channel acknowledged the write.
     Succeeded(Option<FileResult<'a>>),
     /// The write failed with the code, and with the conflict that it raised.
@@ -138,7 +140,7 @@ fn payload(operation_id: Uuid, step: Step<'_>) -> Result<OperationReported, Enve
     };
     match step {
         Step::Queued => payload.stage = Some(stage("queued")?),
-        Step::Delivering => payload.stage = Some(stage("delivering")?),
+        Step::Awaiting(wait) => payload.stage = Some(stage(wait)?),
         Step::Succeeded(file) => {
             payload.status = OperationStatus::Succeeded;
             if let Some(file) = file {

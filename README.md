@@ -234,11 +234,11 @@ same folder, which is flushed to disk and renamed over the file, so a reader see
 bytes and never a mix; a `delete` removes the file, and a `rename` or a `move` renames it. The
 Headless client sends the change to Obsidian Sync, and the watcher reports it back as the echo. Any
 other file means that the tree changed after the queue check: nothing is written, the bytes of the
-tree go to the blob store, and the write fails with a conflict whose current side is those bytes. A
+tree go to the blob store, and the write fails with a conflict whose current side is those bytes.
 Every file operation runs relative to a folder that was opened from the root of the tree one name
 at a time without following a link; a symbolic link (or a file where a folder must be) anywhere in
 the path fails the write with `notes.write.unsafe_path`, so no write, delete, rename or read leaves
-the tree. A set_property` fails with `notes.write.unsupported` on this channel, because notes does not change
+the tree. A `set_property` fails with `notes.write.unsupported` on this channel, because notes does not change
 a frontmatter itself yet. The service must be able to write the working tree on the host, which the
 read-only group access of owner decision B does not give: the deploy role must change that before
 write mode is turned on for a `sync` connection.
@@ -277,7 +277,8 @@ always comes after that read's `next_cursor`. Each operation has `operation_id`,
 | Status | Stage | When |
 |---|---|---|
 | `running` | `queued` | The write waits in the queue of its file. |
-| `running` | `delivering` | The channel of the connection delivers the write. |
+| `running` | `awaiting_device` | The write is in the queue of the device of a `plugin` or `cli` connection, which applies it when it connects. |
+| `running` | `awaiting_obsidian` | The write of a `sync` connection waits for the working tree and Obsidian Sync. |
 | `succeeded` | | The channel acknowledged the write. The one result has the kind `notes.file`, the target `notes_file:<file id>`, and the `BlobRef` of the new revision (none after a delete). |
 | `failed` | | A refusal above, a refusal of the channel with its own code, or the non-retryable `notes.write.conflict` with the error extension `conflict_id`. |
 
