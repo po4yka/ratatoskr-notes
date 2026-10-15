@@ -68,3 +68,11 @@ fn the_nested_link_is_rewritten_and_not_its_copy_in_code_a_comment_or_math() {
         );
     }
 }
+
+#[test]
+fn two_nested_links_in_one_text_are_both_rewritten() {
+    assert_eq!(
+        rewritten("[x [[A]] y [[A]]](A.md)\n", "A.md", "B\u{e9}.md").as_deref(),
+        Some("[x [[B\u{e9}]] y [[B\u{e9}]]](B\u{e9}.md)\n")
+    );
+}

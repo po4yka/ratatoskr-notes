@@ -170,32 +170,40 @@ fn subpath(target: &str) -> &str {
 }
 
 /// `text` with each range of `changes` replaced by its new text. A change nested in another, a
-/// wikilink in the text of a Markdown link, is made inside the new text of the outer one, where its
-/// old text still stands. A change that only partly overlaps an earlier one, or whose range is not
+/// wikilink in the text of a Markdown link, is made inside the new text of the outer one, at the
+/// offset where it stands, when its old text still stands there. A change that only partly overlaps an earlier one, or whose range is not
 /// on character boundaries, is left out. So the result is the text with whole links replaced and
 /// is always valid. (Obsidian 1.14.4 writes both nested edits into the same bytes and corrupts the
 /// note: `[x [[A]]](Bé.md))`.)
 fn apply(text: &str, mut changes: Vec<(Range<usize>, String)>) -> String {
     // The outer of two nested changes first.
     changes.sort_by(|(a, _), (b, _)| a.start.cmp(&b.start).then(b.end.cmp(&a.end)));
-    let mut outer: Vec<(Range<usize>, String)> = Vec::new();
+    // Each outer change, its new text, and how many bytes the nested changes made inside it added
+    // before the next one: they come in the order of the text.
+    let mut outer: Vec<(Range<usize>, String, isize)> = Vec::new();
     for (range, new) in changes {
         let Some(old) = text.get(range.clone()) else {
             continue;
         };
         match outer.last_mut() {
-            Some((last, last_new)) if range.start < last.end => {
-                if range.end <= last.end
-                    && let Some(at) = last_new.find(old)
-                {
+            Some((last, last_new, shift)) if range.start < last.end => {
+                // The text of the outer link keeps its bytes, so the nested link is at the same
+                // offset in its new text, after the nested changes before it; when it is not
+                // there, the edit is left out.
+                let at = (range.start - last.start).checked_add_signed(*shift);
+                let fits = range.end <= last.end
+                    && at.is_some_and(|at| last_new.get(at..at + old.len()) == Some(old));
+                if let (true, Some(at)) = (fits, at) {
                     last_new.replace_range(at..at + old.len(), &new);
+                    *shift += isize::try_from(new.len()).unwrap_or(0)
+                        - isize::try_from(old.len()).unwrap_or(0);
                 }
             }
-            _ => outer.push((range, new)),
+            _ => outer.push((range, new, 0)),
         }
     }
     let mut result = text.to_owned();
-    for (range, new) in outer.into_iter().rev() {
+    for (range, new, _) in outer.into_iter().rev() {
         result.replace_range(range, &new);
     }
     result
