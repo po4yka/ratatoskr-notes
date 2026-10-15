@@ -378,7 +378,9 @@ base or current side that is a revision of the file stays readable at
 `x-ratatoskr-operation-id`. Notes is the only reporter of that operation (lane `ratatoskr-notes`).
 It sets the mode under the lock of the connection row and answers `202` with the connection id, the
 mode and the operation. Off fails each write that waits in a queue and was not delivered with
-`notes.write.disabled`; a delivered write finishes, because the vault may already hold it. On a
+`notes.write.disabled`; a delivered write finishes, because the vault may already hold it. A write
+group ends with one report: `notes.write.disabled` when nothing of it was applied, or
+`notes.write.partially_applied` with one conflict when its rename landed and a rewrite did not. On a
 `sync` connection a write is delivered only when it landed in the working tree: off also fails a
 delivering write that did not land, and the sync writer never lands it. A write that landed
 finishes with its echo or the next pass; when the client goes back to `pull-only` before it sent the

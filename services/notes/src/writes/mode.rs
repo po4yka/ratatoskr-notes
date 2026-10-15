@@ -6,7 +6,9 @@
 //! `ratatoskr-notes`). Turning write mode off fails every write of the connection that waits in a
 //! queue and was not delivered, with `notes.write.disabled`; on the `sync` channel also a delivering
 //! write that did not land in the working tree. A delivered write finishes, because the vault may
-//! already hold it.
+//! already hold it. A write group ends with one report: `notes.write.disabled` when nothing of it
+//! was applied, `notes.write.partially_applied` with one conflict when its rename landed and a
+//! rewrite did not.
 
 use uuid::Uuid;
 
@@ -67,17 +69,31 @@ impl Writes {
             raised: Vec::new(),
         };
         if !on {
-            for write in locked.transaction.queued_writes().await? {
-                locked.fail(&write, DISABLED).await?;
-            }
+            let mut failing = locked.transaction.queued_writes().await?;
             // On the `sync` channel a write is delivered to the vault only when it lands in the
             // working tree; one that did not land yet fails too.
             if connection.channel == "sync" {
-                for write in locked.transaction.unlanded_writes().await? {
-                    locked.fail(&write, DISABLED).await?;
+                failing.extend(locked.transaction.unlanded_writes().await?);
+            }
+            // A write of a group fails alone; its group then ends with one report.
+            let mut groups = std::collections::BTreeSet::new();
+            for write in failing {
+                match write.group_id {
+                    Some(group_id) => {
+                        locked
+                            .transaction
+                            .fail_write(write.write_id, DISABLED)
+                            .await?;
+                        groups.insert(group_id);
+                    }
+                    None => locked.fail(&write, DISABLED).await?,
                 }
             }
+            for group_id in groups {
+                locked.settle_group(group_id).await?;
+            }
         }
+        let raised = std::mem::take(&mut locked.raised);
         if report {
             write_report(
                 &mut transaction,
@@ -88,6 +104,7 @@ impl Writes {
             .await?;
         }
         transaction.commit().await?;
+        self.announce(&raised).await;
         Ok(ModeChange::Changed {
             channel: connection.channel,
         })
