@@ -30,6 +30,8 @@ pub struct LockedConnection {
     pub operation_id: Option<Uuid>,
     /// The display name of the vault.
     pub vault_display_name: String,
+    /// Whether Ratatoskr may write into the vault.
+    pub write_mode_on: bool,
 }
 
 /// One file of a connection.
@@ -90,7 +92,7 @@ pub struct FileTransaction {
 }
 
 /// The row of a [`LockedConnection`]: owner, channel, device, excluded folders, device sequence,
-/// state, connect operation and display name.
+/// state, connect operation, display name and write mode.
 type LockedRow = (
     Uuid,
     String,
@@ -99,6 +101,7 @@ type LockedRow = (
     i64,
     String,
     Option<Uuid>,
+    String,
     String,
 );
 
@@ -121,7 +124,7 @@ impl Database {
         let mut transaction = self.pool.begin().await.map_err(query_error)?;
         let row: Option<LockedRow> = sqlx::query_as(
             "select owner_id, channel, device_id, excluded_folders, device_sequence, state,
-                    operation_id, vault_display_name
+                    operation_id, vault_display_name, write_mode
              from notes.connections
              where connection_id = $1 and state in ('connecting', 'active')
              for update",
@@ -140,6 +143,7 @@ impl Database {
                 state,
                 operation_id,
                 vault_display_name,
+                write_mode,
             )| {
                 (
                     FileTransaction {
@@ -156,6 +160,7 @@ impl Database {
                         state,
                         operation_id,
                         vault_display_name,
+                        write_mode_on: write_mode == "on",
                     },
                 )
             },

@@ -122,6 +122,9 @@ const INVALID: &str = "notes.request.invalid";
 /// The code of a connection that the tenant does not hold.
 const CONNECTION_NOT_FOUND: &str = "notes.connection.not_found";
 
+/// The code of a write to a connection whose write mode is off.
+const DISABLED: &str = "notes.write.disabled";
+
 /// The code of a write whose content notes does not hold for its connection.
 const CONTENT_MISSING: &str = "notes.write.content_missing";
 
@@ -142,7 +145,9 @@ impl Writes {
     }
 
     /// Take one write command: queue it at the end of the queue of its file, and deliver it when
-    /// it is the head. The content that the write names must be bytes that the connection
+    /// it is the head. The tenant must hold the connection (else `notes.connection.not_found`,
+    /// the code of a missing connection too), and its write mode must be on (else
+    /// `notes.write.disabled`). The content that the write names must be bytes that the connection
     /// uploaded or holds as a revision, with the declared length; otherwise the command is
     /// refused with `notes.write.content_missing`.
     ///
@@ -165,6 +170,16 @@ impl Writes {
                 code: CONNECTION_NOT_FOUND,
             });
         };
+        // One code for a missing and a foreign connection, so that no other connection is
+        // disclosed.
+        if connection.owner_id != request.owner_id {
+            return Ok(Handled::Refused {
+                code: CONNECTION_NOT_FOUND,
+            });
+        }
+        if !connection.write_mode_on {
+            return Ok(Handled::Refused { code: DISABLED });
+        }
         if let Some((write_id, digest)) = transaction.write_of_key(&request.idempotency_key).await?
         {
             if digest != request.digest {

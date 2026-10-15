@@ -10,6 +10,7 @@ use uuid::Uuid;
 /// The facts of one write command.
 #[derive(Debug, Clone)]
 pub(super) struct Request {
+    pub(super) owner_id: Uuid,
     pub(super) operation_id: Uuid,
     pub(super) idempotency_key: String,
     pub(super) digest: String,
@@ -31,7 +32,7 @@ impl Request {
     /// path, is not taken yet.
     pub(super) fn parse(command: &CommandEnvelope) -> Option<Self> {
         let payload: FileWriteRequested = command.payload_as().ok()?;
-        command.tenant_id?;
+        let owner_id = command.tenant_id?.user_id().0;
         let operation_id = payload.operation_id.0;
         if command.aggregate_id.to_wire() != format!("operation:{operation_id}") {
             return None;
@@ -82,6 +83,7 @@ impl Request {
         // The digest of what the writer asked for, to tell a retry from a reused key.
         let request = serde_json::to_vec(&(payload.origin.as_str(), &payload.operation)).ok()?;
         Some(Self {
+            owner_id,
             idempotency_key: payload.idempotency_key.hex.as_str().to_owned(),
             digest: format!("{:x}", Sha256::digest(&request)),
             operation_id,
