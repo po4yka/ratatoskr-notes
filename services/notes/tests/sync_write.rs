@@ -120,3 +120,87 @@ fn reader_never_sees_partial_file() {
         torn.len()
     );
 }
+
+#[tokio::test]
+async fn symlinks_never_lead_out_of_the_tree() {
+    let writer = Writer::new().await;
+    let secret: &[u8] = b"# Plan\n\nA file outside the tree.\n";
+    let note: &[u8] = b"# Note\n\nAnother file outside the tree.\n";
+    let private: &[u8] = b"# Private\n\nBytes that notes never held.\n";
+    let decoy: &[u8] = b"# Lure\n\nWhat the database holds for the link.\n";
+    let mine: &[u8] = b"# Plan\n\nWritten through Ratatoskr.\n";
+    let outside = tempfile::tempdir().expect("a folder outside the tree");
+    std::fs::write(outside.path().join("Plan.md"), secret).expect("an outside file");
+    std::fs::write(outside.path().join("Note.md"), note).expect("an outside file");
+    std::fs::write(outside.path().join("Private.md"), private).expect("an outside file");
+    let connection = writer
+        .sync_vault(&[
+            ("Linked/Plan.md", secret),
+            ("Link.md", note),
+            ("Lure.md", decoy),
+        ])
+        .await;
+    let trees = tempfile::tempdir().expect("a trees root");
+    let tree = trees.path().join(connection.to_string());
+    std::fs::create_dir_all(&tree).expect("the working tree");
+    // A link to a folder outside the tree, and two links to files outside it.
+    std::os::unix::fs::symlink(outside.path(), tree.join("Linked")).expect("a folder link");
+    std::os::unix::fs::symlink(outside.path().join("Note.md"), tree.join("Link.md"))
+        .expect("a file link");
+    std::os::unix::fs::symlink(outside.path().join("Private.md"), tree.join("Lure.md"))
+        .expect("a file link");
+    writer.keep_for_sync(connection, mine).await;
+    let mine_ref = blob_ref(mine, "text/markdown");
+    let through_links = [
+        command(
+            connection,
+            &update("Linked/Plan.md", &sha256(secret), &mine_ref),
+        ),
+        command(
+            connection,
+            &serde_json::json!({ "delete": { "path": "Link.md", "base_hash": sha256(note) } }),
+        ),
+        command(connection, &update("Lure.md", &sha256(decoy), &mine_ref)),
+    ];
+    for write in &through_links {
+        assert!(matches!(writer.send(write).await, Handled::Queued { .. }));
+    }
+
+    SyncWriter::new(writer.recorder(), trees.path())
+        .deliver(connection)
+        .await
+        .expect("the delivery runs");
+
+    for (name, bytes) in [
+        ("Plan.md", secret),
+        ("Note.md", note),
+        ("Private.md", private),
+    ] {
+        assert_eq!(
+            std::fs::read(outside.path().join(name)).expect("the outside file is there"),
+            bytes,
+            "{name} outside the tree does not change"
+        );
+    }
+    for write in &through_links {
+        assert_eq!(
+            writer.outcome(write).await,
+            Some(Outcome::Failed {
+                code: "notes.write.unsafe_path".to_owned(),
+                conflict_id: None,
+            }),
+            "a write through a link fails with its code"
+        );
+    }
+    let pulled = writer
+        .channel
+        .blobs
+        .path_of(&sha256(private))
+        .expect("a blob path");
+    assert!(
+        !pulled.exists(),
+        "bytes outside the tree never reach the blob store"
+    );
+
+    writer.cleanup().await;
+}
