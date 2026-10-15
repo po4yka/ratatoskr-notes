@@ -120,6 +120,41 @@ mod tests {
     }
 
     #[test]
+    fn a_block_scalar_continues_over_a_blank_line() {
+        let file = b"---\ndesc: |\n  one\n\n  two\nstatus: a\n---\nbody\n";
+        let changed = change(file, "desc", Some(&json!("x"))).expect("an editable file");
+        assert_eq!(
+            String::from_utf8_lossy(&changed),
+            "---\ndesc: \"x\"\nstatus: a\n---\nbody\n"
+        );
+    }
+
+    #[test]
+    fn a_list_continues_over_blank_lines_between_items() {
+        let file = b"---\ntags:\n  - a\n\n  - b\nplain:\n- c\n  \n- d\nstatus: a\n---\nbody\n";
+        let without_tags = change(file, "tags", None).expect("an editable file");
+        assert_eq!(
+            String::from_utf8_lossy(&without_tags),
+            "---\nplain:\n- c\n  \n- d\nstatus: a\n---\nbody\n"
+        );
+        let without_plain = change(&without_tags, "plain", None).expect("an editable file");
+        assert_eq!(
+            String::from_utf8_lossy(&without_plain),
+            "---\nstatus: a\n---\nbody\n"
+        );
+    }
+
+    #[test]
+    fn a_blank_line_before_the_next_key_ends_the_value() {
+        let file = b"---\ntitle: T\n\nstatus: a\n---\nbody\n";
+        let changed = change(file, "title", Some(&json!("U"))).expect("an editable file");
+        assert_eq!(
+            String::from_utf8_lossy(&changed),
+            "---\ntitle: \"U\"\n\nstatus: a\n---\nbody\n"
+        );
+    }
+
+    #[test]
     fn an_unterminated_frontmatter_is_not_changed() {
         assert_eq!(change(b"---\nkey: 1\nbody\n", "key", Some(&json!(2))), None);
     }
