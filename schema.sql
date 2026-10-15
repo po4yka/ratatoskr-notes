@@ -191,6 +191,7 @@ comment on table notes.revisions is
 -- A batch or a manifest of a `plugin` or `cli` connection may name only bytes of that connection:
 -- a row here, a revision of one of its files, or the bytes of no bytes. A hash alone is not a
 -- right to read the bytes that another connection stored (workspace spec notes-device-channels).
+-- The removal of a connection deletes its rows; the bytes stay in the blob root.
 create table notes.connection_blobs (
     connection_id uuid        not null references notes.connections (connection_id),
     revision      text        not null,

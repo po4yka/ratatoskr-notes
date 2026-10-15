@@ -250,8 +250,8 @@ impl Database {
         ))
     }
 
-    /// Remove a connection in one transaction: mark it `removed`, delete its stored ciphertext,
-    /// and write `event` to the outbox.
+    /// Remove a connection in one transaction: mark it `removed`, delete its stored ciphertext and
+    /// the record of its uploads, and write `event` to the outbox.
     ///
     /// Returns `false` and writes nothing when the connection is already removed or is not this
     /// owner's, so two concurrent removals write one event.
@@ -278,11 +278,13 @@ impl Database {
         if removed.rows_affected() == 0 {
             return Ok(false);
         }
-        sqlx::query("delete from notes.connection_secrets where connection_id = $1")
-            .bind(connection_id)
-            .execute(&mut *transaction)
-            .await
-            .map_err(PersistenceError::Query)?;
+        for table in ["notes.connection_secrets", "notes.connection_blobs"] {
+            sqlx::query(&format!("delete from {table} where connection_id = $1"))
+                .bind(connection_id)
+                .execute(&mut *transaction)
+                .await
+                .map_err(PersistenceError::Query)?;
+        }
         insert_outbox(&mut transaction, event).await?;
         transaction
             .commit()
