@@ -398,3 +398,31 @@ impl Writer {
         .await
     }
 }
+
+impl Writer {
+    /// The payloads of the events `event_type` of `connection_id`, in order.
+    pub(crate) async fn events_of(&self, connection_id: Uuid, event_type: &str) -> Vec<Value> {
+        sqlx::query_scalar(
+            "select payload -> 'payload' from notes.outbox
+             where event_type = $2
+               and payload -> 'payload' ->> 'connection_id' = $1
+             order by position",
+        )
+        .bind(connection_id.to_string())
+        .bind(event_type)
+        .fetch_all(self.channel.fixture.pool())
+        .await
+        .expect("the outbox can be read")
+    }
+
+    /// The whole outbox rows of the events `event_type`, as text.
+    pub(crate) async fn outbox_text(&self, event_type: &str) -> Vec<String> {
+        sqlx::query_scalar(
+            "select payload::text from notes.outbox where event_type = $1 order by position",
+        )
+        .bind(event_type)
+        .fetch_all(self.channel.fixture.pool())
+        .await
+        .expect("the outbox can be read")
+    }
+}
