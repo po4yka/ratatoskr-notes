@@ -1,6 +1,6 @@
 //! The upload sessions of the device channels (spec `notes-device-channels`, the blob receipt of
-//! the shared transfer contract): their bounds, a finalize that runs twice, and the uploads that a
-//! removed connection leaves.
+//! the shared transfer contract): their bounds, a finalize that runs twice, the uploads that a
+//! removed connection leaves, and the close of an open session (SITE-027).
 
 #![allow(
     clippy::expect_used,
@@ -10,7 +10,7 @@
 
 mod support;
 
-use axum::http::StatusCode;
+use axum::http::{Method, StatusCode};
 use ratatoskr_blob_transfer_contracts::{
     TransferErrorCode, UploadCompletionOutcome, UploadSessionRequest,
 };
@@ -20,6 +20,8 @@ use serde_json::{Value, json};
 use uuid::Uuid;
 
 use crate::support::channel::{Channel, OTHER_OWNER, OWNER, sha256};
+use crate::support::writes::{ORIGIN_HEADER, SESSION_KIND_HEADER, Writer};
+use crate::support::{Answer, DEVICE_ID_HEADER, DEVICE_KIND_HEADER, device_of, send_with};
 
 /// The declaration of an upload of `bytes`.
 fn declaration(bytes: &[u8]) -> Value {
@@ -176,4 +178,157 @@ async fn removed_connection_keeps_no_uploads() {
     );
 
     channel.cleanup().await;
+}
+
+/// `DELETE /v1/notes/connections/{id}/blobs/{token}` with `claims` of `owner`.
+async fn close(
+    channel: &Channel,
+    owner: Uuid,
+    connection: Uuid,
+    token: &str,
+    claims: &[(&str, String)],
+) -> Answer {
+    send_with(
+        &channel.router,
+        Method::DELETE,
+        &format!("/v1/notes/connections/{connection}/blobs/{token}"),
+        owner,
+        claims,
+        None,
+    )
+    .await
+}
+
+/// The claims of the plugin of `owner`.
+fn plugin(owner: Uuid) -> [(&'static str, String); 2] {
+    [
+        (DEVICE_ID_HEADER, device_of(owner).to_string()),
+        (DEVICE_KIND_HEADER, "obsidian_plugin".to_owned()),
+    ]
+}
+
+/// The number of staged copies of the blob store of `channel`.
+fn staged(channel: &Channel) -> usize {
+    std::fs::read_dir(channel.blobs.root().join("staging")).map_or(0, Iterator::count)
+}
+
+/// The resumption token of an answer that opened a session.
+fn token(opened: &Answer) -> String {
+    opened.body["resumption_token"]
+        .as_str()
+        .unwrap_or_default()
+        .to_owned()
+}
+
+#[tokio::test]
+async fn closed_session_deletes_its_chunks_and_frees_its_slot() {
+    let channel = Channel::new().await;
+    let connection = channel.plugin_connection(OWNER, "vault-key-close").await;
+    let bytes = b"never finalized\n";
+    let mut tokens = Vec::new();
+    for _ in 0..SESSIONS_PER_CONNECTION {
+        let opened = channel
+            .device_call_as(OWNER, connection, "blobs", declaration(bytes))
+            .await;
+        tokens.push(token(&opened));
+    }
+    let chunk = channel
+        .put_chunk(OWNER, connection, &tokens[0], 0, bytes)
+        .await;
+    let before = staged(&channel);
+
+    let closed = close(&channel, OWNER, connection, &tokens[0], &plugin(OWNER)).await;
+    let after = staged(&channel);
+    let again = channel
+        .device_call_as(OWNER, connection, "blobs", declaration(bytes))
+        .await;
+    let replay = channel
+        .put_chunk(OWNER, connection, &tokens[0], 0, bytes)
+        .await;
+
+    assert_eq!(chunk.status, StatusCode::OK, "{:?}", chunk.body);
+    assert_eq!(closed.status, StatusCode::NO_CONTENT, "{:?}", closed.body);
+    assert_eq!(
+        after,
+        before - 1,
+        "the staged copy of the closed session is deleted"
+    );
+    assert_eq!(again.status, StatusCode::CREATED, "{:?}", again.body);
+    assert_eq!(replay.status, StatusCode::NOT_FOUND, "{:?}", replay.body);
+
+    channel.cleanup().await;
+}
+
+#[tokio::test]
+async fn closing_unknown_or_foreign_token_is_not_found() {
+    let channel = Channel::new().await;
+    let connection = channel.plugin_connection(OWNER, "vault-key-mine").await;
+    let other = channel.plugin_connection(OWNER, "vault-key-theirs").await;
+    let opened = channel
+        .device_call_as(OWNER, other, "blobs", declaration(b"other\n"))
+        .await;
+    let unknown = "rst_00000000000000000000000000";
+
+    let answers = [
+        close(&channel, OWNER, connection, unknown, &plugin(OWNER)).await,
+        close(&channel, OWNER, connection, &token(&opened), &plugin(OWNER)).await,
+    ];
+    let status = send_with(
+        &channel.router,
+        Method::GET,
+        &format!(
+            "/v1/notes/connections/{other}/blobs/{}/status",
+            token(&opened)
+        ),
+        OWNER,
+        &plugin(OWNER),
+        None,
+    )
+    .await;
+
+    for answer in &answers {
+        assert_eq!(answer.status, StatusCode::NOT_FOUND, "{:?}", answer.body);
+        assert_eq!(answer.body["code"], "blob_transfer.session_unknown");
+    }
+    assert_eq!(
+        status.status,
+        StatusCode::OK,
+        "the other session stays open"
+    );
+
+    channel.cleanup().await;
+}
+
+#[tokio::test]
+async fn site_owner_closes_its_upload_session() {
+    let writer = Writer::new().await;
+    let connection = writer.vault(&[("Home.md", b"home\n")]).await;
+    let site = [
+        (SESSION_KIND_HEADER, "site_owner".to_owned()),
+        (ORIGIN_HEADER, "site:site-a".to_owned()),
+    ];
+    let opened = writer
+        .claims_call(OWNER, connection, "blobs", &site, declaration(b"edit\n"))
+        .await;
+
+    let nameless = close(
+        &writer.channel,
+        OWNER,
+        connection,
+        &token(&opened),
+        &site[..1],
+    )
+    .await;
+    let closed = close(&writer.channel, OWNER, connection, &token(&opened), &site).await;
+
+    assert_eq!(opened.status, StatusCode::CREATED, "{:?}", opened.body);
+    assert_eq!(
+        nameless.status,
+        StatusCode::UNAUTHORIZED,
+        "{:?}",
+        nameless.body
+    );
+    assert_eq!(closed.status, StatusCode::NO_CONTENT, "{:?}", closed.body);
+
+    writer.cleanup().await;
 }

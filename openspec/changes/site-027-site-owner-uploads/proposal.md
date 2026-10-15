@@ -15,13 +15,16 @@ implements group 4 of the workspace task list, and does not restate that rule.
 - A `site_owner` upload registers the blob for the connection and does nothing else: no revision
   and no `notes.file.changed.v1` event.
 - The change batch and manifest routes refuse a `site_owner` claim with `notes.channel_mismatch`.
+- Add `DELETE /v1/notes/connections/{id}/blobs/{token}`, which closes an open upload session: it
+  deletes the received chunks, frees the slot of the session, and answers `204`. Edge calls it
+  after a failed chunk or finalize of a site edit.
 
 ## Capabilities
 
 ### New Capabilities
 
 - `site-owner-uploads`: what a request with a `site_owner` claim can do on the transfer, change
-  and manifest routes of a connection.
+  and manifest routes of a connection, and the close of an open upload session.
 
 ### Modified Capabilities
 
@@ -29,7 +32,8 @@ None.
 
 ## Impact
 
-`services/notes/src/api/blobs.rs` and the tests in `services/notes/tests/device_channel.rs`. No
+`services/notes/src/api/blobs.rs`, `services/notes/src/uploads.rs`, `services/notes/src/api.rs`,
+the README, and the tests in `services/notes/tests/device_channel.rs` and `device_uploads.rs`. No
 schema change. The write command with `origin: "site:<site id>"` and the conflict read
 `GET /v1/notes/conflicts/{id}` need no change: OBS-024 already accepts the site origin, and the
 conflict read reads only the owner claim.
