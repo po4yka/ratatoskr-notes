@@ -10,6 +10,8 @@
 
 mod support;
 
+use std::time::Duration;
+
 use axum::http::StatusCode;
 use serde_json::{Value, json};
 
@@ -680,4 +682,51 @@ async fn removed_connection_is_gone_and_a_failed_one_is_not_found() {
 
     channel.cleanup().await;
     bounded.cleanup().await;
+}
+
+#[tokio::test]
+async fn failed_device_connect_has_its_report_at_once() {
+    let (failed, mut failures) = tokio::sync::mpsc::unbounded_channel();
+    // The hook never ends: it stands for a stop of the process right after the connection failed.
+    let channel = Channel::with(move |state| {
+        state
+            .with_manifest_deadline(SHORT_DEADLINE)
+            .with_after_device_fail(move |connection_id| {
+                let failed = failed.clone();
+                async move {
+                    let _ = failed.send(connection_id);
+                    std::future::pending::<()>().await;
+                }
+            })
+    })
+    .await;
+    let connection = channel.plugin_connection(OWNER, "vault-key-crash").await;
+
+    let stopped = tokio::time::timeout(Duration::from_mins(1), failures.recv()).await;
+    let reports: Vec<Value> = sqlx::query_scalar(
+        "select o.payload -> 'payload' from notes.outbox o
+         join notes.connections c
+           on o.payload -> 'payload' ->> 'operation_id' = c.operation_id::text
+         where c.connection_id = $1
+           and o.event_type = 'platform.operation.reported.v1'
+           and o.payload -> 'payload' ->> 'status' = 'failed'",
+    )
+    .bind(connection)
+    .fetch_all(channel.fixture.pool())
+    .await
+    .expect("the outbox can be read");
+
+    assert_eq!(stopped.ok().flatten(), Some(connection), "the bound ran");
+    assert_eq!(channel.connection_state(connection).await, "failed");
+    assert_eq!(
+        reports.len(),
+        1,
+        "the failed connection has its terminal report when the process stops: {reports:?}"
+    );
+    assert_eq!(
+        reports[0]["error"]["code"],
+        "notes.channel.manifest_missing"
+    );
+
+    channel.cleanup().await;
 }

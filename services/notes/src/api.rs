@@ -105,6 +105,7 @@ pub struct ApiState<B> {
     removals: Removals,
     before_login: Option<TestHook>,
     after_manifest: Option<TestHook>,
+    after_device_fail: Option<TestHook>,
     blobs: BlobStore,
     trees_root: PathBuf,
     max_file_bytes: u64,
@@ -126,6 +127,7 @@ impl<B> Clone for ApiState<B> {
             removals: self.removals.clone(),
             before_login: self.before_login.clone(),
             after_manifest: self.after_manifest.clone(),
+            after_device_fail: self.after_device_fail.clone(),
             blobs: self.blobs.clone(),
             trees_root: self.trees_root.clone(),
             max_file_bytes: self.max_file_bytes,
@@ -156,6 +158,7 @@ impl<B: SystemdBus> ApiState<B> {
             removals: Removals::default(),
             before_login: None,
             after_manifest: None,
+            after_device_fail: None,
             blobs,
             trees_root,
             max_file_bytes,
@@ -257,6 +260,18 @@ impl<B: SystemdBus> ApiState<B> {
         Fut: Future<Output = ()> + Send + 'static,
     {
         self.before_login = Some(TestHook::of(hook));
+        self
+    }
+
+    /// Wait for `hook` after the end of the manifest bound failed a device connection. For tests:
+    /// a hook that never ends stands for a stop of the process at that step.
+    #[must_use]
+    pub fn with_after_device_fail<F, Fut>(mut self, hook: F) -> Self
+    where
+        F: Fn(Uuid) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = ()> + Send + 'static,
+    {
+        self.after_device_fail = Some(TestHook::of(hook));
         self
     }
 

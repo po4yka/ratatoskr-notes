@@ -77,6 +77,9 @@ impl<B: SystemdBus> ApiState<B> {
         match self.database.fail_connection(connection_id).await {
             Ok(true) => {
                 tracing::info!(%connection_id, code = MANIFEST_MISSING.0, "a device connect failed: no manifest in time");
+                if let Some(after_device_fail) = &self.after_device_fail {
+                    (after_device_fail.0)(connection_id).await;
+                }
             }
             Ok(false) => return,
             Err(error) => {
