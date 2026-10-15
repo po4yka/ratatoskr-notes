@@ -328,3 +328,65 @@ fn new_token() -> Option<UploadResumptionToken> {
     }
     UploadResumptionToken::parse(&token).ok()
 }
+
+#[cfg(test)]
+mod tests {
+    use std::future::Future;
+    use std::pin::pin;
+    use std::task::{Context, Waker};
+
+    use ratatoskr_blob_transfer_contracts::{TransferErrorCode, UploadSessionRequest};
+    use uuid::Uuid;
+
+    use super::{UploadRefusal, Uploads};
+    use crate::blobs::BlobStore;
+
+    /// Poll `future` once, and return whether it waits.
+    fn waits<F: Future>(future: std::pin::Pin<&mut F>) -> bool {
+        future
+            .poll(&mut Context::from_waker(Waker::noop()))
+            .is_pending()
+    }
+
+    #[tokio::test]
+    async fn chunk_that_waited_for_a_closed_session_finds_no_session() {
+        let root = tempfile::tempdir().expect("a blob root");
+        let blobs = BlobStore::new(root.path());
+        let uploads = Uploads::default();
+        let connection = Uuid::now_v7();
+        let bytes = b"closed while the chunk waits\n";
+        let request: UploadSessionRequest = serde_json::from_value(serde_json::json!({
+            "declared_size_bytes": bytes.len(),
+            "media_type": "text/markdown",
+            "digest": { "algorithm": "sha256", "hex": "0".repeat(64) },
+            "chunk_size_bytes": 65_536,
+        }))
+        .expect("a declaration");
+        let opened = uploads
+            .open(&blobs, connection, &request, 1 << 20)
+            .await
+            .expect("a session");
+        let token = opened.resumption_token.as_str().to_owned();
+
+        // Hold the lock of the session. The close waits for it first and the chunk second: the
+        // chunk took the session from the table before the close removes it.
+        let slot = uploads.lock().get(&token).cloned().expect("the session");
+        let held = slot.session.lock_owned().await;
+        let mut close = pin!(uploads.close(connection, &token));
+        let mut chunk = pin!(uploads.chunk(connection, &token, 0, bytes.to_vec()));
+        assert!(waits(close.as_mut()), "the close waits for the lock");
+        assert!(waits(chunk.as_mut()), "the chunk waits for the lock");
+        drop(held);
+        let closed = close.await;
+        let chunk = chunk.await;
+
+        assert!(closed.is_ok(), "{closed:?}");
+        assert!(
+            matches!(
+                chunk,
+                Err(UploadRefusal::Transfer(TransferErrorCode::SessionUnknown))
+            ),
+            "the chunk finds no open session: {chunk:?}"
+        );
+    }
+}
