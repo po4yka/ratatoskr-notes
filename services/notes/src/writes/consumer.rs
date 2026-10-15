@@ -6,12 +6,18 @@
 //! 503 until that verification passed, and again as soon as one fails. The connection uses the
 //! inbox prefix `_INBOX_notes` of the outbox relay, the only one that the `NOTES` identity may
 //! subscribe to.
+//!
+//! The consumer hands each command to [`Writes::handle`] and acknowledges it after the write path
+//! committed what it did with it, so a stop between the two delivers the command again, and the
+//! idempotency key of the write makes the repeat a repeat.
 
 use std::sync::Arc;
 use std::time::Duration;
 
 use async_nats::jetstream::consumer::{AckPolicy, Consumer, pull};
-use async_nats::jetstream::{self, Context};
+use async_nats::jetstream::{self, AckKind, Context};
+use futures_util::StreamExt as _;
+use ratatoskr_event_envelope::CommandEnvelope;
 use tokio_util::sync::CancellationToken;
 
 use crate::admin::RuntimeState;
@@ -33,8 +39,15 @@ const WRITE_ACK_WAIT: Duration = Duration::from_secs(30);
 /// How long one request to the server may take.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// How often the consumer verifies the durable again.
+/// How often the consumer verifies the durable again, and how long it waits before it starts
+/// again after a failure.
 const VERIFY_INTERVAL: Duration = Duration::from_secs(30);
+
+/// How many messages one pull asks for: a bound on the commands that wait in memory.
+const BATCH: usize = 16;
+
+/// How long the server waits before it delivers again a command that the write path failed.
+const RETRY_DELAY: Duration = Duration::from_secs(5);
 
 /// The durable is missing, cannot be reached, or differs from what Edge provisions.
 #[derive(Debug, thiserror::Error)]
@@ -119,12 +132,19 @@ impl WriteConsumer {
         }
     }
 
-    /// Verify the durable now and every [`VERIFY_INTERVAL`] until `stop`. A failure is logged and
-    /// keeps the service not ready until a later verification passes.
+    /// Hand each command of the durable to the write path until `stop`, and verify the durable
+    /// every [`VERIFY_INTERVAL`]. A command is acknowledged after the write path took it, and
+    /// delivered again after [`RETRY_DELAY`] when the write path failed; a message that is not a
+    /// command is terminated. When the bus or the durable fails, the service is not ready, and
+    /// the consumer starts again after [`VERIFY_INTERVAL`].
     pub async fn run(self, stop: CancellationToken) {
         loop {
-            if let Err(error) = self.verify().await {
-                tracing::warn!(%error, "the service is not ready");
+            match self.consume(&stop).await {
+                Ok(()) => return,
+                Err(error) => {
+                    self.runtime.set_write_durable_verified(false);
+                    tracing::warn!(%error, "the service is not ready");
+                }
             }
             tokio::select! {
                 biased;
@@ -132,5 +152,57 @@ impl WriteConsumer {
                 () = tokio::time::sleep(VERIFY_INTERVAL) => {}
             }
         }
+    }
+
+    /// Consume the durable until `stop` (`Ok`) or until the bus or the durable fails.
+    async fn consume(&self, stop: &CancellationToken) -> Result<(), DurableError> {
+        let context = self.context().await.ok_or(DurableError)?;
+        let consumer = write_durable(&context).await?;
+        self.runtime.set_write_durable_verified(true);
+        let mut messages = consumer
+            .stream()
+            .max_messages_per_batch(BATCH)
+            .messages()
+            .await
+            .map_err(|_| DurableError)?;
+        let mut verify = tokio::time::interval(VERIFY_INTERVAL);
+        verify.tick().await;
+        loop {
+            tokio::select! {
+                biased;
+                () = stop.cancelled() => return Ok(()),
+                _ = verify.tick() => {
+                    write_durable(&context).await?;
+                }
+                message = messages.next() => match message {
+                    Some(Ok(message)) => self.take(&message).await,
+                    Some(Err(_)) | None => return Err(DurableError),
+                },
+            }
+        }
+    }
+
+    /// Hand one message to the write path and acknowledge it.
+    async fn take(&self, message: &jetstream::Message) {
+        let Ok(command) = CommandEnvelope::from_json(&message.payload) else {
+            tracing::warn!("a message of the write durable is not a command; it is dropped");
+            acknowledge(message, AckKind::Term).await;
+            return;
+        };
+        match self.writes.handle(&command).await {
+            Ok(_) => acknowledge(message, AckKind::Ack).await,
+            Err(error) => {
+                tracing::warn!(%error, "a write command is delivered again later");
+                acknowledge(message, AckKind::Nak(Some(RETRY_DELAY))).await;
+            }
+        }
+    }
+}
+
+/// Send `kind` for `message`. A failure is logged: the server delivers the message again after
+/// the ack wait, and the write path takes a repeat as a repeat.
+async fn acknowledge(message: &jetstream::Message, kind: AckKind) {
+    if let Err(error) = message.ack_with(kind).await {
+        tracing::warn!(%error, "a message of the write durable could not be acknowledged");
     }
 }
