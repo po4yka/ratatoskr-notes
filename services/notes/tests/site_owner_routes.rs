@@ -38,145 +38,149 @@ enum Expected {
     Refused,
 }
 
+/// One row for each entry of the domain router: the method, the path with `{c}` for the connection,
+/// `{t}` for an upload token and `{u}` for an unknown id, and what the route answers.
+const ROUTES: [(Method, &str, Expected); 20] = [
+    (
+        Method::POST,
+        "/v1/notes/connections/{c}/blobs",
+        Expected::Served,
+    ),
+    (
+        Method::PUT,
+        "/v1/notes/connections/{c}/blobs/{t}/chunks/0",
+        Expected::Served,
+    ),
+    (
+        Method::POST,
+        "/v1/notes/connections/{c}/blobs/{t}/finalize",
+        Expected::Served,
+    ),
+    (
+        Method::DELETE,
+        "/v1/notes/connections/{c}/blobs/{t}",
+        Expected::Served,
+    ),
+    (Method::GET, "/v1/notes/conflicts/{u}", Expected::Served),
+    (
+        Method::POST,
+        "/v1/notes/connections/{c}/changes",
+        Expected::ChannelMismatch,
+    ),
+    (
+        Method::POST,
+        "/v1/notes/connections/{c}/manifest",
+        Expected::ChannelMismatch,
+    ),
+    (
+        Method::GET,
+        "/v1/notes/connections/{c}/blobs/{t}/status",
+        Expected::Refused,
+    ),
+    (Method::POST, "/v1/notes/connections", Expected::Refused),
+    (Method::GET, "/v1/notes/connections", Expected::Refused),
+    (
+        Method::GET,
+        "/v1/notes/connections/{c}/files",
+        Expected::Refused,
+    ),
+    (
+        Method::GET,
+        "/v1/notes/connections/{c}/files/Home.md",
+        Expected::Refused,
+    ),
+    (
+        Method::GET,
+        "/v1/notes/connections/{c}/index/Home.md",
+        Expected::Refused,
+    ),
+    (
+        Method::PUT,
+        "/v1/notes/connections/{c}/excluded-folders",
+        Expected::Refused,
+    ),
+    (
+        Method::GET,
+        "/v1/notes/connections/{c}/device-operations",
+        Expected::Refused,
+    ),
+    (
+        Method::GET,
+        "/v1/notes/connections/{c}/device-operations/{u}/content",
+        Expected::Refused,
+    ),
+    (
+        Method::POST,
+        "/v1/notes/connections/{c}/device-operations/{u}/result",
+        Expected::Refused,
+    ),
+    (
+        Method::PUT,
+        "/v1/notes/connections/{c}/write-mode",
+        Expected::Refused,
+    ),
+    (
+        Method::GET,
+        "/internal/connections/{c}/files",
+        Expected::Refused,
+    ),
+    (
+        Method::DELETE,
+        "/v1/notes/connections/{c}",
+        Expected::Refused,
+    ),
+];
+
+/// The token of an upload session that does not exist.
+const TOKEN: &str = "rst_00000000000000000000000000";
+
+/// A valid body for a `POST` or `PUT` to `path`, so that a route that serves the claim would act.
+fn body(method: &Method, path: &str) -> Option<Value> {
+    if method != Method::POST && method != Method::PUT {
+        return None;
+    }
+    let body = if path.ends_with("/blobs") {
+        json!({
+            "declared_size_bytes": 5,
+            "media_type": "text/markdown",
+            "digest": { "algorithm": "sha256", "hex": "0".repeat(64) },
+            "chunk_size_bytes": 16_777_216,
+        })
+    } else if path.ends_with("/finalize") {
+        json!({ "resumption_token": TOKEN })
+    } else if path.ends_with("/changes") {
+        json!({ "changes": [] })
+    } else if path.ends_with("/manifest") {
+        json!({ "entries": [] })
+    } else if path.ends_with("/connections") {
+        json!({
+            "channel": "plugin",
+            "vault_key": "vault-key-from-a-site",
+            "vault_display_name": "Site",
+        })
+    } else if path.ends_with("/excluded-folders") {
+        json!({ "excluded_folders": ["Private"] })
+    } else if path.ends_with("/write-mode") {
+        json!({ "write_mode": "on" })
+    } else {
+        json!({})
+    };
+    Some(body)
+}
+
 #[tokio::test]
 async fn site_owner_reaches_only_uploads_and_conflicts() {
     let channel = Channel::new().await;
     let connection = channel.plugin_connection(OWNER, "vault-key-site").await;
-    let base = format!("/v1/notes/connections/{connection}");
-    let token = "rst_00000000000000000000000000";
     let unknown = Uuid::now_v7();
-    let declaration = json!({
-        "declared_size_bytes": 5,
-        "media_type": "text/markdown",
-        "digest": { "algorithm": "sha256", "hex": "0".repeat(64) },
-        "chunk_size_bytes": 16_777_216,
-    });
-    let connect = json!({
-        "channel": "plugin",
-        "vault_key": "vault-key-from-a-site",
-        "vault_display_name": "Site",
-    });
-    // One row for each entry of the domain router.
-    let table: Vec<(Method, String, Option<Value>, Expected)> = vec![
-        (
-            Method::POST,
-            format!("{base}/blobs"),
-            Some(declaration),
-            Expected::Served,
-        ),
-        (
-            Method::PUT,
-            format!("{base}/blobs/{token}/chunks/0"),
-            None,
-            Expected::Served,
-        ),
-        (
-            Method::POST,
-            format!("{base}/blobs/{token}/finalize"),
-            Some(json!({ "resumption_token": token })),
-            Expected::Served,
-        ),
-        (
-            Method::DELETE,
-            format!("{base}/blobs/{token}"),
-            None,
-            Expected::Served,
-        ),
-        (
-            Method::GET,
-            format!("/v1/notes/conflicts/{unknown}"),
-            None,
-            Expected::Served,
-        ),
-        (
-            Method::POST,
-            format!("{base}/changes"),
-            Some(json!({ "changes": [] })),
-            Expected::ChannelMismatch,
-        ),
-        (
-            Method::POST,
-            format!("{base}/manifest"),
-            Some(json!({ "entries": [] })),
-            Expected::ChannelMismatch,
-        ),
-        (
-            Method::GET,
-            format!("{base}/blobs/{token}/status"),
-            None,
-            Expected::Refused,
-        ),
-        (
-            Method::POST,
-            "/v1/notes/connections".to_owned(),
-            Some(connect),
-            Expected::Refused,
-        ),
-        (
-            Method::GET,
-            "/v1/notes/connections".to_owned(),
-            None,
-            Expected::Refused,
-        ),
-        (
-            Method::GET,
-            format!("{base}/files"),
-            None,
-            Expected::Refused,
-        ),
-        (
-            Method::GET,
-            format!("{base}/files/Home.md"),
-            None,
-            Expected::Refused,
-        ),
-        (
-            Method::GET,
-            format!("{base}/index/Home.md"),
-            None,
-            Expected::Refused,
-        ),
-        (
-            Method::PUT,
-            format!("{base}/excluded-folders"),
-            Some(json!({ "excluded_folders": ["Private"] })),
-            Expected::Refused,
-        ),
-        (
-            Method::GET,
-            format!("{base}/device-operations"),
-            None,
-            Expected::Refused,
-        ),
-        (
-            Method::GET,
-            format!("{base}/device-operations/{unknown}/content"),
-            None,
-            Expected::Refused,
-        ),
-        (
-            Method::POST,
-            format!("{base}/device-operations/{unknown}/result"),
-            Some(json!({})),
-            Expected::Refused,
-        ),
-        (
-            Method::PUT,
-            format!("{base}/write-mode"),
-            Some(json!({ "write_mode": "on" })),
-            Expected::Refused,
-        ),
-        (
-            Method::GET,
-            format!("/internal/connections/{connection}/files"),
-            None,
-            Expected::Refused,
-        ),
-        (Method::DELETE, base.clone(), None, Expected::Refused),
-    ];
 
     let mut answers = Vec::new();
-    for (method, path, body, expected) in table {
+    for (method, template, expected) in ROUTES {
+        let path = template
+            .replace("{c}", &connection.to_string())
+            .replace("{t}", TOKEN)
+            .replace("{u}", &unknown.to_string());
+        let body = body(&method, &path);
         let answer = send_with(
             &channel.router,
             method.clone(),
@@ -186,7 +190,7 @@ async fn site_owner_reaches_only_uploads_and_conflicts() {
             body,
         )
         .await;
-        answers.push((format!("{method} {path}"), expected, answer));
+        answers.push((format!("{method} {template}"), expected, answer));
     }
 
     let unauthenticated = (

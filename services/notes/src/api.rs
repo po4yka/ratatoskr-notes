@@ -43,6 +43,7 @@ mod fault;
 mod internal;
 mod read;
 mod removals;
+mod site_owner;
 mod write_mode;
 
 use crate::systemd::{JobResult, SystemdBus, UnitName};
@@ -469,44 +470,34 @@ pub fn domain_router<B: SystemdBus>(state: ApiState<B>) -> Router {
             "/v1/notes/connections/{connection_id}/write-mode",
             put(write_mode::put_write_mode::<B>),
         )
+        .route(site_owner::BLOBS, post(blobs::open_upload::<B>))
+        .route(site_owner::BLOB, delete(blobs::close_upload::<B>))
         .route(
-            "/v1/notes/connections/{connection_id}/blobs",
-            post(blobs::open_upload::<B>),
-        )
-        .route(
-            "/v1/notes/connections/{connection_id}/blobs/{token}",
-            delete(blobs::close_upload::<B>),
-        )
-        .route(
-            "/v1/notes/connections/{connection_id}/blobs/{token}/chunks/{index}",
+            site_owner::BLOB_CHUNK,
             put(blobs::put_chunk::<B>).layer(DefaultBodyLimit::max(blobs::MAX_CHUNK_BYTES)),
         )
         .route(
             "/v1/notes/connections/{connection_id}/blobs/{token}/status",
             get(blobs::upload_status::<B>),
         )
+        .route(site_owner::BLOB_FINALIZE, post(blobs::finalize_upload::<B>))
         .route(
-            "/v1/notes/connections/{connection_id}/blobs/{token}/finalize",
-            post(blobs::finalize_upload::<B>),
-        )
-        .route(
-            "/v1/notes/connections/{connection_id}/manifest",
+            site_owner::MANIFEST,
             post(channel::post_manifest::<B>)
                 .layer(DefaultBodyLimit::max(channel::MAX_MANIFEST_BYTES)),
         )
-        .route(
-            "/v1/notes/conflicts/{conflict_id}",
-            get(conflicts::read_conflict::<B>),
-        )
+        .route(site_owner::CONFLICT, get(conflicts::read_conflict::<B>))
         .route(
             "/internal/connections/{connection_id}/files",
             get(internal::list_indexed_files::<B>)
                 .layer(axum::middleware::from_fn(internal::loopback_only)),
         )
         .route(
-            "/v1/notes/connections/{connection_id}/changes",
+            site_owner::CHANGES,
             post(channel::post_changes::<B>).layer(DefaultBodyLimit::max(channel::MAX_BATCH_BYTES)),
         )
+        // After the routes, so that the guard reads the matched route.
+        .route_layer(axum::middleware::from_fn(site_owner::guard))
         .layer(DefaultBodyLimit::max(MAX_REQUEST_BYTES))
         .with_state(state)
 }

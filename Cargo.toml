@@ -46,7 +46,8 @@ tokio = { version = "1.46", features = ["rt-multi-thread", "macros", "signal", "
 # tells each one to fail its login (workspace task 5.17).
 # `io`: the read route streams the bytes of a blob without a copy in memory.
 tokio-util = { version = "0.7", default-features = false, features = ["rt", "io"] }
-axum  = { version = "0.8", default-features = false, features = ["http1", "json", "query", "tokio", "tracing"] }
+# `matched-path`: the guard of a site owner claim reads the route that a request matched (SITE-027).
+axum  = { version = "0.8", default-features = false, features = ["http1", "json", "matched-path", "query", "tokio", "tracing"] }
 
 # ---- systemd ----
 # The client of the systemd D-Bus API (workspace design D3): StartUnit, StopUnit and the JobRemoved

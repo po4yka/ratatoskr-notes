@@ -26,6 +26,7 @@ use ratatoskr_blob_transfer_contracts::{
 use ratatoskr_notes_contracts::WriteOrigin;
 use uuid::Uuid;
 
+use super::site_owner::SITE_OWNER_KIND;
 use super::{ApiFault, ApiState, SESSION_KIND_HEADER, device_claim, is_session, owner};
 use crate::channel::device_kind_of;
 use crate::systemd::SystemdBus;
@@ -34,9 +35,6 @@ use crate::uploads::UploadRefusal;
 /// The largest chunk body: the largest chunk size of the contract.
 pub(super) const MAX_CHUNK_BYTES: usize =
     ratatoskr_blob_transfer_contracts::CHUNK_SIZE_MAX_BYTES as usize;
-
-/// The session kind of a site owner session (SITE-027).
-const SITE_OWNER_KIND: &str = "site_owner";
 
 /// The claim that names the site of a site owner session, `site:<site id>`.
 const ORIGIN_HEADER: &str = "x-ratatoskr-origin";

@@ -201,7 +201,11 @@ revision. A session of another owner gets `404` `notes.connection.not_found`. A 
 manifest from a session answers `409` `notes.channel_mismatch`. A site owner session (session kind
 `site_owner`, SITE-027) uploads the content of an edit from a site in the same way. Its claim must
 name the site in `x-ratatoskr-origin: site:<site id>`, as the contract type `WriteOrigin` spells
-a site; without that origin the upload answers `401` `notes.request.unauthenticated`.
+a site; without that origin the upload answers `401` `notes.request.unauthenticated`. Notes does
+not rely only on the route table of Edge: a `site_owner` claim is served only on the blob routes
+(open, chunk, finalize, close) and on `GET /v1/notes/conflicts/{id}`. The change and manifest
+routes answer it `409` `notes.channel_mismatch`, and every other route answers `401`
+`notes.request.unauthenticated`. The list is in `services/notes/src/api/site_owner.rs`.
 
 **Checks when a write arrives.** In this order, each refusal fails the operation and changes
 nothing:
