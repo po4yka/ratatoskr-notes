@@ -26,7 +26,7 @@ use crate::blobs::BlobStore;
 use crate::channel::device_kind_of;
 use crate::events;
 use crate::files::{self, ExcludedFoldersSet, FileRecorder};
-use crate::operation::{self, Report};
+use crate::operation::{self, ReportRow};
 use crate::supervisor::Supervisor;
 use crate::tree_sync::Pipeline;
 use crate::uploads::Uploads;
@@ -335,25 +335,26 @@ impl<B: SystemdBus> ApiState<B> {
             {
                 continue;
             }
-            match self.database.fail_connection(connection_id).await {
+            // The failure and the end of its operation are one transaction.
+            let report: Vec<ReportRow> = ReportRow::failure(
+                interrupted.owner_id,
+                interrupted.operation_id,
+                ApiFault::Unavailable.fields(),
+            )
+            .into_iter()
+            .collect();
+            match self
+                .database
+                .fail_connection_reporting(connection_id, &operation::events_of(&report))
+                .await
+            {
                 Ok(_) => {
                     tracing::info!(%connection_id, "a login that a stop interrupted is failed");
                     self.after_terminal_state(connection_id).await;
                 }
                 Err(error) => {
                     tracing::error!(%error, %connection_id, "an interrupted login could not be failed");
-                    continue;
                 }
-            }
-            if let Some(operation_id) = interrupted.operation_id {
-                let (code, message, retryable) = ApiFault::Unavailable.fields();
-                operation::report(
-                    &self.database,
-                    interrupted.owner_id,
-                    operation_id,
-                    Report::Failed(code, message, retryable),
-                )
-                .await;
             }
         }
     }
@@ -516,6 +517,15 @@ async fn remove_connection<B: SystemdBus>(
         ApiFault::Unavailable
     })?;
     let aggregate_id = events::connection_aggregate(connection_id);
+    // A connect that waits for its first scan or manifest ends with the removal, in its
+    // transaction. A connect whose login runs reports its own end.
+    let report: Vec<ReportRow> = ReportRow::failure(
+        owner_id,
+        connection.operation_id,
+        ApiFault::NotFound.fields(),
+    )
+    .into_iter()
+    .collect();
     let removed = state
         .database
         .remove_connection(
@@ -528,6 +538,7 @@ async fn remove_connection<B: SystemdBus>(
                 aggregate_id: &aggregate_id,
                 envelope: &envelope,
             },
+            &operation::events_of(&report),
         )
         .await
         .map_err(|error| {
@@ -537,22 +548,6 @@ async fn remove_connection<B: SystemdBus>(
     if removed {
         tracing::info!(%connection_id, channel = %connection.channel, "a connection was removed");
         state.after_terminal_state(connection_id).await;
-        // A connect whose login finished, or a device connect, waits for its first scan. The
-        // removal ends its operation. A connect whose login runs reports its own end.
-        let waits_for_scan = connection.channel != "sync" || connection.logged_in;
-        if connection.state == "connecting"
-            && waits_for_scan
-            && let Some(operation_id) = connection.operation_id
-        {
-            let (code, message, retryable) = ApiFault::NotFound.fields();
-            operation::report(
-                &state.database,
-                owner_id,
-                operation_id,
-                Report::Failed(code, message, retryable),
-            )
-            .await;
-        }
     }
     Ok(StatusCode::NO_CONTENT)
 }

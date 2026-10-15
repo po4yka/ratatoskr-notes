@@ -95,8 +95,9 @@ and creates nothing, and the client can try again later. A `plugin` or `cli` con
 within 30 minutes of the connect, the connection becomes `failed`, and in the same transaction the
 operation gets its terminal report `failed` with the code `notes.channel.manifest_missing`. That
 code is in the report of the operation, never in an HTTP answer. The wait continues after a restart
-of the service. Each report
-correlates to `operation:<operation id>`.
+of the service. Each report correlates to `operation:<operation id>`. A terminal report `failed` is
+written in the transaction that marks the connection `failed`, `removed` or `login_expired`, so a
+stop of the process cannot separate them.
 
 A `plugin` or `cli` connect comes from a paired device. Edge names the device in
 `x-ratatoskr-device-id` and its kind in `x-ratatoskr-device-kind`. Without both claims the connect

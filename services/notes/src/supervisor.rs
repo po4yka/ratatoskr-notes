@@ -35,7 +35,7 @@ use tokio_util::task::TaskTracker;
 use uuid::Uuid;
 
 use crate::api::TestHook;
-use crate::operation::{self, Completion, Phase, Report};
+use crate::operation::{self, Completion, Phase, Report, ReportRow};
 use crate::systemd::{
     JOURNAL_UNREADABLE, JobResult, JournalLine, SYNC_LOG_NAMESPACE, SystemdBus, UnitName,
 };
@@ -59,6 +59,9 @@ const LONGEST_PAUSE: Duration = Duration::from_mins(10);
 
 /// The stable code of an expired login.
 const LOGIN_EXPIRED: &str = "notes.sync.login_expired";
+
+/// The message of the failure of a connect whose login expired before its first scan.
+const LOGIN_EXPIRED_MESSAGE: &str = "The Obsidian login expired. Connect the vault again.";
 
 /// The wait before the first new follower after a follower ended.
 const FIRST_BACKOFF: Duration = Duration::from_secs(1);
@@ -374,7 +377,24 @@ impl<B: SystemdBus> Supervisor<B> {
             .await
             .ok()
             .flatten();
-        match self.database.expire_login(connection_id).await {
+        // A connect whose first scan did not end fails with the code of the expired login, in the
+        // transaction of the expiry.
+        let report: Vec<ReportRow> = operation
+            .as_ref()
+            .and_then(|operation| {
+                ReportRow::failure(
+                    operation.owner_id,
+                    operation.operation_id,
+                    (LOGIN_EXPIRED, LOGIN_EXPIRED_MESSAGE, false),
+                )
+            })
+            .into_iter()
+            .collect();
+        match self
+            .database
+            .expire_login(connection_id, &operation::events_of(&report))
+            .await
+        {
             Ok(true) => {}
             Ok(false) => return,
             Err(error) => {
@@ -387,22 +407,6 @@ impl<B: SystemdBus> Supervisor<B> {
             (hook.0)(connection_id).await;
         }
         self.forget(connection_id);
-        // A connect whose first scan did not end fails with the code of the expired login.
-        if let Some(operation) = operation.filter(|operation| operation.state == "connecting")
-            && let Some(operation_id) = operation.operation_id
-        {
-            operation::report(
-                &self.database,
-                operation.owner_id,
-                operation_id,
-                Report::Failed(
-                    LOGIN_EXPIRED,
-                    "The Obsidian login expired. Connect the vault again.",
-                    false,
-                ),
-            )
-            .await;
-        }
         let unit = UnitName::sync(connection_id);
         match self.systemd.stop_unit(&unit).await {
             Ok(JobResult::Done) => {}

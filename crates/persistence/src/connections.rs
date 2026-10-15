@@ -251,7 +251,10 @@ impl Database {
     }
 
     /// Remove a connection in one transaction: mark it `removed`, delete its stored ciphertext and
-    /// the record of its uploads, and write `event` to the outbox.
+    /// the record of its uploads, and write `event` to the outbox. When the connect of the
+    /// connection waits for its first scan or manifest (it is `connecting`, and it is a device
+    /// connection or its login finished), also write `report_if_waiting`, the end of its connect
+    /// operation; a connect whose login runs reports its own end.
     ///
     /// Returns `false` and writes nothing when the connection is already removed or is not this
     /// owner's, so two concurrent removals write one event.
@@ -264,20 +267,31 @@ impl Database {
         owner_id: Uuid,
         connection_id: Uuid,
         event: &OutboxEvent<'_>,
+        report_if_waiting: &[OutboxEvent<'_>],
     ) -> Result<bool, PersistenceError> {
         let mut transaction = self.pool.begin().await.map_err(PersistenceError::Query)?;
-        let removed = sqlx::query(&format!(
-            "update notes.connections set state = 'removed', updated_at = now()
-             where connection_id = $1 and owner_id = $2 and {HOLDS_VAULT_KEY}"
+        let waiting: Option<bool> = sqlx::query_scalar(&format!(
+            "select state = 'connecting' and (channel <> 'sync' or logged_in_at is not null)
+             from notes.connections
+             where connection_id = $1 and owner_id = $2 and {HOLDS_VAULT_KEY}
+             for update"
         ))
         .bind(connection_id)
         .bind(owner_id)
+        .fetch_optional(&mut *transaction)
+        .await
+        .map_err(PersistenceError::Query)?;
+        let Some(waiting) = waiting else {
+            return Ok(false);
+        };
+        sqlx::query(
+            "update notes.connections set state = 'removed', updated_at = now()
+             where connection_id = $1",
+        )
+        .bind(connection_id)
         .execute(&mut *transaction)
         .await
         .map_err(PersistenceError::Query)?;
-        if removed.rows_affected() == 0 {
-            return Ok(false);
-        }
         for table in ["notes.connection_secrets", "notes.connection_blobs"] {
             sqlx::query(&format!("delete from {table} where connection_id = $1"))
                 .bind(connection_id)
@@ -286,6 +300,11 @@ impl Database {
                 .map_err(PersistenceError::Query)?;
         }
         insert_outbox(&mut transaction, event).await?;
+        if waiting {
+            for report in report_if_waiting {
+                insert_outbox(&mut transaction, report).await?;
+            }
+        }
         transaction
             .commit()
             .await
@@ -620,23 +639,51 @@ impl Database {
 
 impl Database {
     /// Mark a `sync` connection `login_expired` when it is `connecting` or `active`: its Sync login
-    /// no longer works, and the owner must connect again.
+    /// no longer works, and the owner must connect again. When it was `connecting`, its first scan
+    /// did not end, and `report_if_connecting`, the end of its connect operation, is written in the
+    /// same transaction.
     ///
     /// Returns `false` and changes nothing when the connection is in another state, for example
     /// because the owner removed it.
     ///
     /// # Errors
     ///
-    /// [`PersistenceError::Query`] when the statement fails.
-    pub async fn expire_login(&self, connection_id: Uuid) -> Result<bool, PersistenceError> {
-        let expired = sqlx::query(
-            "update notes.connections set state = 'login_expired', updated_at = now()
-             where connection_id = $1 and channel = 'sync' and state in ('connecting', 'active')",
+    /// [`PersistenceError::Query`] when a statement fails; nothing is committed then.
+    pub async fn expire_login(
+        &self,
+        connection_id: Uuid,
+        report_if_connecting: &[OutboxEvent<'_>],
+    ) -> Result<bool, PersistenceError> {
+        let mut transaction = self.pool.begin().await.map_err(PersistenceError::Query)?;
+        let state: Option<String> = sqlx::query_scalar(
+            "select state from notes.connections
+             where connection_id = $1 and channel = 'sync' and state in ('connecting', 'active')
+             for update",
         )
         .bind(connection_id)
-        .execute(&self.pool)
+        .fetch_optional(&mut *transaction)
         .await
         .map_err(PersistenceError::Query)?;
-        Ok(expired.rows_affected() == 1)
+        let Some(state) = state else {
+            return Ok(false);
+        };
+        sqlx::query(
+            "update notes.connections set state = 'login_expired', updated_at = now()
+             where connection_id = $1",
+        )
+        .bind(connection_id)
+        .execute(&mut *transaction)
+        .await
+        .map_err(PersistenceError::Query)?;
+        if state == "connecting" {
+            for report in report_if_connecting {
+                insert_outbox(&mut transaction, report).await?;
+            }
+        }
+        transaction
+            .commit()
+            .await
+            .map_err(PersistenceError::Query)?;
+        Ok(true)
     }
 }

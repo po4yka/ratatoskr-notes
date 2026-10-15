@@ -163,6 +163,62 @@ pub(crate) fn operation_aggregate(operation_id: Uuid) -> String {
     format!("{OPERATION_AGGREGATE}:{operation_id}")
 }
 
+/// A report of the connect operation, built for the outbox of a transaction that writes the state
+/// that it reports.
+#[derive(Debug, Clone)]
+pub(crate) struct ReportRow {
+    event_id: Uuid,
+    aggregate_id: String,
+    envelope: serde_json::Value,
+}
+
+impl ReportRow {
+    /// The row of `report` for the operation `operation_id` of `owner_id`.
+    pub(crate) fn new(
+        owner_id: Uuid,
+        operation_id: Uuid,
+        report: Report,
+    ) -> Result<Self, EnvelopeBuildError> {
+        let event_id = Uuid::now_v7();
+        Ok(Self {
+            event_id,
+            aggregate_id: operation_aggregate(operation_id),
+            envelope: outbox_value(report_envelope(event_id, owner_id, operation_id, report))?,
+        })
+    }
+
+    /// The row of a failure `(code, message, retryable)` of the operation, when there is one; a
+    /// row that cannot be built is logged and left out, and Platform's reaper ends the operation.
+    pub(crate) fn failure(
+        owner_id: Uuid,
+        operation_id: Option<Uuid>,
+        (code, message, retryable): (&'static str, &'static str, bool),
+    ) -> Option<Self> {
+        let operation_id = operation_id?;
+        match Self::new(
+            owner_id,
+            operation_id,
+            Report::Failed(code, message, retryable),
+        ) {
+            Ok(row) => Some(row),
+            Err(error) => {
+                tracing::error!(%error, %operation_id, "a report of the connect operation could not be built");
+                None
+            }
+        }
+    }
+
+    /// The outbox event of the row.
+    pub(crate) fn event(&self) -> OutboxEvent<'_> {
+        report_event(self.event_id, &self.aggregate_id, &self.envelope)
+    }
+}
+
+/// The events of `rows`, for one transaction.
+pub(crate) fn events_of(rows: &[ReportRow]) -> Vec<OutboxEvent<'_>> {
+    rows.iter().map(ReportRow::event).collect()
+}
+
 /// The outbox row of a report.
 pub(crate) fn report_event<'a>(
     event_id: Uuid,

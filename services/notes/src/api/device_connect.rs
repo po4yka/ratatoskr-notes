@@ -21,7 +21,7 @@ use std::time::Duration;
 use uuid::Uuid;
 
 use super::ApiState;
-use crate::operation::{self, Report};
+use crate::operation::{self, ReportRow};
 use crate::systemd::SystemdBus;
 
 /// The failure of a device connect whose first manifest did not arrive in time.
@@ -77,30 +77,14 @@ impl<B: SystemdBus> ApiState<B> {
         };
         // The failure and its terminal report are one transaction.
         let (code, message) = MANIFEST_MISSING;
-        let report_id = Uuid::now_v7();
-        let report = operation.operation_id.map(|operation_id| {
-            let envelope = operation::outbox_value(operation::report_envelope(
-                report_id,
-                operation.owner_id,
-                operation_id,
-                Report::Failed(code, message, true),
-            ));
-            (operation::operation_aggregate(operation_id), envelope)
-        });
-        let report = match report {
-            Some((aggregate_id, Ok(envelope))) => Some((aggregate_id, envelope)),
-            Some((_, Err(error))) => {
-                tracing::error!(%error, %connection_id, "the report of a failed device connect could not be built");
-                return;
-            }
-            None => None,
-        };
-        let events: Vec<_> = report
-            .iter()
-            .map(|(aggregate_id, envelope)| {
-                operation::report_event(report_id, aggregate_id, envelope)
-            })
-            .collect();
+        let report: Vec<ReportRow> = ReportRow::failure(
+            operation.owner_id,
+            operation.operation_id,
+            (code, message, true),
+        )
+        .into_iter()
+        .collect();
+        let events = operation::events_of(&report);
         match self
             .database
             .fail_connection_reporting(connection_id, &events)

@@ -25,7 +25,9 @@ use super::{
     valid_vault_key,
 };
 use crate::login::{self, CredentialFiles, SyncLogin};
-use crate::operation::{self, Completion, OPERATION_KIND, OPERATION_LANE, Phase, Report};
+use crate::operation::{
+    self, Completion, OPERATION_KIND, OPERATION_LANE, Phase, Report, ReportRow,
+};
 use crate::secrets::{Sealed, SecretKind, SecretsKey};
 use crate::systemd::SystemdBus;
 
@@ -297,7 +299,8 @@ async fn finish_sync_connect<B: SystemdBus>(
     if let Some(before_login) = &state.before_login {
         (before_login.0)(connect.connection_id).await;
     }
-    if let Err(fault) = log_in(&state, &connect, &sync_login).await {
+    // A failure that marked the connection `failed` wrote its report in that transaction.
+    if let Err(Some(fault)) = log_in(&state, &connect, &sync_login).await {
         let (code, message, retryable) = fault.fields();
         tracing::info!(connection_id = %connect.connection_id, code, "a connect failed");
         operation::report(
@@ -332,7 +335,7 @@ async fn log_in<B: SystemdBus>(
     state: &ApiState<B>,
     connect: &SyncConnect,
     sync_login: &SyncLogin,
-) -> Result<(), ApiFault> {
+) -> Result<(), Option<ApiFault>> {
     let connection_id = connect.connection_id;
     let fault = match state.database.is_connecting(connection_id).await {
         Ok(true) => match run_login(state, connect, sync_login).await {
@@ -350,14 +353,14 @@ async fn log_in<B: SystemdBus>(
             Err(fault) => {
                 if removed_meanwhile(state, connection_id).await {
                     tracing::info!(%connection_id, "the connection was removed while its login ran");
-                    return Err(ApiFault::NotFound);
+                    return Err(Some(ApiFault::NotFound));
                 }
                 fault
             }
         },
         Ok(false) => {
             tracing::info!(%connection_id, "the connection was removed before its login started; no login runs");
-            return Err(ApiFault::NotFound);
+            return Err(Some(ApiFault::NotFound));
         }
         Err(error) => {
             tracing::error!(%error, %connection_id, "the state of a connection could not be read");
@@ -366,19 +369,25 @@ async fn log_in<B: SystemdBus>(
     };
     state.supervisor.forget(connection_id);
     clean_up_sync_client(state.systemd.as_ref(), connection_id).await?;
+    // The failure and the end of the operation are one transaction.
+    let report: Vec<ReportRow> =
+        ReportRow::failure(connect.owner_id, Some(connect.operation_id), fault.fields())
+            .into_iter()
+            .collect();
     let failed = state
         .database
-        .fail_connection(connection_id)
+        .fail_connection_reporting(connection_id, &operation::events_of(&report))
         .await
         .map_err(|error| {
             tracing::error!(%error, %connection_id, "a failed connection could not be marked");
             ApiFault::Unavailable
         })?;
-    if failed {
-        tracing::info!(%connection_id, "a connection failed at its first login");
-        state.after_terminal_state(connection_id).await;
+    if !failed {
+        return Err(Some(fault));
     }
-    Err(fault)
+    tracing::info!(%connection_id, "a connection failed at its first login");
+    state.after_terminal_state(connection_id).await;
+    Err(None)
 }
 
 /// Whether a disconnect of the connection ran while its login ran, and removed it. A disconnect
