@@ -20,7 +20,7 @@ use ratatoskr_notes_persistence::test_support::TestDatabase;
 use serde_json::{Value, json};
 use uuid::Uuid;
 
-use crate::support::systemd::FakeSystemd;
+use crate::support::systemd::{Call, FakeSystemd};
 use crate::support::{connection_id, free_address, run_service, send_tcp, send_tcp_as, sync_body};
 
 const OWNER: Uuid = Uuid::from_u128(0x0192_0000_0000_7000_8000_0000_0000_06d3);
@@ -145,6 +145,42 @@ async fn write_mode_off_sets_pull_only() {
         modes,
         [Some("pull-only"), Some("bidirectional"), Some("pull-only")],
         "write mode off configures pull-only again: {configs:?}"
+    );
+
+    fixture
+        .cleanup()
+        .await
+        .expect("the test database is dropped");
+}
+
+#[tokio::test]
+async fn write_mode_switches_between_two_fixed_units() {
+    let fixture = TestDatabase::create().await.expect("a test database");
+    let systemd = FakeSystemd::new();
+
+    let id = connect_and_switch(&fixture, &systemd, &["on", "off"]).await;
+
+    let pull = format!("ratatoskr-notes-sync-pull@{id}.service");
+    let bidi = format!("ratatoskr-notes-sync-bidi@{id}.service");
+    let sync_calls: Vec<Call> = systemd
+        .calls()
+        .into_iter()
+        .filter(|call| match call {
+            Call::Start(unit) | Call::Stop(unit) => unit.starts_with("ratatoskr-notes-sync"),
+        })
+        .collect();
+    assert_eq!(
+        sync_calls,
+        [
+            Call::Stop(bidi.clone()),
+            Call::Start(pull.clone()),
+            Call::Stop(pull.clone()),
+            Call::Start(bidi.clone()),
+            Call::Stop(bidi),
+            Call::Start(pull),
+        ],
+        "each start of the sync unit of one write mode stops the unit of the other first, so \
+         the two never run together"
     );
 
     fixture

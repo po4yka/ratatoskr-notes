@@ -368,3 +368,41 @@ async fn lines_go_to_their_own_connection() {
         .await
         .expect("the test database is dropped");
 }
+
+#[tokio::test]
+async fn auth_failure_of_the_bidirectional_unit_expires_the_login() {
+    let fixture = TestDatabase::create().await.expect("a test database");
+    let systemd = FakeSystemd::new();
+    let id = insert_active_connection(&fixture).await;
+    sqlx::query("update notes.connections set write_mode = 'on' where connection_id = $1")
+        .bind(id)
+        .execute(fixture.pool())
+        .await
+        .expect("the write mode is on");
+    let unit = format!("ratatoskr-notes-sync-bidi@{id}.service");
+
+    let api = free_address();
+    let unknown = format!("/v1/notes/connections/{}", Uuid::nil());
+    let steps = async {
+        let answer = send_tcp(api, Method::DELETE, &unknown, OWNER, None).await;
+        assert_eq!(answer.status, StatusCode::NOT_FOUND, "{:?}", answer.body);
+        systemd
+            .journals()
+            .log_auth_failures(&unit, Duration::from_mins(10));
+        systemd.wait_for_stop(&unit).await
+    };
+    let (unit_stopped, stopped) = run_service(&fixture, &systemd, steps, api).await;
+    assert!(stopped, "serve stops without a failure");
+
+    assert!(
+        unit_stopped,
+        "the lines of the unit of write mode on reach their connection, and the unit stops: {:?}",
+        systemd.calls()
+    );
+    assert_eq!(state_of(&fixture, id).await, "login_expired");
+
+    fixture
+        .cleanup()
+        .await
+        .expect("the test database is dropped");
+}

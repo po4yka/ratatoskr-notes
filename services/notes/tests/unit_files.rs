@@ -188,3 +188,53 @@ fn no_unit_uses_the_old_connections_root() {
         assert!(old.is_empty(), "{template}: {old:?}");
     }
 }
+
+/// The variables that a sync unit may set: the client state of `ob`. A file that another user
+/// writes must not set `PATH`, `NODE_OPTIONS` or `LD_PRELOAD` for `ob`, so no unit reads an
+/// `EnvironmentFile=` and no command expands a variable (the policy of the workspace harness,
+/// `release_artifact_callers.rs`).
+const SYNC_UNIT_VARIABLES: [&str; 2] = ["HOME", "XDG_CONFIG_HOME"];
+
+#[test]
+fn each_write_mode_has_a_fixed_sync_unit() {
+    let units = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../deploy/systemd");
+    assert!(
+        !units.join("ratatoskr-notes-sync@.service").exists(),
+        "the sync unit whose mode an environment file sets is gone"
+    );
+    let tree = text(&tree_dir(ID));
+    for (template, mode) in [
+        ("ratatoskr-notes-sync-pull@.service", "pull-only"),
+        ("ratatoskr-notes-sync-bidi@.service", "bidirectional"),
+    ] {
+        assert!(units.join(template).is_file(), "{template} is shipped");
+        let unit = settings(template);
+        assert!(
+            values(&unit, "EnvironmentFile").is_empty(),
+            "{template}: no environment file"
+        );
+        for value in values(&unit, "Environment") {
+            let name = value
+                .split_once('=')
+                .map_or(value.as_str(), |(name, _)| name);
+            assert!(
+                SYNC_UNIT_VARIABLES.contains(&name),
+                "{template}: Environment= sets only the client state: {value}"
+            );
+        }
+        for (key, command) in &unit {
+            assert!(
+                !key.starts_with("Exec") || !command.contains('$'),
+                "{template}: {key}= expands no variable: {command}"
+            );
+        }
+        assert_eq!(
+            values(&unit, "ExecStartPre"),
+            [format!(
+                "/usr/bin/ob sync-config --path {tree} --mode {mode} --conflict-strategy conflict \
+                 --configs \"\" --device-name ratatoskr-{ID}"
+            )],
+            "{template}: the mode and the conflict strategy are literal arguments"
+        );
+    }
+}
