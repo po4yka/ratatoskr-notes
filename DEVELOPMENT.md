@@ -108,7 +108,9 @@ A `sync` connection writes its working tree with `sync_write::write_atomically`:
 `.ratatoskr-write-<id>.part` in the same folder, flushed to disk, then renamed over the file (OBS-024
 task 7.6). `services/notes/tests/sync_write.rs::reader_never_sees_partial_file` checks it: a reader
 thread hashes the file in a loop while the writer replaces it 1 000 times with 256 KiB of old and new
-bytes in turn, and every hash must be the old or the new one.
+bytes in turn, and every hash must be the old or the new one. The test first runs the same reader
+against its fault mode, a direct `std::fs::write`, and requires a torn read there, so it proves that
+the reader can see one.
 
 Result on 2026-10-15, macOS on APFS:
 

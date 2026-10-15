@@ -111,8 +111,18 @@ fn torn_reads(write: fn(&std::path::Path, &[u8]) -> std::io::Result<()>) -> Vec<
         .collect()
 }
 
+/// The fault mode of this test: a direct write, which truncates the file and then fills it.
+fn direct_write(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
+    std::fs::write(path, bytes)
+}
+
 #[test]
 fn reader_never_sees_partial_file() {
+    // The reader can see a torn file: against the fault mode it sees one.
+    assert!(
+        !torn_reads(direct_write).is_empty(),
+        "the reader sees a torn file of a direct write"
+    );
     let torn = torn_reads(write_atomically);
     assert!(
         torn.is_empty(),

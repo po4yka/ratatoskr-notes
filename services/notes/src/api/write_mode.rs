@@ -109,23 +109,19 @@ pub(super) async fn put_write_mode<B: SystemdBus>(
     if !changed {
         return Err(ApiFault::NotFound);
     }
-    {
-        {
-            tracing::info!(%connection_id, on, "the write mode of a connection is set");
-            Ok((
-                StatusCode::ACCEPTED,
-                Json(WriteModeAccepted {
-                    connection_id,
-                    write_mode: request.write_mode,
-                    operation: OperationView {
-                        operation_id,
-                        kind: WRITE_MODE_OPERATION_KIND,
-                        lane: OPERATION_LANE,
-                    },
-                }),
-            ))
-        }
-    }
+    tracing::info!(%connection_id, on, "the write mode of a connection is set");
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(WriteModeAccepted {
+            connection_id,
+            write_mode: request.write_mode,
+            operation: OperationView {
+                operation_id,
+                kind: WRITE_MODE_OPERATION_KIND,
+                lane: OPERATION_LANE,
+            },
+        }),
+    ))
 }
 
 /// One write-mode change of a `sync` connection.
