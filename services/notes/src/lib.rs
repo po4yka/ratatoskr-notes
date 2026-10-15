@@ -47,9 +47,10 @@ use crate::admin::{RuntimeState, admin_router};
 use crate::api::{ApiState, DEFAULT_CREDENTIALS_DIR, domain_router};
 use crate::blobs::BlobStore;
 use crate::config::{LogFormat, NotesConfig, TelemetryConfig};
+use crate::files::FileRecorder;
 use crate::outbox::{BusSettings, OutboxRelay};
 use crate::systemd::{DbusSystemd, SystemdBus};
-use crate::writes::WriteConsumer;
+use crate::writes::{WriteConsumer, Writes};
 
 /// The whole process lifecycle.
 ///
@@ -184,7 +185,11 @@ pub async fn serve<B: SystemdBus>(
             nkey_seed_path: config.bus.nkey_seed_path.clone(),
         };
         // Readiness needs the durable of the write commands from now on.
-        let consumer = WriteConsumer::new(settings.clone(), Arc::clone(&runtime));
+        let writes = Writes::new(
+            FileRecorder::new(database.clone(), blobs.clone())
+                .with_max_file_bytes(config.files.max_file_bytes),
+        );
+        let consumer = WriteConsumer::new(settings.clone(), Arc::clone(&runtime), writes);
         let relay = OutboxRelay::new(database.clone(), settings);
         (
             tokio::spawn(relay.run(relay_stop.clone())),

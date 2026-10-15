@@ -2,12 +2,15 @@
 //!
 //! Edge creates `ratatoskr_notes_write_requests` on the command stream; notes never creates it.
 //! The consumer looks the durable up by its name and verifies its filter and its ack wait. Any
-//! other value, or no durable at all, keeps the service not ready.
+//! other value, or no durable at all, keeps the service not ready. The consumer hands each command
+//! of the durable to the write path and acknowledges it after the write path took it.
 
 #![allow(
     clippy::expect_used,
     reason = "test assertions read the answers of the broker that they set up"
 )]
+
+mod support;
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -18,10 +21,19 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use metrics_exporter_prometheus::PrometheusBuilder;
 use ratatoskr_notes::admin::{RuntimeState, admin_router};
+use ratatoskr_notes::blobs::BlobStore;
+use ratatoskr_notes::files::FileRecorder;
 use ratatoskr_notes::outbox::BusSettings;
-use ratatoskr_notes::writes::{COMMAND_STREAM, WRITE_DURABLE, WRITE_FILTER, WriteConsumer};
+use ratatoskr_notes::writes::Outcome;
+use ratatoskr_notes::writes::{
+    COMMAND_STREAM, Handled, WRITE_DURABLE, WRITE_FILTER, WriteConsumer, Writes,
+};
 use ratatoskr_notes_persistence::test_support::TestDatabase;
+use tokio_util::sync::CancellationToken;
 use tower::ServiceExt as _;
+
+use crate::support::channel::sha256;
+use crate::support::writes::{Writer, command, update};
 
 /// Where the test reaches a NATS server with `JetStream`. `NOTES_TEST_NATS_URL` overrides it; CI
 /// starts a server there.
@@ -58,6 +70,26 @@ async fn provision(stream: &stream::Stream, config: Option<pull::Config>) {
     }
 }
 
+/// The tests of this file change the one durable of the broker, one at a time.
+static BUS: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+/// The settings of the scratch broker.
+fn settings() -> BusSettings {
+    BusSettings {
+        url: nats_url(),
+        nkey_seed_path: None,
+    }
+}
+
+/// The write path of `fixture`, with a blob store that no test reads.
+fn writes_of(fixture: &TestDatabase) -> Writes {
+    let root = std::env::temp_dir().join(format!("notes-bus-{}", uuid::Uuid::now_v7().simple()));
+    Writes::new(FileRecorder::new(
+        fixture.database.clone(),
+        BlobStore::new(root),
+    ))
+}
+
 /// The status of `/health/ready` of `runtime`.
 async fn readiness(runtime: &Arc<RuntimeState>) -> StatusCode {
     let metrics = PrometheusBuilder::new().build_recorder().handle();
@@ -89,13 +121,8 @@ async fn verifies_write_request_durable() {
         .expect("the command stream exists");
     let runtime = Arc::new(RuntimeState::new(fixture.database.clone()));
     runtime.mark_started();
-    let consumer = WriteConsumer::new(
-        BusSettings {
-            url: nats_url(),
-            nkey_seed_path: None,
-        },
-        Arc::clone(&runtime),
-    );
+    let _bus = BUS.lock().await;
+    let consumer = WriteConsumer::new(settings(), Arc::clone(&runtime), writes_of(&fixture));
     let standard = Duration::from_secs(30);
 
     provision(&stream, None).await;
@@ -144,4 +171,90 @@ async fn verifies_write_request_durable() {
         .cleanup()
         .await
         .expect("the test database is dropped");
+}
+
+#[tokio::test]
+async fn delivers_each_command_to_the_write_path() {
+    let writer = Writer::new().await;
+    let base = b"# Plan\n\nIn the vault.\n";
+    let mine = b"# Plan\n\nSent through the bus.\n";
+    let connection = writer.vault(&[("Plan.md", base)]).await;
+    let blob = writer.stage(connection, mine).await;
+    let write = command(connection, &update("Plan.md", &sha256(base), &blob));
+    let client = async_nats::connect(nats_url())
+        .await
+        .expect("the test NATS server can be reached");
+    let context = jetstream::new(client);
+    let stream = context
+        .get_or_create_stream(stream::Config {
+            name: COMMAND_STREAM.to_owned(),
+            subjects: vec!["cmd.>".to_owned()],
+            ..Default::default()
+        })
+        .await
+        .expect("the command stream exists");
+    let _bus = BUS.lock().await;
+    stream.purge().await.expect("the command stream is emptied");
+    provision(
+        &stream,
+        Some(durable(WRITE_FILTER, Duration::from_secs(30))),
+    )
+    .await;
+    context
+        .publish(
+            WRITE_FILTER,
+            serde_json::to_vec(&write.envelope)
+                .expect("the command is JSON")
+                .into(),
+        )
+        .await
+        .expect("the command is published")
+        .await
+        .expect("the command is stored");
+    let runtime = Arc::new(RuntimeState::new(writer.channel.fixture.database.clone()));
+    let stop = CancellationToken::new();
+    let consumer = WriteConsumer::new(settings(), runtime, writer.writes.clone());
+    let running = tokio::spawn(consumer.run(stop.clone()));
+
+    let mut outcome = None;
+    for _ in 0..100 {
+        outcome = writer.outcome(&write).await;
+        if outcome.is_some() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    let mut info = stream
+        .get_consumer::<pull::Config>(WRITE_DURABLE)
+        .await
+        .expect("the durable exists");
+    let mut acknowledged = false;
+    for _ in 0..50 {
+        let state = info.info().await.expect("the durable can be read");
+        if state.num_ack_pending == 0 && state.num_pending == 0 {
+            acknowledged = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    stop.cancel();
+    let _ = running.await;
+    let delivered = writer.deliveries(connection).await;
+
+    assert_eq!(outcome, Some(Outcome::Pending), "the command is queued");
+    assert_eq!(
+        delivered.iter().map(|d| d.operation_id).collect::<Vec<_>>(),
+        vec![write.operation_id]
+    );
+    assert!(
+        acknowledged,
+        "the message is acknowledged after the write is queued"
+    );
+    assert!(matches!(
+        writer.writes.handle(&write.envelope).await,
+        Ok(Handled::Repeated { .. })
+    ));
+
+    provision(&stream, None).await;
+    writer.cleanup().await;
 }

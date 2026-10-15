@@ -16,6 +16,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::admin::RuntimeState;
 use crate::outbox::{self, BusSettings};
+use crate::writes::Writes;
 
 /// The command stream that Edge owns.
 pub const COMMAND_STREAM: &str = "ratatoskr_commands";
@@ -72,15 +73,20 @@ pub(crate) async fn write_durable(
 pub struct WriteConsumer {
     settings: BusSettings,
     runtime: Arc<RuntimeState>,
+    writes: Writes,
 }
 
 impl WriteConsumer {
-    /// A consumer of the server of `settings`. From now on readiness of `runtime` needs the
-    /// durable.
+    /// A consumer of the server of `settings` that hands each command to `writes`. From now on
+    /// readiness of `runtime` needs the durable.
     #[must_use]
-    pub fn new(settings: BusSettings, runtime: Arc<RuntimeState>) -> Self {
+    pub fn new(settings: BusSettings, runtime: Arc<RuntimeState>, writes: Writes) -> Self {
         runtime.require_write_durable();
-        Self { settings, runtime }
+        Self {
+            settings,
+            runtime,
+            writes,
+        }
     }
 
     /// Look the durable up and verify it, and record the result for readiness.
