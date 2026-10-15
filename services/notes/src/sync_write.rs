@@ -139,10 +139,17 @@ impl SyncWriter {
             if matches!(step, Step::Ready) {
                 // The write lands now: from here, the next change of its path that the watcher
                 // reports is its acknowledgement (design D6).
-                self.writes
+                // A write that ended meanwhile, for example because write mode was turned off,
+                // does not land.
+                step = if self
+                    .writes
                     .set_landed(connection_id, delivery.write_id, true)
-                    .await?;
-                step = self.apply(&tree, &delivery, true).await;
+                    .await?
+                {
+                    self.apply(&tree, &delivery, true).await
+                } else {
+                    Step::Retry
+                };
                 if !matches!(step, Step::Applied | Step::Acknowledge(_)) {
                     self.writes
                         .set_landed(connection_id, delivery.write_id, false)

@@ -4,8 +4,9 @@
 //! Every connection starts with write mode off. Edge mints the operation
 //! `notes.connection.write_mode` and forwards the switch; notes is its only reporter (lane
 //! `ratatoskr-notes`). Turning write mode off fails every write of the connection that waits in a
-//! queue and was not delivered, with `notes.write.disabled`. A delivered write finishes, because
-//! the vault may already hold it.
+//! queue and was not delivered, with `notes.write.disabled`; on the `sync` channel also a delivering
+//! write that did not land in the working tree. A delivered write finishes, because the vault may
+//! already hold it.
 
 use uuid::Uuid;
 
@@ -68,6 +69,13 @@ impl Writes {
         if !on {
             for write in locked.transaction.queued_writes().await? {
                 locked.fail(&write, DISABLED).await?;
+            }
+            // On the `sync` channel a write is delivered to the vault only when it lands in the
+            // working tree; one that did not land yet fails too.
+            if connection.channel == "sync" {
+                for write in locked.transaction.unlanded_writes().await? {
+                    locked.fail(&write, DISABLED).await?;
+                }
             }
         }
         if report {

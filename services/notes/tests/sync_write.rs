@@ -401,8 +401,10 @@ async fn write_mode_off_fails_a_sync_write_that_did_not_land() {
     );
     assert_eq!(
         writer.outcome(&landed).await,
-        Some(Outcome::Pending),
-        "a write that landed finishes with its echo"
+        Some(Outcome::Succeeded {
+            revision: Some(sha256(mine)),
+        }),
+        "a write that landed finishes: the next pass finds it in the tree"
     );
 
     writer.cleanup().await;

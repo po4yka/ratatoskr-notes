@@ -529,6 +529,24 @@ impl FileTransaction {
         Ok(())
     }
 
+    /// The delivering writes of this connection that did not land in its working tree, in the order
+    /// of acceptance: on the `sync` channel these are not delivered to the vault yet.
+    ///
+    /// # Errors
+    ///
+    /// [`PersistenceError::Query`] when the statement fails.
+    pub async fn unlanded_writes(&mut self) -> Result<Vec<WriteRow>, PersistenceError> {
+        sqlx::query_as(&format!(
+            "select {WRITE_COLUMNS} from notes.writes
+             where connection_id = $1 and state = 'delivering' and not landed
+             order by position"
+        ))
+        .bind(self.connection_id)
+        .fetch_all(&mut *self.transaction)
+        .await
+        .map_err(query_error)
+    }
+
     /// The writes of this connection that wait in a queue and were not delivered, in the order of
     /// acceptance.
     ///
@@ -611,7 +629,8 @@ impl Database {
         Ok(rows)
     }
 
-    /// Mark the delivering write `write_id` of `connection_id` landed or not.
+    /// Mark the delivering write `write_id` of `connection_id` landed or not. Returns `false` when
+    /// the write is no longer delivering, for example because write mode was turned off.
     ///
     /// # Errors
     ///
@@ -621,8 +640,8 @@ impl Database {
         connection_id: Uuid,
         write_id: Uuid,
         landed: bool,
-    ) -> Result<(), PersistenceError> {
-        sqlx::query(
+    ) -> Result<bool, PersistenceError> {
+        let marked = sqlx::query(
             "update notes.writes set landed = $3, updated_at = now()
              where connection_id = $1 and write_id = $2 and state = 'delivering'",
         )
@@ -632,7 +651,7 @@ impl Database {
         .execute(self.pool())
         .await
         .map_err(query_error)?;
-        Ok(())
+        Ok(marked.rows_affected() == 1)
     }
 
     /// The `sync` connections that are `connecting` or `active` and have a delivering write.

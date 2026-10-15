@@ -540,7 +540,8 @@ impl Writes {
     }
 
     /// Mark the delivering write `write_id` of `connection_id` as landed in the working tree of its
-    /// `sync` connection, or no longer landed when its write did not happen.
+    /// `sync` connection, or no longer landed when its write did not happen. Returns `false` when the
+    /// write is no longer delivering: it must not land then.
     ///
     /// # Errors
     ///
@@ -550,7 +551,7 @@ impl Writes {
         connection_id: Uuid,
         write_id: Uuid,
         landed: bool,
-    ) -> Result<(), WriteError> {
+    ) -> Result<bool, WriteError> {
         Ok(self
             .recorder
             .database()
