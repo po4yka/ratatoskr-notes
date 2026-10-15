@@ -42,11 +42,13 @@ Type=exec
 # The owner of the working tree and of the client state, which the login unit created.
 User=ratatoskr-notes-sync
 Group=ratatoskr-notes-sync
-# Owner decision B of 2026-10-14. The trees root /mnt/nvme/ratatoskr/notes/trees has the group
-# ratatoskr-notes-trees and the setgid bit. So each file that ob writes in the tree gets that group.
-# With this umask, a file gets mode 0640 and a directory mode 2750. ratatoskr-notes is the only
-# member of the group, and it reads the tree. The client state keeps mode 0700 from the login unit.
-UMask=0027
+# Owner decision B of 2026-10-14, as changed for write-back (OBS-024): the trees root
+# /mnt/nvme/ratatoskr/notes/trees has the group ratatoskr-notes-trees, the setgid bit and mode 2770,
+# and both ratatoskr-notes and ratatoskr-notes-sync are members of the group. So each file that ob
+# writes in the tree gets that group, and with this umask mode 0660 (a directory 2770): the service
+# reads and writes the tree, and ob replaces what the service wrote. The client state keeps mode
+# 0700 from the login unit.
+UMask=0007
 # ob keeps its state under $XDG_CONFIG_HOME/obsidian-headless on Linux (spike 3.2).
 Environment=HOME=/mnt/nvme/ratatoskr/notes/clients/%i
 Environment=XDG_CONFIG_HOME=/mnt/nvme/ratatoskr/notes/clients/%i

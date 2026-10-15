@@ -28,12 +28,13 @@ Type=oneshot
 # and the cleanup unit use.
 User=ratatoskr-notes-sync
 Group=ratatoskr-notes-sync
-# Owner decision B of 2026-10-14. ob sync-setup creates the tree
+# Owner decision B of 2026-10-14, as changed for write-back (OBS-024). ob sync-setup creates the tree
 # /mnt/nvme/ratatoskr/notes/trees/<id>. The tree gets the group ratatoskr-notes-trees and the setgid
-# bit from the trees root. With this umask, its mode is 2750.
+# bit from the trees root. With this umask, its mode is 2770, so that the service, a member of the
+# group, can write into it.
 # Step 1 sets the umask 0077 for ob login. ob login creates the client state
 # /mnt/nvme/ratatoskr/notes/clients/<id> with mode 0700.
-UMask=0027
+UMask=0007
 # ob keeps its state under $XDG_CONFIG_HOME/obsidian-headless on Linux (spike 3.2).
 Environment=HOME=/mnt/nvme/ratatoskr/notes/clients/%i
 Environment=XDG_CONFIG_HOME=/mnt/nvme/ratatoskr/notes/clients/%i

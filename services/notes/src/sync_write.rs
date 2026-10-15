@@ -356,6 +356,14 @@ fn split(relative: &str) -> Option<(&Path, &OsStr)> {
     plain.then(|| (path.parent().unwrap_or_else(|| Path::new("")), name))
 }
 
+/// The mode of a folder that the writer creates in a tree: the group of the trees, of which the
+/// service and the user of `ob` are members, reads and writes it, and the setgid bit keeps that
+/// group on what is created in it.
+const GROUP_FOLDER: rustix::fs::RawMode = 0o2770;
+
+/// The mode of a file that the writer writes in a tree, for the same group.
+const GROUP_FILE: rustix::fs::RawMode = 0o660;
+
 /// The flags of each folder that the writer opens.
 const FOLDER: OFlags = OFlags::RDONLY
     .union(OFlags::DIRECTORY)
@@ -377,11 +385,15 @@ fn open_folder(
         current = match rustix::fs::openat(&current, name, FOLDER, Mode::empty()) {
             Ok(next) => next,
             Err(rustix::io::Errno::NOENT) if create => {
-                match rustix::fs::mkdirat(&current, name, Mode::from_raw_mode(0o2770)) {
+                match rustix::fs::mkdirat(&current, name, Mode::from_raw_mode(GROUP_FOLDER)) {
                     Ok(()) | Err(rustix::io::Errno::EXIST) => {}
                     Err(error) => return Err(error.into()),
                 }
-                rustix::fs::openat(&current, name, FOLDER, Mode::empty())?
+                let created = rustix::fs::openat(&current, name, FOLDER, Mode::empty())?;
+                // The umask of the service (0027, for the blob store) would leave the group
+                // without write; ob, another member of the group, writes into the folder too.
+                rustix::fs::fchmod(&created, Mode::from_raw_mode(GROUP_FOLDER))?;
+                created
             }
             Err(rustix::io::Errno::NOENT) => return Ok(None),
             Err(error) => return Err(error.into()),
@@ -468,10 +480,12 @@ fn write_at(folder: BorrowedFd<'_>, name: &OsStr, bytes: &[u8]) -> std::io::Resu
         folder,
         part.as_str(),
         OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC,
-        Mode::from_raw_mode(0o660),
+        Mode::from_raw_mode(GROUP_FILE),
     )
     .map_err(std::io::Error::from)
     .and_then(|opened| {
+        // The umask of the service would leave the group without write.
+        rustix::fs::fchmod(&opened, Mode::from_raw_mode(GROUP_FILE))?;
         let mut file = File::from(opened);
         file.write_all(bytes)?;
         file.sync_all()

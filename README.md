@@ -243,9 +243,8 @@ value is written as compact JSON, which is valid YAML (`status: "done"`), a miss
 the end of the frontmatter, a file without frontmatter gets one, and every other byte stays. Notes
 stores the new bytes, writes them atomically and acknowledges the write with their hash at once.
 A file that is not UTF-8, or whose frontmatter has no end, fails with `notes.write.unsupported`.
-The service must be able to write the working tree on the host, which the
-read-only group access of owner decision B does not give: the deploy role must change that before
-write mode is turned on for a `sync` connection.
+The service writes the working tree through the group `ratatoskr-notes-trees` (see Template
+units).
 
 **Device queue.** The delivered writes of a `plugin` or `cli` connection, in the order of
 delivery, are the queue that its device reads through Edge, with the device claims. Only the
@@ -350,10 +349,12 @@ The service starts and stops the units through the systemd D-Bus API as the user
 `ratatoskr-notes-sync`, which owns the working tree `/mnt/nvme/ratatoskr/notes/trees/<id>` and
 the client state `/mnt/nvme/ratatoskr/notes/clients/<id>` (owner decision B of 2026-10-14).
 
-- The trees root has the group `ratatoskr-notes-trees`, whose only member is `ratatoskr-notes`, and
-  mode 2750. The sync and login units run with `UMask=0027`, so each file of a tree gets that group
-  from the setgid bit and mode 0640 (2750 for a directory). The service reads the tree through that
-  group, and no other user can.
+- The trees root has the group `ratatoskr-notes-trees`, whose members are `ratatoskr-notes` and
+  `ratatoskr-notes-sync`, the setgid bit and mode 2770 (changed from 2750 for write-back, OBS-024).
+  The sync and login units run with `UMask=0007`, so each file of a tree gets that group from the
+  setgid bit and mode 0660 (2770 for a directory). The service creates its files with mode 0660 and
+  its folders with mode 2770 whatever its own umask. The service reads and writes the tree through
+  that group, `ob` replaces what the service wrote, and no other user can enter the tree.
 - The client state holds the Sync token and the end-to-end key in plain text. The clients root is
   mode 0700, and the login unit creates the client state of a connection with mode 0700.
 

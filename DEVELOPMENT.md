@@ -174,9 +174,9 @@ again from `schema.sql` (AGENTS.md, Development status: no migrations).
 | `deploy/systemd/ratatoskr-notes-cleanup@.service` | The oneshot unit that removes the Sync client, the working tree and the client state of a removed `sync` connection, and of a connection whose login failed. |
 
 The host needs, before the first `sync` connect: the user `ratatoskr-notes-sync`; the group
-`ratatoskr-notes-trees` with `ratatoskr-notes` as its only member; the trees root
-`/mnt/nvme/ratatoskr/notes/trees` with the owner `ratatoskr-notes-sync`, the group
-`ratatoskr-notes-trees` and mode 2750; the clients root `/mnt/nvme/ratatoskr/notes/clients` with
+`ratatoskr-notes-trees` with `ratatoskr-notes` and `ratatoskr-notes-sync` as its members (write-back,
+OBS-024); the trees root `/mnt/nvme/ratatoskr/notes/trees` with the owner `ratatoskr-notes-sync`,
+the group `ratatoskr-notes-trees` and mode 2770; the clients root `/mnt/nvme/ratatoskr/notes/clients` with
 the owner `ratatoskr-notes-sync` and mode 0700; `/run/ratatoskr-notes`
 owned by `ratatoskr-notes` (`RuntimeDirectory=` of the service unit); the key file; and `ob` at
 `/usr/bin/ob`. The service unit also needs `UMask=0027` for the blob root. The service reads the
