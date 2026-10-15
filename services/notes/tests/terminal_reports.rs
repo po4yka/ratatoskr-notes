@@ -281,3 +281,76 @@ async fn login_expiry_before_its_record_reports_once() {
         .await
         .expect("the test database is dropped");
 }
+
+/// Rename the column `from` of `notes.connections` to `to`.
+async fn rename(fixture: &TestDatabase, from: &str, to: &str) {
+    sqlx::query(&format!(
+        "alter table notes.connections rename column {from} to {to}"
+    ))
+    .execute(fixture.pool())
+    .await
+    .expect("the column is renamed");
+}
+
+/// The log line of a connect operation that the expiry of a login cannot read.
+const UNREADABLE_OPERATION: &str = "the connect operation of an expired login could not be read";
+
+#[tokio::test]
+async fn unreadable_operation_expires_no_login_without_its_report() {
+    let logs = crate::support::logs::CapturedLogs::install();
+    let fixture = TestDatabase::create().await.expect("a test database");
+    let systemd = FakeSystemd::new();
+    let connection = Uuid::now_v7();
+    sqlx::query(
+        "insert into notes.connections
+             (connection_id, owner_id, channel, vault_key, vault_display_name, state,
+              logged_in_at, operation_id, created_at, updated_at)
+         values ($1, $2, 'sync', 'remote-vault-0e06', 'Personal', 'connecting', now(), $3,
+                 now(), now())",
+    )
+    .bind(connection)
+    .bind(OWNER)
+    .bind(Uuid::now_v7())
+    .execute(fixture.pool())
+    .await
+    .expect("a connecting connection is inserted");
+    let unit = format!("ratatoskr-notes-sync@{connection}.service");
+    // The connect operation of the connection cannot be read for a while.
+    rename(&fixture, "operation_id", "operation_id_hidden").await;
+    let state = ApiState::new(fixture.database.clone(), systemd.clone())
+        .with_key_file(systemd.key_file())
+        .with_credentials_dir(systemd.credentials_root())
+        .with_trees_root(systemd.trees_root());
+    state.resume_sync_connections().await;
+
+    systemd
+        .journals()
+        .log_auth_failures(&unit, Duration::from_mins(10));
+    let deadline = tokio::time::Instant::now() + HOOK_DEADLINE;
+    while state_of(&fixture, connection).await == "connecting"
+        && !logs.text().contains(UNREADABLE_OPERATION)
+        && tokio::time::Instant::now() < deadline
+    {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let while_unreadable = state_of(&fixture, connection).await;
+    // The operation can be read again, and the failures go on.
+    rename(&fixture, "operation_id_hidden", "operation_id").await;
+    systemd
+        .journals()
+        .log_auth_failures(&unit, Duration::from_mins(1));
+    wait_for_state(fixture.pool(), connection, "login_expired").await;
+
+    assert_eq!(
+        while_unreadable, "connecting",
+        "a read error of the operation expires nothing"
+    );
+    assert_eq!(state_of(&fixture, connection).await, "login_expired");
+    assert_one_failure(&fixture, connection, "notes.sync.login_expired").await;
+
+    state.shut_down().await;
+    fixture
+        .cleanup()
+        .await
+        .expect("the test database is dropped");
+}
