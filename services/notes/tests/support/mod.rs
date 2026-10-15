@@ -12,6 +12,7 @@ pub(crate) mod channel;
 pub(crate) mod cmdline;
 pub(crate) mod journal;
 pub(crate) mod logs;
+pub(crate) mod sync_channel;
 pub(crate) mod systemd;
 pub(crate) mod writes;
 
