@@ -102,3 +102,60 @@ async fn index_route_returns_resolved_links_embeds_frontmatter_and_revision() {
 
     writer.cleanup().await;
 }
+
+/// The status and the body of `GET path` on the domain router, from the peer `peer`.
+async fn get_from(writer: &Writer, path: &str, peer: &str) -> (StatusCode, Vec<u8>) {
+    use http_body_util::BodyExt as _;
+    use tower::ServiceExt as _;
+    let mut request = axum::http::Request::builder()
+        .method(Method::GET)
+        .uri(path)
+        .body(axum::body::Body::empty())
+        .expect("a request");
+    let address: std::net::SocketAddr = peer.parse().expect("a peer address");
+    request
+        .extensions_mut()
+        .insert(axum::extract::ConnectInfo(address));
+    let response = writer
+        .channel
+        .router
+        .clone()
+        .oneshot(request)
+        .await
+        .expect("the router answers");
+    let status = response.status();
+    let body = response
+        .into_body()
+        .collect()
+        .await
+        .expect("a body")
+        .to_bytes();
+    (status, body.to_vec())
+}
+
+#[tokio::test]
+async fn internal_route_refuses_a_non_loopback_peer() {
+    let writer = Writer::new().await;
+    let connection = writer.vault(&[("Home.md", HOME)]).await;
+    let route = format!("/internal/connections/{connection}/files");
+
+    let (status, _) = get_from(&writer, &route, "127.0.0.1:50000").await;
+    assert_eq!(status, StatusCode::OK, "a loopback peer reads the index");
+    let (status, _) = get_from(&writer, &route, "[::1]:50000").await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "an IPv6 loopback peer reads the index"
+    );
+
+    let unknown = get_from(&writer, "/internal/unknown", "192.0.2.10:50000").await;
+    for peer in ["192.0.2.10:50000", "[2001:db8::1]:50000"] {
+        assert_eq!(
+            get_from(&writer, &route, peer).await,
+            unknown,
+            "the route answers {peer} exactly as an unknown route"
+        );
+    }
+
+    writer.cleanup().await;
+}
