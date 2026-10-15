@@ -236,6 +236,9 @@ delivered. Each write of a delivered group becomes current when the channel ackn
 operation ends with the last of them: `succeeded` with one result per file, or, when the channel
 applied only a part, `failed` with `notes.write.partially_applied` and one conflict that names every
 file that was not applied.
+On `sync`, the writer renames the file and writes the renamed note's own new bytes at the target,
+and writes each rewrite only after the rename landed; a refused rename fails its rewrites that did
+not land, so no link names a path whose file did not move.
 The golden fixtures recorded with the real Obsidian app are the oracle (see DEVELOPMENT.md).
 
 **Acknowledgement and echo.** On the `sync` channel, a change of the working tree with the path and

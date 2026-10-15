@@ -12,7 +12,9 @@
 //!   landed and applies it. New
 //!   bytes go to a temporary file in the same folder, which is flushed to disk and then renamed over
 //!   the file, so a reader sees the old or the new bytes and never a mix. A `delete` removes the
-//!   file, and a `rename` or a `move` renames it. The Headless client then sends the change to
+//!   file, and a `rename` or a `move` renames it (and writes the new bytes of its own link
+//!   rewrites at the target). The rewrites of the other notes of its write group wait until the
+//!   rename landed. The Headless client then sends the change to
 //!   Obsidian Sync, and the watcher reports it back as the acknowledgement;
 //! - otherwise the file changed after the queue check: nothing is written, and the write fails
 //!   with a conflict whose current side is the bytes of the tree.
@@ -132,7 +134,20 @@ impl SyncWriter {
     pub async fn deliver(&self, connection_id: Uuid) -> Result<usize, WriteError> {
         let tree = self.trees_root.join(connection_id.to_string());
         let mut done = 0;
-        for delivery in self.writes.deliveries(connection_id).await? {
+        let deliveries = self.writes.deliveries(connection_id).await?;
+        // A link rewrite of a group waits until its rename landed, so that no link names the new
+        // path before the file is there.
+        let mut waiting: std::collections::HashSet<Uuid> = deliveries
+            .iter()
+            .filter(|delivery| delivery.group_id == Some(delivery.write_id) && !delivery.landed)
+            .map(|delivery| delivery.write_id)
+            .collect();
+        for delivery in deliveries {
+            if delivery.group_id.is_some_and(|group_id| {
+                group_id != delivery.write_id && waiting.contains(&group_id)
+            }) {
+                continue;
+            }
             let lock = self.lock(connection_id, &delivery.path);
             let _held = lock.lock().await;
             let mut step = self.apply(&tree, &delivery, false).await;
@@ -157,6 +172,9 @@ impl SyncWriter {
                 }
             }
             done += 1;
+            if matches!(step, Step::Applied | Step::Acknowledge(_)) {
+                waiting.remove(&delivery.write_id);
+            }
             match step {
                 Step::Applied | Step::Ready | Step::Retry => {}
                 Step::Acknowledge(revision) => {
@@ -291,13 +309,14 @@ fn apply_blocking(
                 Some(target_parent) => hash_at(target_parent.as_fd(), target_name)?,
                 None => (None, None),
             };
-            if current.is_none() && moved.is_some() && moved == base {
+            // A rename whose own links change writes their new bytes at the target too.
+            let expected = delivery.content_hash.clone().or_else(|| base.clone());
+            if current.is_none() && moved.is_some() && moved == expected {
                 return Ok(Step::Acknowledge(moved));
             }
-            let Some(parent) = parent.filter(|_| current.is_some() && current == base) else {
-                return mismatch(blobs, opened);
-            };
-            if moved.is_some() {
+            // Renamed already, and the new bytes are not written yet.
+            let renamed = current.is_none() && moved.is_some() && moved == base;
+            if !renamed && (current.is_none() || current != base || moved.is_some()) {
                 return mismatch(blobs, opened);
             }
             if !land {
@@ -307,7 +326,14 @@ fn apply_blocking(
                 Some(target_parent) => target_parent,
                 None => open_folder(root, target_folder, true)?.ok_or_else(missing)?,
             };
-            rustix::fs::renameat(parent.as_fd(), name, target_parent.as_fd(), target_name)?;
+            if !renamed {
+                let parent = parent.ok_or_else(missing)?;
+                rustix::fs::renameat(parent.as_fd(), name, target_parent.as_fd(), target_name)?;
+            }
+            if let Some(content) = delivery.content_hash.as_deref() {
+                let source = blobs.path_of(content).ok_or_else(missing)?;
+                write_at(target_parent.as_fd(), target_name, &std::fs::read(source)?)?;
+            }
             Ok(Step::Applied)
         }
         "set_property" => {
