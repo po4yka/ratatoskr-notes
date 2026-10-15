@@ -69,7 +69,7 @@ pub fn rewrite_links(
     let mut rewritten = BTreeMap::new();
     for (source, text) in notes {
         let target_source = moved(source);
-        let mut changes: Vec<(Range<usize>, String)> = Vec::new();
+        let mut changes: Vec<Edit> = Vec::new();
         for (range, link) in links(text) {
             let linkpath = link_path(&link.target);
             let named = before.linkpath_dest(linkpath, source);
@@ -84,7 +84,8 @@ pub fn rewrite_links(
             let new_link = after.link_text(&moved(first), &target_source, wiki, format)
                 + subpath(&link.target);
             if new_link != link.target {
-                changes.push((range, written_again(&link, &new_link)));
+                let (new, kept) = written_again(&link, &new_link);
+                changes.push(Edit { range, new, kept });
             }
         }
         if !changes.is_empty() {
@@ -169,44 +170,78 @@ fn subpath(target: &str) -> &str {
         .unwrap_or("")
 }
 
-/// `text` with each range of `changes` replaced by its new text. A change nested in another, a
-/// wikilink in the text of a Markdown link, is made inside the new text of the outer one, at the
-/// offset where it stands, when its old text still stands there. A change that only partly overlaps an earlier one, or whose range is not
-/// on character boundaries, is left out. So the result is the text with whole links replaced and
-/// is always valid. (Obsidian 1.14.4 writes both nested edits into the same bytes and corrupts the
-/// note: `[x [[A]]](Bé.md))`.)
-fn apply(text: &str, mut changes: Vec<(Range<usize>, String)>) -> String {
-    // The outer of two nested changes first.
-    changes.sort_by(|(a, _), (b, _)| a.start.cmp(&b.start).then(b.end.cmp(&a.end)));
-    // Each outer change, its new text, and how many bytes the nested changes made inside it added
-    // before the next one: they come in the order of the text.
-    let mut outer: Vec<(Range<usize>, String, isize)> = Vec::new();
-    for (range, new) in changes {
-        let Some(old) = text.get(range.clone()) else {
+/// One link written again: its range in the note, its new text, and the part of its text that it
+/// keeps byte for byte.
+#[derive(Debug)]
+struct Edit {
+    range: Range<usize>,
+    new: String,
+    kept: Option<Kept>,
+}
+
+/// The part of a link that its new text keeps byte for byte: the alias of a wikilink or the text
+/// of a Markdown link. `old` and `new` are its offsets from the start of the link, before and
+/// after, and `len` its length.
+#[derive(Debug, Clone, Copy)]
+struct Kept {
+    old: usize,
+    new: usize,
+    len: usize,
+}
+
+/// `text` with each edit of `changes` made. An edit nested in another, a link in the alias of a
+/// wikilink or in the text of a Markdown link, is made inside the new text of the outer link: its
+/// offset in the kept part of the outer link maps to the same offset in the new text, after the
+/// nested edits before it, and it is made only when its old text stands there. Any other nested
+/// edit, and an edit that only partly overlaps an earlier one, is left out, so the result is the
+/// text with whole links replaced and is always valid. (Obsidian 1.14.4 writes both nested edits
+/// into the same bytes and corrupts the note: `[x [[A]]](Bé.md))`.)
+fn apply(text: &str, mut changes: Vec<Edit>) -> String {
+    // The outer of two nested edits first.
+    changes.sort_by(|a, b| {
+        a.range
+            .start
+            .cmp(&b.range.start)
+            .then(b.range.end.cmp(&a.range.end))
+    });
+    // Each outer edit, and how many bytes the nested edits made inside it added so far: they
+    // come in the order of the text.
+    let mut outer: Vec<(Edit, isize)> = Vec::new();
+    for edit in changes {
+        let Some(old) = text.get(edit.range.clone()) else {
             continue;
         };
         match outer.last_mut() {
-            Some((last, last_new, shift)) if range.start < last.end => {
-                // The text of the outer link keeps its bytes, so the nested link is at the same
-                // offset in its new text, after the nested changes before it; when it is not
-                // there, the edit is left out.
-                let at = (range.start - last.start).checked_add_signed(*shift);
-                let fits = range.end <= last.end
-                    && at.is_some_and(|at| last_new.get(at..at + old.len()) == Some(old));
-                if let (true, Some(at)) = (fits, at) {
-                    last_new.replace_range(at..at + old.len(), &new);
-                    *shift += isize::try_from(new.len()).unwrap_or(0)
+            Some((last, shift)) if edit.range.start < last.range.end => {
+                if edit.range.end <= last.range.end
+                    && let Some(at) = nested_offset(last, &edit.range, *shift)
+                    && last.new.get(at..at + old.len()) == Some(old)
+                {
+                    last.new.replace_range(at..at + old.len(), &edit.new);
+                    *shift += isize::try_from(edit.new.len()).unwrap_or(0)
                         - isize::try_from(old.len()).unwrap_or(0);
                 }
             }
-            _ => outer.push((range, new, 0)),
+            _ => outer.push((edit, 0)),
         }
     }
     let mut result = text.to_owned();
-    for (range, new, _) in outer.into_iter().rev() {
-        result.replace_range(range, &new);
+    for (edit, _) in outer.into_iter().rev() {
+        result.replace_range(edit.range, &edit.new);
     }
     result
+}
+
+/// Where the nested link at `range` stands in the new text of `outer`, after nested edits that
+/// added `shift` bytes, or `None` when it is not in the kept part of the outer link.
+fn nested_offset(outer: &Edit, range: &Range<usize>, shift: isize) -> Option<usize> {
+    let kept = outer.kept?;
+    let start = range.start.checked_sub(outer.range.start)?;
+    let end = range.end.checked_sub(outer.range.start)?;
+    if start < kept.old || end > kept.old + kept.len {
+        return None;
+    }
+    (kept.new + (start - kept.old)).checked_add_signed(shift)
 }
 
 /// The files of a vault and the lookup of each name, as Obsidian's metadata cache holds them.
@@ -359,14 +394,15 @@ fn relative_path(path: &str, source: &str) -> String {
 }
 
 /// The text of the link `link` written again with the target `new_link`: Obsidian's link updater.
-fn written_again(link: &NoteLink, new_link: &str) -> String {
+/// The new text of `link` and the part of it that the new text keeps byte for byte.
+fn written_again(link: &NoteLink, new_link: &str) -> (String, Option<Kept>) {
     match link.form {
         LinkForm::Wiki => wikilink_again(&link.original, new_link),
         LinkForm::Markdown => markdown_again(link, new_link),
     }
 }
 
-fn wikilink_again(original: &str, new_link: &str) -> String {
+fn wikilink_again(original: &str, new_link: &str) -> (String, Option<Kept>) {
     let prefix = if original.starts_with('!') {
         "![["
     } else {
@@ -377,21 +413,26 @@ fn wikilink_again(original: &str, new_link: &str) -> String {
         .and_then(|rest| rest.strip_suffix("]]"))
         .unwrap_or_default();
     let Some((target, alias)) = inner.split_once('|').filter(|(_, alias)| !alias.is_empty()) else {
-        return format!("{prefix}{new_link}]]");
+        return (format!("{prefix}{new_link}]]"), None);
     };
     let pipe = if original.contains("\\|") { "\\|" } else { "|" };
-    let alias = if target.contains('/') && stem_of(target) == alias.trim() {
-        stem_of(link_path(new_link))
-    } else {
-        alias
+    if target.contains('/') && stem_of(target) == alias.trim() {
+        let alias = stem_of(link_path(new_link));
+        return (format!("{prefix}{new_link}{pipe}{alias}]]"), None);
+    }
+    // The alias stays: it follows the old target and one `|`, and the new target and the pipe.
+    let kept = Kept {
+        old: prefix.len() + target.len() + 1,
+        new: prefix.len() + new_link.len() + pipe.len(),
+        len: alias.len(),
     };
-    format!("{prefix}{new_link}{pipe}{alias}]]")
+    (format!("{prefix}{new_link}{pipe}{alias}]]"), Some(kept))
 }
 
-fn markdown_again(link: &NoteLink, new_link: &str) -> String {
+fn markdown_again(link: &NoteLink, new_link: &str) -> (String, Option<Kept>) {
     // `links` reads only a Markdown link whose parts match the pattern.
     let Some(parts) = markdown_parts(&link.original) else {
-        return link.original.clone();
+        return (link.original.clone(), None);
     };
     let destination = if parts.destination.starts_with('<') {
         format!("<{new_link}>")
@@ -401,17 +442,25 @@ fn markdown_again(link: &NoteLink, new_link: &str) -> String {
     let shown = parts.text.replace(['\u{a0}', '\u{202f}'], " ");
     let shown = shown.trim();
     let old = link_path(&link.target);
-    let text = if shown == display_name(old) {
-        display_name(link_path(new_link)).to_owned()
+    let (text, kept) = if shown == display_name(old) {
+        (display_name(link_path(new_link)).to_owned(), None)
     } else if shown.contains('/') && shown == without_md(old) {
-        without_md(link_path(new_link)).to_owned()
+        (without_md(link_path(new_link)).to_owned(), None)
     } else {
-        parts.text.to_owned()
+        // The text stays, right after `[` or `![`.
+        let at = parts.open.len();
+        let kept = Kept {
+            old: at,
+            new: at,
+            len: parts.text.len(),
+        };
+        (parts.text.to_owned(), Some(kept))
     };
-    format!(
+    let new = format!(
         "{}{text}{}{destination}{}{}",
         parts.open, parts.separator, parts.title, parts.close
-    )
+    );
+    (new, kept)
 }
 
 /// The parts of a Markdown link `[text](destination "title")`, as Obsidian's pattern reads them.

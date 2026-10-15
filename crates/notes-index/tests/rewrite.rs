@@ -114,8 +114,10 @@ const PIECES: [(&str, &str); 18] = [
         "\u{fc}ber \u{e9}t\u{e9} \u{1f600}",
         "\u{fc}ber \u{e9}t\u{e9} \u{1f600}",
     ),
-    ("\r\n", "\r\n"),
-    ("\n", "\n"),
+    // A line never starts with a piece: `<!--` at the start of a line opens an HTML block, in which
+    // the index reads no link at all.
+    ("\r\nText", "\r\nText"),
+    ("\nText", "\nText"),
     (" ", " "),
     ("plain text", "plain text"),
 ];
@@ -135,9 +137,9 @@ impl Lcg {
 
 #[test]
 fn every_link_of_a_random_note_is_rewritten_and_no_other_byte_changes() {
-    for seed in 1..=500_u64 {
+    for seed in 1..=2000_u64 {
         let mut random = Lcg(seed);
-        let (mut before, mut after) = (String::new(), String::new());
+        let (mut before, mut after) = ("Text ".to_owned(), "Text ".to_owned());
         for _ in 0..=random.below(12) {
             let (old, new) = PIECES[random.below(PIECES.len())];
             // A space between two pieces keeps each one a piece of its own.
