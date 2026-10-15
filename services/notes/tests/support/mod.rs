@@ -10,6 +10,7 @@
 pub(crate) mod channel;
 #[cfg(unix)]
 pub(crate) mod cmdline;
+pub(crate) mod device_queue;
 pub(crate) mod journal;
 pub(crate) mod logs;
 pub(crate) mod sync_channel;
