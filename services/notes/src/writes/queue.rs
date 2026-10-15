@@ -5,6 +5,10 @@
 //! channel acknowledged or refused the write before it. The base of a write is compared with the
 //! current revision when the write reaches the head, not when it is accepted, so that a chained
 //! edit, whose base is the revision that the write before it produces, passes.
+//!
+//! A delivered write is pending: its bytes are a blob that the write names, not a revision. Only
+//! the acknowledgement of the channel makes a revision current and publishes
+//! `notes.file.changed.v1`, so no consumer of note events sees bytes that the vault refused.
 
 use ratatoskr_notes_index::paths::path_key;
 use ratatoskr_notes_persistence::{FileTransaction, LockedConnection, WriteRow};
@@ -30,7 +34,6 @@ impl Locked<'_> {
                 return Ok(());
             }
             if self.base_is_current(&head).await? {
-                self.record(&head).await?;
                 self.transaction.deliver_write(head.write_id).await?;
                 return Ok(());
             }
@@ -69,60 +72,58 @@ impl Locked<'_> {
         Ok(!taken)
     }
 
-    /// Make the result of `write` the current state of its files.
-    async fn record(&mut self, write: &WriteRow) -> Result<(), RecordError> {
-        match (write.kind.as_str(), &write.content_hash, &write.base_hash) {
-            ("create" | "update", Some(digest), _) => {
-                let length = write.content_length.unwrap_or_default();
-                let note_index = self.recorder.note_index(&write.path, digest, length).await;
-                let revision = Revision {
-                    path: &write.path,
-                    digest,
-                    length,
-                    note_index: note_index.as_ref(),
-                };
-                self.recorder
-                    .apply_revision(
-                        self.transaction,
-                        self.connection,
-                        self.connection_id,
-                        &revision,
-                    )
-                    .await?;
-            }
-            ("delete", _, _) => {
-                self.recorder
-                    .apply_removal(
-                        self.transaction,
-                        self.connection,
-                        self.connection_id,
-                        &write.path,
-                    )
-                    .await?;
-            }
-            ("rename" | "move", _, Some(digest)) => {
-                let Some(target) = write.target_path.as_deref() else {
-                    return Ok(());
-                };
-                let length = self.recorder.blob_length(digest).await.unwrap_or_default();
-                let note_index = self.recorder.note_index(target, digest, length).await;
-                let revision = Revision {
-                    path: target,
-                    digest,
-                    length,
-                    note_index: note_index.as_ref(),
-                };
-                self.recorder
-                    .apply_rename(
-                        self.transaction,
-                        self.connection,
-                        self.connection_id,
-                        &write.path,
-                        &revision,
-                    )
-                    .await?;
-            }
-            _ => {}
+    /// Make the result of `write`, which the channel acknowledged with the file at the SHA-256
+    /// `acknowledged`, the current state of its files, and publish it. The bytes of the
+    /// acknowledged revision are in the blob root.
+    pub(super) async fn record(
+        &mut self,
+        write: &WriteRow,
+        acknowledged: Option<&str>,
+    ) -> Result<(), RecordError> {
+        if write.kind == "delete" {
+            self.recorder
+                .apply_removal(
+                    self.transaction,
+                    self.connection,
+                    self.connection_id,
+                    &write.path,
+                )
+                .await?;
+            return Ok(());
+        }
+        let Some(digest) = acknowledged else {
+            return Err(RecordError::ACKNOWLEDGED_BYTES);
+        };
+        let path = write.target_path.as_deref().unwrap_or(&write.path);
+        let Some(length) = self.recorder.blob_length(digest).await else {
+            return Err(RecordError::ACKNOWLEDGED_BYTES);
+        };
+        let note_index = self.recorder.note_index(path, digest, length).await;
+        let revision = Revision {
+            path,
+            digest,
+            length,
+            note_index: note_index.as_ref(),
+        };
+        if write.target_path.is_some() {
+            self.recorder
+                .apply_rename(
+                    self.transaction,
+                    self.connection,
+                    self.connection_id,
+                    &write.path,
+                    &revision,
+                )
+                .await?;
+        } else {
+            self.recorder
+                .apply_revision(
+                    self.transaction,
+                    self.connection,
+                    self.connection_id,
+                    &revision,
+                )
+                .await?;
         }
         Ok(())
     }

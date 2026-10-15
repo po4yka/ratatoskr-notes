@@ -198,7 +198,8 @@ impl Writes {
     }
 
     /// The channel acknowledged the delivered write `write_id` of `connection_id`; the file has
-    /// the SHA-256 `revision` now, or no file is at the path after a delete. The next write of
+    /// the SHA-256 `revision` now, or no file is at the path after a delete. Only now does the
+    /// revision become current and `notes.file.changed.v1` go to the outbox. The next write of
     /// the queue of the file is delivered. Returns whether a delivered write was acknowledged.
     ///
     /// # Errors
@@ -249,6 +250,12 @@ impl Writes {
         if write.state != "delivering" {
             return Ok(false);
         }
+        let mut locked = Locked {
+            recorder: &self.recorder,
+            transaction: &mut transaction,
+            connection: &connection,
+            connection_id,
+        };
         match end {
             End::Acknowledged(revision) => {
                 let revision = if write.kind == "delete" {
@@ -256,23 +263,17 @@ impl Writes {
                 } else {
                     revision
                 };
-                transaction.succeed_write(write_id, revision).await?;
+                locked.record(&write, revision).await?;
+                locked.transaction.succeed_write(write_id, revision).await?;
             }
             End::Refused(Refusal::BaseMismatch { .. }) => {
-                transaction.fail_write(write_id, CONFLICT).await?;
+                locked.transaction.fail_write(write_id, CONFLICT).await?;
             }
             End::Refused(Refusal::Failed { code }) => {
-                transaction.fail_write(write_id, code).await?;
+                locked.transaction.fail_write(write_id, code).await?;
             }
         }
-        Locked {
-            recorder: &self.recorder,
-            transaction: &mut transaction,
-            connection: &connection,
-            connection_id,
-        }
-        .advance(&write.path_key)
-        .await?;
+        locked.advance(&write.path_key).await?;
         transaction.commit().await?;
         Ok(true)
     }

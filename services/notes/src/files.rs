@@ -58,6 +58,12 @@ pub enum Recorded {
 #[error("a file change could not be recorded: {0}")]
 pub struct RecordError(&'static str);
 
+impl RecordError {
+    /// The channel acknowledged a write with bytes that the blob root does not hold.
+    pub(crate) const ACKNOWLEDGED_BYTES: Self =
+        Self("the acknowledged bytes are not in the blob root");
+}
+
 impl From<ratatoskr_notes_persistence::PersistenceError> for RecordError {
     fn from(_: ratatoskr_notes_persistence::PersistenceError) -> Self {
         Self("the database")
