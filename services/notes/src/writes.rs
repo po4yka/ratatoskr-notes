@@ -269,6 +269,8 @@ pub struct Writes {
     merges: Arc<Semaphore>,
     /// A path whose rename panics while its link rewrites are planned. For tests.
     panic_in_plan: Option<Arc<str>>,
+    /// A path whose write panics after it was committed. For tests.
+    panic_after_commit: Option<Arc<str>>,
 }
 
 impl Writes {
@@ -279,6 +281,7 @@ impl Writes {
             recorder,
             merges: Arc::new(Semaphore::new(MERGES)),
             panic_in_plan: None,
+            panic_after_commit: None,
         }
     }
 
@@ -288,6 +291,15 @@ impl Writes {
     #[must_use]
     pub fn with_panic_in_plan(mut self, path: &str) -> Self {
         self.panic_in_plan = Some(Arc::from(path));
+        self
+    }
+
+    /// Panic after a write of `path` was committed, before its conflicts are announced. For tests:
+    /// a defect after the commit must not give the operation a second end.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn with_panic_after_commit(mut self, path: &str) -> Self {
+        self.panic_after_commit = Some(Arc::from(path));
         self
     }
 
@@ -314,7 +326,8 @@ impl Writes {
     ///
     /// # Panics
     ///
-    /// Only with the test hook [`Self::with_panic_in_plan`], at a rename of its path.
+    /// Only with the test hooks [`Self::with_panic_in_plan`], at a rename of its path, and
+    /// [`Self::with_panic_after_commit`], after a write of its path was committed.
     pub async fn handle(&self, command: &CommandEnvelope) -> Result<Handled, WriteError> {
         let Some(mut request) = Request::parse(command) else {
             if let Some((owner_id, operation_id)) = Request::operation_of(command) {
@@ -412,6 +425,11 @@ impl Writes {
         }
         let raised = std::mem::take(&mut locked.raised);
         transaction.commit().await?;
+        // The test hook of a defect after the commit.
+        assert!(
+            self.panic_after_commit.as_deref() != Some(request.path.as_str()),
+            "the test hook panics after the commit of a write"
+        );
         self.announce(&raised).await;
         Ok(Handled::Queued { write_id })
     }

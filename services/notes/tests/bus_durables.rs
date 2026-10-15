@@ -427,6 +427,13 @@ async fn a_panic_in_one_write_does_not_stop_the_consumer() {
     }
     let ready_while_running = readiness(&runtime).await;
     let reports = writer.reports(rename.operation_id).await;
+    // Past the delay of a nak: a terminated message is not delivered again.
+    tokio::time::sleep(Duration::from_secs(6)).await;
+    let mut info = stream
+        .get_consumer::<pull::Config>(WRITE_DURABLE)
+        .await
+        .expect("the durable exists");
+    let delivered = deliveries_of(&mut info).await;
     stop.cancel();
     let _ = running.await;
 
@@ -439,6 +446,11 @@ async fn a_panic_in_one_write_does_not_stop_the_consumer() {
         ready_while_running,
         StatusCode::OK,
         "the consumer still runs"
+    );
+    assert_eq!(
+        delivered,
+        Some(2),
+        "each message is delivered once: the one that panicked is terminated"
     );
     assert_eq!(
         reports
@@ -454,6 +466,95 @@ async fn a_panic_in_one_write_does_not_stop_the_consumer() {
         readiness(&runtime).await,
         StatusCode::SERVICE_UNAVAILABLE,
         "the service is not ready once the consumer ended"
+    );
+
+    provision(&stream, None).await;
+    writer.cleanup().await;
+}
+
+#[tokio::test]
+async fn a_panic_after_the_commit_gives_no_second_end() {
+    let writer = Writer::new().await;
+    let base = b"# Plan\n\nIn the vault.\n";
+    let mine = b"# Plan\n\nCommitted, then the write path panicked.\n";
+    let connection = writer.vault(&[("Plan.md", base)]).await;
+    let blob = writer.stage(connection, mine).await;
+    let write = command(connection, &update("Plan.md", &sha256(base), &blob));
+    let client = async_nats::connect(nats_url())
+        .await
+        .expect("the test NATS server can be reached");
+    let context = jetstream::new(client);
+    let stream = context
+        .get_or_create_stream(stream::Config {
+            name: COMMAND_STREAM.to_owned(),
+            subjects: vec!["cmd.>".to_owned()],
+            ..Default::default()
+        })
+        .await
+        .expect("the command stream exists");
+    let _bus = BUS.lock().await;
+    stream.purge().await.expect("the command stream is emptied");
+    provision(
+        &stream,
+        Some(durable(WRITE_FILTER, Duration::from_secs(30))),
+    )
+    .await;
+    context
+        .publish(
+            WRITE_FILTER,
+            serde_json::to_vec(&write.envelope)
+                .expect("the command is JSON")
+                .into(),
+        )
+        .await
+        .expect("the command is published")
+        .await
+        .expect("the command is stored");
+    let runtime = Arc::new(RuntimeState::new(writer.channel.fixture.database.clone()));
+    runtime.mark_started();
+    let defective = writer.writes.clone().with_panic_after_commit("Plan.md");
+    let consumer = WriteConsumer::new(settings(), Arc::clone(&runtime), defective);
+    let running = tokio::spawn(consumer.run(CancellationToken::new()));
+
+    let mut settled = false;
+    let mut info = stream
+        .get_consumer::<pull::Config>(WRITE_DURABLE)
+        .await
+        .expect("the durable exists");
+    for _ in 0..100 {
+        let state = info.info().await.expect("the durable can be read");
+        if state.delivered.consumer_sequence >= 1 && state.num_ack_pending == 0 {
+            settled = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    let ended: Vec<serde_json::Value> = writer
+        .reports(write.operation_id)
+        .await
+        .into_iter()
+        .filter(|report| matches!(report["status"].as_str(), Some("failed" | "succeeded")))
+        .collect();
+    let delivered = writer.deliveries(connection).await;
+    // The consumer task ends without a stop, as a panic outside a command would end it.
+    running.abort();
+    let _ = running.await;
+
+    assert!(settled, "the message is settled");
+    assert_eq!(
+        ended,
+        Vec::<serde_json::Value>::new(),
+        "the write was committed, so its operation gets no failure"
+    );
+    assert_eq!(
+        delivered.iter().map(|d| d.operation_id).collect::<Vec<_>>(),
+        vec![write.operation_id],
+        "the committed write goes on to its channel"
+    );
+    assert_eq!(
+        readiness(&runtime).await,
+        StatusCode::SERVICE_UNAVAILABLE,
+        "the service is not ready once the consumer task ended"
     );
 
     provision(&stream, None).await;
