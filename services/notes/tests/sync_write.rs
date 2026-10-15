@@ -10,7 +10,7 @@
 
 mod support;
 
-use ratatoskr_notes::sync_write::{SyncWriter, write_atomically};
+use ratatoskr_notes::sync_write::SyncWriter;
 use ratatoskr_notes::writes::{Handled, Outcome};
 
 use crate::support::channel::sha256;
@@ -72,63 +72,6 @@ async fn tree_change_before_write_conflicts() {
     );
 
     writer.cleanup().await;
-}
-
-/// How many times the writer replaces the file while the reader reads it.
-const WRITES: usize = 1_000;
-
-/// The hashes that a reader saw while `write` replaced the file `WRITES` times with old and new
-/// bytes in turn, other than the hashes of the old and the new bytes.
-fn torn_reads(write: fn(&std::path::Path, &[u8]) -> std::io::Result<()>) -> Vec<String> {
-    let folder = tempfile::tempdir().expect("a working tree");
-    let path = folder.path().join("Plan.md");
-    let old = vec![b'o'; 256 * 1024];
-    let new = vec![b'n'; 256 * 1024];
-    std::fs::write(&path, &old).expect("the old bytes are in the tree");
-    let whole = [sha256(&old), sha256(&new)];
-    let done = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let reader = {
-        let (path, done) = (path.clone(), std::sync::Arc::clone(&done));
-        std::thread::spawn(move || {
-            let mut seen = Vec::new();
-            while !done.load(std::sync::atomic::Ordering::Acquire) {
-                if let Ok(bytes) = std::fs::read(&path) {
-                    seen.push(sha256(&bytes));
-                }
-            }
-            seen
-        })
-    };
-    for round in 0..WRITES {
-        let bytes = if round % 2 == 0 { &new } else { &old };
-        write(&path, bytes).expect("the file is written");
-    }
-    done.store(true, std::sync::atomic::Ordering::Release);
-    let seen = reader.join().expect("the reader ends");
-    assert!(!seen.is_empty(), "the reader read the file");
-    seen.into_iter()
-        .filter(|hash| !whole.contains(hash))
-        .collect()
-}
-
-/// The fault mode of this test: a direct write, which truncates the file and then fills it.
-fn direct_write(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
-    std::fs::write(path, bytes)
-}
-
-#[test]
-fn reader_never_sees_partial_file() {
-    // The reader can see a torn file: against the fault mode it sees one.
-    assert!(
-        !torn_reads(direct_write).is_empty(),
-        "the reader sees a torn file of a direct write"
-    );
-    let torn = torn_reads(write_atomically);
-    assert!(
-        torn.is_empty(),
-        "every hash that the reader saw is the old or the new one; {} were not",
-        torn.len()
-    );
 }
 
 #[tokio::test]

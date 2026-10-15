@@ -508,13 +508,10 @@ fn missing() -> std::io::Error {
     std::io::Error::from(std::io::ErrorKind::NotFound)
 }
 
-/// Replace the file at `path` with `bytes` so that a reader sees the old or the new bytes and never
-/// a mix (see [`write_at`]).
-///
-/// # Errors
-///
-/// The error of a file operation; the temporary file is removed then.
-pub fn write_atomically(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+/// Replace the file at `path` with `bytes` through [`write_at`]. For the test of the atomic write
+/// only: the service writes a tree only relative to folder descriptors.
+#[cfg(test)]
+fn write_atomically(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     let folder = path.parent().unwrap_or_else(|| Path::new("."));
     let name = path.file_name().ok_or_else(missing)?;
     std::fs::create_dir_all(folder)?;
@@ -550,4 +547,81 @@ fn write_at(folder: BorrowedFd<'_>, name: &OsStr, bytes: &[u8]) -> std::io::Resu
     // The rename is durable once the folder is flushed.
     let _ = rustix::fs::fsync(folder);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    //! The atomic write of a working tree (OBS-024 tasks 7.7, 7.8 and 7.28).
+
+    use std::path::Path;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    use sha2::{Digest as _, Sha256};
+
+    use super::write_atomically;
+
+    /// How many times the writer replaces the file while the reader reads it.
+    const WRITES: usize = 1_000;
+
+    fn sha256(bytes: &[u8]) -> String {
+        format!("{:x}", Sha256::digest(bytes))
+    }
+
+    /// The hashes that a reader saw while `write` replaced the file `WRITES` times with old and
+    /// new bytes in turn, other than the hashes of the old and the new bytes.
+    fn torn_reads(write: fn(&Path, &[u8]) -> std::io::Result<()>) -> Vec<String> {
+        let folder = tempfile::tempdir().expect("a working tree");
+        let path = folder.path().join("Plan.md");
+        let old = vec![b'o'; 256 * 1024];
+        let new = vec![b'n'; 256 * 1024];
+        std::fs::write(&path, &old).expect("the old bytes are in the tree");
+        let whole = [sha256(&old), sha256(&new)];
+        let done = Arc::new(AtomicBool::new(false));
+        let reader = {
+            let (path, done) = (path.clone(), Arc::clone(&done));
+            std::thread::spawn(move || read_until(&path, &done))
+        };
+        for round in 0..WRITES {
+            let bytes = if round % 2 == 0 { &new } else { &old };
+            write(&path, bytes).expect("the file is written");
+        }
+        done.store(true, Ordering::Release);
+        let seen = reader.join().expect("the reader ends");
+        assert!(!seen.is_empty(), "the reader read the file");
+        seen.into_iter()
+            .filter(|hash| !whole.contains(hash))
+            .collect()
+    }
+
+    /// The hash of the file at `path` each time a reader reads it, until `done`.
+    fn read_until(path: &Path, done: &AtomicBool) -> Vec<String> {
+        let mut seen = Vec::new();
+        while !done.load(Ordering::Acquire) {
+            if let Ok(bytes) = std::fs::read(path) {
+                seen.push(sha256(&bytes));
+            }
+        }
+        seen
+    }
+
+    /// The fault mode of this test: a direct write, which truncates the file and then fills it.
+    fn direct_write(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+        std::fs::write(path, bytes)
+    }
+
+    #[test]
+    fn reader_never_sees_partial_file() {
+        // The reader can see a torn file: against the fault mode it sees one.
+        assert!(
+            !torn_reads(direct_write).is_empty(),
+            "the reader sees a torn file of a direct write"
+        );
+        let torn = torn_reads(write_atomically);
+        assert!(
+            torn.is_empty(),
+            "every hash that the reader saw is the old or the new one; {} were not",
+            torn.len()
+        );
+    }
 }
