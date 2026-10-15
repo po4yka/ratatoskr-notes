@@ -67,3 +67,15 @@ The domain router SHALL serve a request with the session kind `site_owner` only 
 
 - **WHEN** a request with the session kind `site_owner` and the origin `site:site-a` is sent to each entry of the domain router
 - **THEN** the upload and conflict routes are served, the change and manifest routes answer `409` `notes.channel_mismatch`, every other route answers `401` `notes.request.unauthenticated`, and the connection of the owner is not removed, verified by `services/notes/tests/site_owner_routes.rs::site_owner_reaches_only_uploads_and_conflicts`
+
+### Requirement: An unknown session kind is unauthenticated
+
+The domain router SHALL serve a request whose session kind claim is present only when the kind is
+one that Platform mints: `browser`, `device`, `telegram_mini_app`, `service`, `api_token` or
+`site_owner`. Any other kind, a different spelling of a known kind included, SHALL be refused on
+every route with `401` and `notes.request.unauthenticated`.
+
+#### Scenario: A request names an unknown session kind
+
+- **WHEN** a request with the session kind `Site_Owner`, `robot` or `anonymous` reaches the upload open, the file list, the conflict read or the write mode
+- **THEN** each answer is `401` with `notes.request.unauthenticated`, and the kinds `browser`, `api_token`, `telegram_mini_app` and `service` still read the file list, verified by `services/notes/tests/site_owner_routes.rs::unknown_session_kind_is_unauthenticated`

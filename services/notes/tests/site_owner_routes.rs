@@ -228,3 +228,73 @@ async fn site_owner_reaches_only_uploads_and_conflicts() {
 
     channel.cleanup().await;
 }
+
+#[tokio::test]
+async fn unknown_session_kind_is_unauthenticated() {
+    let channel = Channel::new().await;
+    let connection = channel.plugin_connection(OWNER, "vault-key-kinds").await;
+    let unknown = Uuid::now_v7();
+    let routes = [
+        (
+            Method::POST,
+            format!("/v1/notes/connections/{connection}/blobs"),
+        ),
+        (
+            Method::GET,
+            format!("/v1/notes/connections/{connection}/files"),
+        ),
+        (Method::GET, format!("/v1/notes/conflicts/{unknown}")),
+        (
+            Method::PUT,
+            format!("/v1/notes/connections/{connection}/write-mode"),
+        ),
+    ];
+
+    let mut wrong = Vec::new();
+    for kind in ["Site_Owner", "robot", "anonymous"] {
+        let claims = [
+            (SESSION_KIND_HEADER, kind.to_owned()),
+            (ORIGIN_HEADER, "site:site-a".to_owned()),
+        ];
+        for (method, path) in &routes {
+            let body = body(method, path);
+            let answer =
+                send_with(&channel.router, method.clone(), path, OWNER, &claims, body).await;
+            let refusal = (answer.status, answer.body["code"].as_str());
+            if refusal
+                != (
+                    StatusCode::UNAUTHORIZED,
+                    Some("notes.request.unauthenticated"),
+                )
+            {
+                wrong.push(format!(
+                    "{kind} {method} {path}: {} {}",
+                    answer.status, answer.body
+                ));
+            }
+        }
+    }
+    // A kind that Platform mints is still served.
+    for kind in ["browser", "api_token", "telegram_mini_app", "service"] {
+        let answer = send_with(
+            &channel.router,
+            Method::GET,
+            &format!("/v1/notes/connections/{connection}/files"),
+            OWNER,
+            &[(SESSION_KIND_HEADER, kind.to_owned())],
+            None,
+        )
+        .await;
+        if answer.status != StatusCode::OK {
+            wrong.push(format!(
+                "{kind} GET .../files: {} {}",
+                answer.status, answer.body
+            ));
+        }
+    }
+
+    assert!(wrong.is_empty(), "{wrong:#?}");
+    assert_ne!(channel.connection_state(connection).await, "removed");
+
+    channel.cleanup().await;
+}
