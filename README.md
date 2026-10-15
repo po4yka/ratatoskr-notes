@@ -92,8 +92,10 @@ When the owner removes the connection before or while its login runs, the operat
 time, 2 by default. A `sync` connect over that limit answers `503` with `notes.service.unavailable`
 and creates nothing, and the client can try again later. A `plugin` or `cli` connect reports
 `first_sync`; the first applied manifest of its device completes it. When no manifest is applied
-within 30 minutes of the connect, the connection becomes `failed` and the operation fails with
-`notes.channel.manifest_missing`. The wait continues after a restart of the service. Each report
+within 30 minutes of the connect, the connection becomes `failed`, and in the same transaction the
+operation gets its terminal report `failed` with the code `notes.channel.manifest_missing`. That
+code is in the report of the operation, never in an HTTP answer. The wait continues after a restart
+of the service. Each report
 correlates to `operation:<operation id>`.
 
 A `plugin` or `cli` connect comes from a paired device. Edge names the device in
