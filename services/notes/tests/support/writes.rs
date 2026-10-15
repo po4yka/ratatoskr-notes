@@ -370,3 +370,31 @@ impl Writer {
         .expect("the blobs can be read")
     }
 }
+
+impl Writer {
+    /// The payloads of the reports of the operation `operation_id`, in order.
+    pub(crate) async fn reports(&self, operation_id: Uuid) -> Vec<Value> {
+        sqlx::query_scalar(
+            "select payload -> 'payload' from notes.outbox
+             where event_type = 'platform.operation.reported.v1'
+               and payload -> 'payload' ->> 'operation_id' = $1
+             order by position",
+        )
+        .bind(operation_id.to_string())
+        .fetch_all(self.channel.fixture.pool())
+        .await
+        .expect("the outbox can be read")
+    }
+
+    /// `GET /v1/notes/conflicts/{conflict_id}` for `owner`.
+    pub(crate) async fn conflict(&self, owner: Uuid, conflict_id: &str) -> Answer {
+        crate::support::send(
+            &self.channel.router,
+            Method::GET,
+            &format!("/v1/notes/conflicts/{conflict_id}"),
+            owner,
+            None,
+        )
+        .await
+    }
+}
