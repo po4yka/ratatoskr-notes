@@ -435,3 +435,92 @@ async fn a_rename_that_the_device_fails_ends_the_group_with_its_code() {
 
     writer.cleanup().await;
 }
+
+/// The codes of the terminal reports of the operation of `command`, in order.
+async fn terminal_codes(writer: &Writer, command: &support::writes::Command) -> Vec<Value> {
+    writer
+        .reports(command.operation_id)
+        .await
+        .into_iter()
+        .filter(|report| matches!(report["status"].as_str(), Some("failed" | "succeeded")))
+        .map(|report| report["error"]["code"].clone())
+        .collect()
+}
+
+#[tokio::test]
+async fn write_mode_off_fails_a_waiting_group_once() {
+    let writer = Writer::new().await;
+    let a = b"# A\n";
+    let x0 = b"[[A]]\n";
+    let x1 = b"[[A]] edited.\n";
+    let connection = writer.vault(&[("A.md", a), ("X.md", x0)]).await;
+    // An edit of X.md waits for the device, so the group waits behind it.
+    let blob = writer.stage(connection, x1).await;
+    let edit = command(connection, &update("X.md", &sha256(x0), &blob));
+    writer.send(&edit).await;
+    let renamed = command(connection, &rename("A.md", &sha256(a), "B.md"));
+    writer.send(&renamed).await;
+
+    writer
+        .writes
+        .set_write_mode(OWNER, connection, uuid::Uuid::now_v7(), false, true)
+        .await
+        .expect("write mode goes off");
+
+    assert_eq!(
+        terminal_codes(&writer, &renamed).await,
+        [json!("notes.write.disabled")],
+        "one terminal report of the group"
+    );
+    assert_eq!(
+        writer.events_of(connection, RAISED).await,
+        Vec::<Value>::new()
+    );
+
+    writer.cleanup().await;
+}
+
+#[tokio::test]
+async fn write_mode_off_after_the_rename_landed_reports_partially_applied() {
+    let writer = Writer::new().await;
+    let a = b"# A\n";
+    let index0 = b"[[A]]\n";
+    let connection = writer
+        .sync_vault(&[("A.md", a), ("Index.md", index0)])
+        .await;
+    let renamed = command(connection, &rename("A.md", &sha256(a), "B.md"));
+    writer.send(&renamed).await;
+    // The rename landed and the vault acknowledged it; its rewrite did not land yet.
+    let leader = writer
+        .deliveries(connection)
+        .await
+        .into_iter()
+        .find(|delivery| delivery.group_id == Some(delivery.write_id))
+        .expect("the rename is delivering");
+    assert!(
+        writer
+            .writes
+            .acknowledge(connection, leader.write_id, Some(&sha256(a)))
+            .await
+            .expect("the acknowledgement is recorded")
+    );
+
+    writer
+        .writes
+        .set_write_mode(OWNER, connection, uuid::Uuid::now_v7(), false, true)
+        .await
+        .expect("write mode goes off");
+
+    assert_eq!(
+        terminal_codes(&writer, &renamed).await,
+        [json!("notes.write.partially_applied")],
+        "one terminal report: the rename landed and its rewrite did not"
+    );
+    assert_eq!(writer.current(connection, "B.md").await, Some(sha256(a)));
+    assert_eq!(
+        writer.current(connection, "Index.md").await,
+        Some(sha256(index0))
+    );
+
+    writer.cleanup().await;
+}
