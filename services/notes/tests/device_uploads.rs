@@ -141,3 +141,39 @@ async fn second_finalize_of_one_token_is_session_unknown() {
         "the second finalize finds no open session: {second:?}"
     );
 }
+
+#[tokio::test]
+async fn removed_connection_keeps_no_uploads() {
+    let channel = Channel::new().await;
+    let connection = channel.plugin_connection(OWNER, "vault-key-uploads").await;
+    channel.hold(OWNER, connection, b"uploaded once\n").await;
+    let uploads = || async {
+        sqlx::query_scalar::<_, i64>(
+            "select count(*) from notes.connection_blobs where connection_id = $1",
+        )
+        .bind(connection)
+        .fetch_one(channel.fixture.pool())
+        .await
+        .expect("the uploads can be counted")
+    };
+    let before = uploads().await;
+
+    let removed = crate::support::send(
+        &channel.router,
+        axum::http::Method::DELETE,
+        &format!("/v1/notes/connections/{connection}"),
+        OWNER,
+        None,
+    )
+    .await;
+
+    assert_eq!(before, 1, "the upload is recorded for its connection");
+    assert_eq!(removed.status, StatusCode::NO_CONTENT, "{:?}", removed.body);
+    assert_eq!(
+        uploads().await,
+        0,
+        "the removal deletes the uploads of the connection"
+    );
+
+    channel.cleanup().await;
+}
