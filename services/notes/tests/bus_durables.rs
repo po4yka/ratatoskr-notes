@@ -259,6 +259,15 @@ async fn delivers_each_command_to_the_write_path() {
     writer.cleanup().await;
 }
 
+/// How many times the durable delivered a message, or `None` when it cannot be read.
+async fn deliveries_of(durable: &mut jetstream::consumer::Consumer<pull::Config>) -> Option<u64> {
+    durable
+        .info()
+        .await
+        .ok()
+        .map(|info| info.delivered.consumer_sequence)
+}
+
 #[tokio::test]
 async fn a_failed_write_is_delivered_again() {
     let writer = Writer::new().await;
@@ -286,12 +295,10 @@ async fn a_failed_write_is_delivered_again() {
         Some(durable(WRITE_FILTER, Duration::from_secs(30))),
     )
     .await;
-    // The write path fails: its table is away.
-    let pool = writer.channel.fixture.pool();
-    sqlx::query("alter table notes.writes rename to writes_away")
-        .execute(pool)
+    let mut durable = stream
+        .get_consumer::<pull::Config>(WRITE_DURABLE)
         .await
-        .expect("the table is renamed");
+        .expect("the durable exists");
     context
         .publish(
             WRITE_FILTER,
@@ -303,34 +310,33 @@ async fn a_failed_write_is_delivered_again() {
         .expect("the command is published")
         .await
         .expect("the command is stored");
+
+    // The write path fails while its table is away. Nothing between the rename and the restore
+    // can panic, so the table always comes back before an assertion runs.
+    let pool = writer.channel.fixture.pool();
+    sqlx::query("alter table notes.writes rename to writes_away")
+        .execute(pool)
+        .await
+        .expect("the table is renamed");
     let runtime = Arc::new(RuntimeState::new(writer.channel.fixture.database.clone()));
     let stop = CancellationToken::new();
     let consumer = WriteConsumer::new(settings(), runtime, writer.writes.clone());
     let running = tokio::spawn(consumer.run(stop.clone()));
-    let mut info = stream
-        .get_consumer::<pull::Config>(WRITE_DURABLE)
-        .await
-        .expect("the durable exists");
-    let mut first_delivery = false;
-    for _ in 0..50 {
-        if info
-            .info()
+    // A second delivery proves that the first one failed and was answered with a nak.
+    let mut redelivered = false;
+    for _ in 0..150 {
+        if deliveries_of(&mut durable)
             .await
-            .expect("the durable can be read")
-            .delivered
-            .consumer_sequence
-            >= 1
+            .is_some_and(|count| count >= 2)
         {
-            first_delivery = true;
+            redelivered = true;
             break;
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
-    tokio::time::sleep(Duration::from_millis(500)).await;
-    sqlx::query("alter table notes.writes_away rename to writes")
+    let restored = sqlx::query("alter table notes.writes_away rename to writes")
         .execute(pool)
-        .await
-        .expect("the table is back");
+        .await;
 
     let mut outcome = None;
     for _ in 0..150 {
@@ -340,20 +346,18 @@ async fn a_failed_write_is_delivered_again() {
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
-    let state = info.info().await.expect("the durable can be read").clone();
     stop.cancel();
     let _ = running.await;
 
-    assert!(first_delivery, "the command is delivered");
+    assert!(restored.is_ok(), "the table is back: {restored:?}");
+    assert!(
+        redelivered,
+        "the failed command is delivered again within 15 s, by its nak and not the ack wait"
+    );
     assert_eq!(
         outcome,
         Some(Outcome::Pending),
-        "the second delivery queues the write"
-    );
-    assert!(
-        state.delivered.consumer_sequence >= 2,
-        "the failed command is delivered again: {:?}",
-        state.delivered
+        "a later delivery queues the write"
     );
 
     provision(&stream, None).await;
