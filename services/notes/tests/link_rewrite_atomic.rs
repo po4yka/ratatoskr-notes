@@ -524,3 +524,67 @@ async fn write_mode_off_after_the_rename_landed_reports_partially_applied() {
 
     writer.cleanup().await;
 }
+
+#[tokio::test]
+async fn a_group_base_mismatch_names_the_local_hash_of_each_file() {
+    let writer = Writer::new().await;
+    let note = b"# Note\n";
+    let index0 = b"[[Note]]\n";
+    let index_local = b"[[Note]] edited on the device.\n";
+    let note_local = b"# Note\n\nEdited on the device.\n";
+    let connection = writer
+        .vault(&[("Note.md", note), ("Index.md", index0)])
+        .await;
+    let renamed = command(connection, &rename("Note.md", &sha256(note), "Plan.md"));
+    assert!(matches!(
+        writer.send(&renamed).await,
+        Handled::Queued { .. }
+    ));
+    let device = device_of(OWNER);
+    let read = writer
+        .device_operations(OWNER, device, connection, None)
+        .await;
+    let operation_id = read.body["operations"][0]["operation_id"]
+        .as_str()
+        .expect("the rename is in the queue")
+        .to_owned();
+
+    let answer = writer
+        .device_result(
+            OWNER,
+            device,
+            connection,
+            &operation_id,
+            json!({
+                "outcome": "base_mismatch",
+                "local_sha256": sha256(note_local),
+                "rewrites": [
+                    { "path": "Index.md", "outcome": "base_mismatch", "local_sha256": sha256(index_local) },
+                ],
+            }),
+        )
+        .await;
+    assert_eq!(answer.status, StatusCode::OK, "{:?}", answer.body);
+
+    let raised = writer.events_of(connection, RAISED).await;
+    assert_eq!(raised.len(), 1, "one conflict: {raised:?}");
+    assert_eq!(
+        raised[0]["path"], "Index.md",
+        "the first stale file names the conflict"
+    );
+    assert_eq!(
+        raised[0]["current_hash"],
+        json!(sha256(index_local)),
+        "the conflict names the local hash that the device reported for that file"
+    );
+    let conflict_id = raised[0]["conflict_id"].as_str().expect("a conflict id");
+    let conflict = writer.conflict(OWNER, conflict_id).await;
+    assert_eq!(
+        conflict.body["stale_paths"],
+        json!(["Index.md", "Note.md"]),
+        "{:?}",
+        conflict.body
+    );
+
+    writer.cleanup().await;
+}
