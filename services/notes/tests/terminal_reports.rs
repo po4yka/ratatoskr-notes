@@ -17,7 +17,7 @@ use std::time::Duration;
 use axum::http::Method;
 use ratatoskr_notes::api::{ApiState, domain_router};
 use ratatoskr_notes_persistence::test_support::TestDatabase;
-use ratatoskr_notes_persistence::{NewConnection, NewSecret};
+use ratatoskr_notes_persistence::{NewConnection, NewSecret, OutboxEvent};
 use serde_json::Value;
 use tokio::sync::mpsc;
 use uuid::Uuid;
@@ -349,6 +349,65 @@ async fn unreadable_operation_expires_no_login_without_its_report() {
     assert_one_failure(&fixture, connection, "notes.sync.login_expired").await;
 
     state.shut_down().await;
+    fixture
+        .cleanup()
+        .await
+        .expect("the test database is dropped");
+}
+
+#[tokio::test]
+async fn outbox_skips_a_second_end_and_refuses_a_repeated_event_id() {
+    let fixture = TestDatabase::create().await.expect("a test database");
+    let operation_id = Uuid::now_v7();
+    let aggregate_id = format!("operation:{operation_id}");
+    let report = |status: &str| {
+        serde_json::json!({
+            "payload": { "operation_id": operation_id.to_string(), "status": status },
+        })
+    };
+    let (first_end, second_end, running) = (report("failed"), report("failed"), report("running"));
+    let event = |event_id: Uuid, envelope| OutboxEvent {
+        event_id,
+        event_type: "platform.operation.reported.v1",
+        aggregate_type: "operation",
+        aggregate_id: &aggregate_id,
+        envelope,
+    };
+    let first_id = Uuid::now_v7();
+
+    let first = fixture
+        .database
+        .insert_event(&event(first_id, &first_end))
+        .await;
+    let second = fixture
+        .database
+        .insert_event(&event(Uuid::now_v7(), &second_end))
+        .await;
+    let repeated = fixture
+        .database
+        .insert_event(&event(first_id, &running))
+        .await;
+    let ends: i64 = sqlx::query_scalar(
+        "select count(*) from notes.outbox
+         where payload -> 'payload' ->> 'operation_id' = $1
+           and payload -> 'payload' ->> 'status' = 'failed'",
+    )
+    .bind(operation_id.to_string())
+    .fetch_one(fixture.pool())
+    .await
+    .expect("the outbox can be read");
+
+    assert!(first.is_ok(), "{first:?}");
+    assert!(
+        second.is_ok(),
+        "a second end is skipped, not refused: {second:?}"
+    );
+    assert_eq!(ends, 1, "the first end stays the only one");
+    assert!(
+        repeated.is_err(),
+        "an event id that is in the outbox is refused"
+    );
+
     fixture
         .cleanup()
         .await
