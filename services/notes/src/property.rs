@@ -3,7 +3,8 @@
 //!
 //! The change edits lines and keeps every other byte: the other keys, their order, comments, the
 //! line endings and the body stay as they are. A property is a key at the start of a line of the
-//! frontmatter, with the lines below it that are indented or start a list item. The value is
+//! frontmatter, with the lines below it that are indented or start a list item and the blank lines
+//! between them (a block scalar or a list may hold blank lines). The value is
 //! written as compact JSON, which is valid YAML: `status: "done"`, `tags: ["a","b"]`.
 
 use serde_json::Value;
@@ -32,9 +33,17 @@ pub(crate) fn change(file: &[u8], key: &str, value: Option<&Value>) -> Option<Ve
     });
     match (found, value) {
         (Some((start, written)), value) => {
+            // The value runs over blank lines only when an indented or list line follows them;
+            // blank lines before the next key stay.
             let mut end = start + 1;
-            while end < close && lines.get(end).is_some_and(|line| continues(line)) {
-                end += 1;
+            for (at, line) in lines.iter().enumerate().take(close).skip(start + 1) {
+                if line.trim().is_empty() {
+                    continue;
+                }
+                if !continues(line) {
+                    break;
+                }
+                end = at + 1;
             }
             // The key keeps the form in which the file writes it.
             lines.splice(
@@ -53,7 +62,8 @@ fn bare(line: &str) -> &str {
     line.trim_end_matches(['\n', '\r'])
 }
 
-/// Whether `line` belongs to the value of the key above it: it is indented, or it is a list item.
+/// Whether the non-blank `line` belongs to the value of the key above it: it is indented, or it is a
+/// list item.
 fn continues(line: &str) -> bool {
     line.starts_with([' ', '\t']) || line.starts_with("- ") || bare(line) == "-"
 }
