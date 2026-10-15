@@ -588,3 +588,80 @@ async fn a_group_base_mismatch_names_the_local_hash_of_each_file() {
 
     writer.cleanup().await;
 }
+
+#[tokio::test]
+async fn an_operation_with_open_rewrites_stays_in_the_device_queue() {
+    let writer = Writer::new().await;
+    let a = b"# A\n";
+    let x1 = b"[[B]]\n";
+    let y1 = b"See [[B]] too.\n";
+    let connection = writer
+        .vault(&[
+            ("A.md", a),
+            ("X.md", b"[[A]]\n"),
+            ("Y.md", b"See [[A]] too.\n"),
+        ])
+        .await;
+    let renamed = command(connection, &rename("A.md", &sha256(a), "B.md"));
+    writer.send(&renamed).await;
+    let device = device_of(OWNER);
+
+    // A first result recorded the rename and X.md, and then the record of Y.md failed.
+    for delivery in writer.deliveries(connection).await {
+        let digest = match delivery.path.as_str() {
+            "A.md" => sha256(a),
+            "X.md" => sha256(x1),
+            _ => continue,
+        };
+        writer
+            .writes
+            .acknowledge(connection, delivery.write_id, Some(&digest))
+            .await
+            .expect("the acknowledgement is recorded");
+    }
+
+    let read = writer
+        .device_operations(OWNER, device, connection, None)
+        .await;
+    let listed: Vec<Value> = read.body["operations"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
+        .iter()
+        .map(|operation| operation["operation_id"].clone())
+        .collect();
+    assert_eq!(
+        listed,
+        [json!(renamed.operation_id.to_string())],
+        "the rename stays in the queue while a rewrite of it is open: {:?}",
+        read.body
+    );
+
+    let answer = writer
+        .device_result(
+            OWNER,
+            device,
+            connection,
+            &renamed.operation_id.to_string(),
+            json!({
+                "outcome": "applied",
+                "sha256": sha256(a),
+                "rewrites": [
+                    { "path": "X.md", "outcome": "applied", "sha256": sha256(x1) },
+                    { "path": "Y.md", "outcome": "applied", "sha256": sha256(y1) },
+                ],
+            }),
+        )
+        .await;
+    assert_eq!(answer.body["state"], "succeeded", "{:?}", answer.body);
+    let after = writer
+        .device_operations(OWNER, device, connection, None)
+        .await;
+    assert_eq!(
+        after.body["operations"],
+        json!([]),
+        "the settled group leaves the queue"
+    );
+
+    writer.cleanup().await;
+}
