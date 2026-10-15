@@ -609,3 +609,75 @@ async fn bound_after_a_committed_manifest_changes_nothing() {
 
     channel.cleanup().await;
 }
+
+/// One `deleted` change.
+fn deleted(sequence: u64, path: &str) -> Vec<Value> {
+    vec![json!({ "sequence": sequence, "kind": "deleted", "path": path })]
+}
+
+#[tokio::test]
+async fn removed_connection_is_gone_and_a_failed_one_is_not_found() {
+    let channel = Channel::new().await;
+    let removed = channel.plugin_connection(OWNER, "vault-key-removed").await;
+    let disconnect = crate::support::send(
+        &channel.router,
+        axum::http::Method::DELETE,
+        &format!("/v1/notes/connections/{removed}"),
+        OWNER,
+        None,
+    )
+    .await;
+    // The manifest bound fails a connect without a manifest.
+    let bounded = Channel::with(|state| state.with_manifest_deadline(SHORT_DEADLINE)).await;
+    let failed = bounded.plugin_connection(OWNER, "vault-key-failed").await;
+    let failed_report = terminal_report(&bounded.fixture, failed).await;
+
+    let gone_batch = channel.batch(OWNER, removed, deleted(1, "Old.md")).await;
+    let gone_manifest = channel
+        .device_call(removed, "manifest", json!({ "entries": [] }))
+        .await;
+    let gone_upload = channel
+        .device_call(
+            removed,
+            "blobs",
+            json!({
+                "declared_size_bytes": 1,
+                "media_type": "text/markdown",
+                "digest": { "algorithm": "sha256", "hex": sha256(b"x") },
+                "chunk_size_bytes": 65_536,
+            }),
+        )
+        .await;
+    let foreign_batch = channel
+        .batch(OTHER_OWNER, removed, deleted(1, "Old.md"))
+        .await;
+    let failed_batch = bounded.batch(OWNER, failed, deleted(1, "Old.md")).await;
+
+    assert_eq!(disconnect.status, StatusCode::NO_CONTENT);
+    assert_eq!(failed_report["status"], "failed", "{failed_report:?}");
+    for (step, answer) in [
+        ("batch", &gone_batch),
+        ("manifest", &gone_manifest),
+        ("upload", &gone_upload),
+    ] {
+        assert_eq!(answer.status, StatusCode::GONE, "{step}: {:?}", answer.body);
+        assert_eq!(answer.body["code"], "notes.connection.removed", "{step}");
+    }
+    assert_eq!(
+        foreign_batch.status,
+        StatusCode::NOT_FOUND,
+        "another owner learns nothing: {:?}",
+        foreign_batch.body
+    );
+    assert_eq!(foreign_batch.body["code"], "notes.connection.not_found");
+    assert_eq!(
+        failed_batch.status,
+        StatusCode::NOT_FOUND,
+        "{:?}",
+        failed_batch.body
+    );
+    assert_eq!(failed_batch.body["code"], "notes.connection.not_found");
+
+    channel.cleanup().await;
+    bounded.cleanup().await;
+}
