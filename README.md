@@ -226,7 +226,8 @@ can name, and a link whose list changed is written again for the file it named, 
 when that name is unique, else as the path from the vault root. This also writes again a link to
 another file whose name the move made ambiguous. Aliases, headings, block references, embeds,
 Markdown link texts, titles and angle brackets stay; a space in a Markdown link is `%20`; links in
-code, HTML comments and math do not change; links in the frontmatter are not rewritten. Notes does
+code, HTML comments and math do not change; links in the frontmatter are not rewritten. A wikilink in
+the text of a Markdown link is rewritten inside that text (Obsidian 1.14.4 corrupts such a note). Notes does
 not read the vault setting `newLinkFormat`, and writes links as its default `shortest` does. Each
 linking note gets an `update` on its current revision, and the renamed note gets its new bytes on
 the rename itself. The rename and its rewrites are one write group: the group waits until each of
