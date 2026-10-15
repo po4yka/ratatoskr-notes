@@ -254,7 +254,8 @@ pub(crate) fn command_with(
     let envelope = CommandEnvelope {
         command_id: CommandId(Uuid::now_v7()),
         command_type: FileWriteRequested::command_type(),
-        issued_at: WireTimestamp::now(),
+        // A fixed instant: notes reads no time from a write command.
+        issued_at: WireTimestamp::parse("2026-10-15T00:00:00Z").expect("a timestamp"),
         producer: ProducerName::parse("ratatoskr-platform").expect("a producer"),
         aggregate_id: EntityRef::parse(&reference).expect("an aggregate"),
         correlation_id: EntityRef::parse(&reference).expect("a correlation"),
