@@ -67,11 +67,55 @@ pub struct WriteRow {
     pub revision: Option<String>,
     /// The error code of a write that failed.
     pub error_code: Option<String>,
+    /// The conflict that a write which failed with a conflict raised.
+    pub conflict_id: Option<Uuid>,
+}
+
+/// One conflict to record.
+#[derive(Debug, Clone, Copy)]
+pub struct NewConflict<'a> {
+    /// The conflict.
+    pub conflict_id: Uuid,
+    /// The write that raised it.
+    pub write: &'a WriteRow,
+    /// The media type of the file.
+    pub media_type: &'a str,
+    /// The revision that the writer saw.
+    pub base_hash: Option<&'a str>,
+    /// The revision of the vault.
+    pub current_hash: Option<&'a str>,
+    /// The writer's content.
+    pub writer_hash: Option<&'a str>,
+}
+
+/// One recorded conflict.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConflictRow {
+    /// The conflict.
+    pub conflict_id: Uuid,
+    /// The connection of its file.
+    pub connection_id: Uuid,
+    /// The operation of the write that raised it.
+    pub operation_id: Uuid,
+    /// The NFC path of the file.
+    pub path: String,
+    /// The origin of that write.
+    pub origin: String,
+    /// The media type of the file.
+    pub media_type: String,
+    /// The revision that the writer saw.
+    pub base_hash: Option<String>,
+    /// The revision of the vault when the conflict was raised.
+    pub current_hash: Option<String>,
+    /// The writer's content.
+    pub writer_hash: Option<String>,
+    /// `open` or `resolved`.
+    pub state: String,
 }
 
 /// The columns of a [`WriteRow`], in its order.
 const WRITE_COLUMNS: &str = "write_id, operation_id, origin, kind, path, path_key, target_path,
-     base_hash, content_hash, content_length, state, revision, error_code";
+     base_hash, content_hash, content_length, state, revision, error_code, conflict_id";
 
 /// The row of a [`WriteRow`].
 type WriteTuple = (
@@ -88,6 +132,7 @@ type WriteTuple = (
     String,
     Option<String>,
     Option<String>,
+    Option<Uuid>,
 );
 
 fn write_row(
@@ -105,6 +150,7 @@ fn write_row(
         state,
         revision,
         error_code,
+        conflict_id,
     ): WriteTuple,
 ) -> WriteRow {
     WriteRow {
@@ -122,6 +168,7 @@ fn write_row(
         state,
         revision,
         error_code,
+        conflict_id,
     }
 }
 
@@ -284,6 +331,68 @@ impl FileTransaction {
             .await
     }
 
+    /// Record `conflict` as open, and end its write as `failed` with `notes.write.conflict`.
+    ///
+    /// # Errors
+    ///
+    /// [`PersistenceError::Query`] when a statement fails.
+    pub async fn raise_conflict(
+        &mut self,
+        conflict: &NewConflict<'_>,
+    ) -> Result<(), PersistenceError> {
+        let write = conflict.write;
+        sqlx::query(
+            "insert into notes.conflicts
+                 (conflict_id, connection_id, write_id, operation_id, path, path_key, origin,
+                  media_type, base_hash, current_hash, writer_hash, state, created_at)
+             values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'open', now())",
+        )
+        .bind(conflict.conflict_id)
+        .bind(self.connection_id)
+        .bind(write.write_id)
+        .bind(write.operation_id)
+        .bind(&write.path)
+        .bind(&write.path_key)
+        .bind(&write.origin)
+        .bind(conflict.media_type)
+        .bind(conflict.base_hash)
+        .bind(conflict.current_hash)
+        .bind(conflict.writer_hash)
+        .execute(&mut *self.transaction)
+        .await
+        .map_err(query_error)?;
+        self.set_write_state(write.write_id, "failed", None, Some("notes.write.conflict"))
+            .await?;
+        sqlx::query(
+            "update notes.writes set conflict_id = $3
+              where connection_id = $1 and write_id = $2",
+        )
+        .bind(self.connection_id)
+        .bind(write.write_id)
+        .bind(conflict.conflict_id)
+        .execute(&mut *self.transaction)
+        .await
+        .map_err(query_error)?;
+        Ok(())
+    }
+
+    /// The operations that report the outcome of the write `write_id`, the first one first.
+    ///
+    /// # Errors
+    ///
+    /// [`PersistenceError::Query`] when the statement fails.
+    pub async fn operations_of(&mut self, write_id: Uuid) -> Result<Vec<Uuid>, PersistenceError> {
+        sqlx::query_scalar(
+            "select operation_id from notes.write_operations
+             where write_id = $1
+             order by created_at, operation_id",
+        )
+        .bind(write_id)
+        .fetch_all(&mut *self.transaction)
+        .await
+        .map_err(query_error)
+    }
+
     async fn set_write_state(
         &mut self,
         write_id: Uuid,
@@ -350,5 +459,67 @@ impl Database {
         .await
         .map_err(query_error)?;
         Ok(row.map(write_row))
+    }
+
+    /// The conflict `conflict_id` of a connection of `owner_id`. A conflict of another owner reads
+    /// as absent.
+    ///
+    /// # Errors
+    ///
+    /// [`PersistenceError::Query`] when the statement fails.
+    pub async fn conflict_of_owner(
+        &self,
+        owner_id: Uuid,
+        conflict_id: Uuid,
+    ) -> Result<Option<ConflictRow>, PersistenceError> {
+        type Row = (
+            Uuid,
+            Uuid,
+            Uuid,
+            String,
+            String,
+            String,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            String,
+        );
+        let row: Option<Row> = sqlx::query_as(
+            "select c.conflict_id, c.connection_id, c.operation_id, c.path, c.origin,
+                    c.media_type, c.base_hash, c.current_hash, c.writer_hash, c.state
+             from notes.conflicts c
+             join notes.connections n on n.connection_id = c.connection_id
+             where c.conflict_id = $1 and n.owner_id = $2",
+        )
+        .bind(conflict_id)
+        .bind(owner_id)
+        .fetch_optional(self.pool())
+        .await
+        .map_err(query_error)?;
+        Ok(row.map(
+            |(
+                conflict_id,
+                connection_id,
+                operation_id,
+                path,
+                origin,
+                media_type,
+                base_hash,
+                current_hash,
+                writer_hash,
+                state,
+            )| ConflictRow {
+                conflict_id,
+                connection_id,
+                operation_id,
+                path,
+                origin,
+                media_type,
+                base_hash,
+                current_hash,
+                writer_hash,
+                state,
+            },
+        ))
     }
 }

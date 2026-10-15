@@ -45,6 +45,7 @@ pub(super) enum ApiFault {
     NotFound,
     ConnectionRemoved,
     FileNotFound,
+    ConflictNotFound,
     ChannelMismatch,
     SequenceGap {
         committed: u64,
@@ -66,6 +67,7 @@ impl ApiFault {
             // No open session answers the token, as for a connection that does not exist.
             Self::NotFound
             | Self::FileNotFound
+            | Self::ConflictNotFound
             | Self::Transfer(
                 TransferErrorCode::SessionUnknown | TransferErrorCode::SessionExpired,
             ) => StatusCode::NOT_FOUND,
@@ -132,6 +134,11 @@ impl ApiFault {
             Self::FileNotFound => (
                 "notes.file.not_found",
                 "The file does not exist at this revision.",
+                false,
+            ),
+            Self::ConflictNotFound => (
+                "notes.conflict.not_found",
+                "The conflict does not exist.",
                 false,
             ),
             Self::Transfer(code) => (code.as_str(), transfer_message(*code), code.retryable()),

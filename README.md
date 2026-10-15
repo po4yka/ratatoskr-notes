@@ -53,8 +53,8 @@ The domain API serves `POST /v1/notes/connections` and `DELETE /v1/notes/connect
 also at `?revision=<sha256>`) and `GET /v1/notes/connections/{id}/index/{path}` (the index with its
 links and backlinks). The device channels use `POST /v1/notes/connections/{id}/changes`,
 `POST /v1/notes/connections/{id}/manifest` and the upload routes under
-`/v1/notes/connections/{id}/blobs` (see Device channels). Every route answers only for the owner in
-the claim of Edge.
+`/v1/notes/connections/{id}/blobs` (see Device channels). `GET /v1/notes/conflicts/{id}` reads a
+conflict of a write (see Writes). Every route answers only for the owner in the claim of Edge.
 
 ## Connections
 
@@ -172,6 +172,63 @@ and sends the manifest again. Then one transaction records `deleted` for each fi
 manifest does not name, `renamed` when exactly one missing path and exactly one new path have the
 same hash, `updated` for each changed hash, and `created` for each new path. A manifest does not
 change the committed sequence.
+
+## Writes
+
+The write path of workspace change `add-notes-write-back` (OBS-024). Edge publishes each write as
+the command `notes.file.write_requested.v1` (contract `notes/write-request.v1`) with the operation
+`notes.file.write`. Notes reads the commands through the durable `ratatoskr_notes_write_requests`
+on the stream `ratatoskr_commands`, with the filter `cmd.notes.file.write_requested.v1`. Edge
+creates the durable; notes only looks it up and compares its filter, its explicit acknowledgement
+and its ack wait of 30 s. When `RATATOSKR__BUS__URL` is set, `/health/ready` answers `503` until
+that check passed, and again when a later check fails.
+
+**Content.** A command never carries file bytes. The owner's session uploads the content first,
+through the upload routes of the connection (see Device channels), and the command names the
+notes-owned `BlobRef`. Edge names the session in `x-ratatoskr-session-kind` (any kind except
+`device`) and sends no device id. A session upload registers the bytes for the connection and is no
+revision. A session of another owner gets `404` `notes.connection.not_found`. A change batch or a
+manifest from a session answers `409` `notes.channel_mismatch`.
+
+**Checks when a write arrives.** In this order, each refusal fails the operation and changes
+nothing:
+
+| Check | Code |
+|---|---|
+| The command is a valid `notes/write-request.v1` of a `user:` tenant, and its aggregate is `operation:<operation id>` | `notes.request.invalid` |
+| The tenant holds the connection, and the connection is `connecting` or `active` | `notes.connection.not_found` (also for a connection of another owner) |
+| The write mode of the connection is on (it starts off) | `notes.write.disabled` |
+| The idempotency key of the connection, when an earlier write has it, comes with the same origin and operation | `notes.request.invalid` |
+| The connection uploaded the bytes of the `BlobRef`, or holds them as a revision, with the declared length | `notes.write.content_missing` |
+
+A command whose key repeats an earlier write with the same origin and operation queues nothing:
+its operation reports the state of that write, also its end.
+
+**Queue and base.** The open writes of one connection with one case-folded NFC path key are the
+queue of that file, in the order of acceptance. Only the head is delivered. When a write reaches
+the head, notes compares its base with the current revision: a `create` needs a path key that no
+present file holds, every other operation needs the base revision, and a `rename` or a `move` also
+needs a free target path key. A mismatch fails the write with a conflict, and the next write becomes
+the head. A delivered write is pending: its bytes are a blob that the write names. Only the
+acknowledgement of the channel makes the revision current and writes `notes.file.changed.v1`. A
+refusal of the channel leaves the previous revision current; a base mismatch reported by the
+channel is a conflict.
+
+**Reports.** Notes is the only reporter of `notes.file.write`. Each report goes to the outbox as
+`platform.operation.reported.v1`:
+
+| Status | Stage | When |
+|---|---|---|
+| `running` | `queued` | The write waits in the queue of its file. |
+| `running` | `delivering` | The channel of the connection delivers the write. |
+| `succeeded` | | The channel acknowledged the write. The one result has the kind `notes.file`, the target `notes_file:<file id>`, and the `BlobRef` of the new revision (none after a delete). |
+| `failed` | | A refusal above, a refusal of the channel with its own code, or the non-retryable `notes.write.conflict` with the error extension `conflict_id`. |
+
+**Conflicts.** `GET /v1/notes/conflicts/{conflict_id}` answers a conflict of a connection of the
+owner: `conflict_id`, `operation_id`, `connection_id`, `path`, `origin`, `media_type`, `state`
+(`open` or `resolved`), the hashes `base_hash`, `current_hash` and `writer_hash` (a side that does
+not exist is left out), and, for `text/markdown` and `text/plain`, `texts` with the text of each
+side that notes holds. Any other id answers `404` `notes.conflict.not_found`.
 
 ## Template units
 

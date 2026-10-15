@@ -277,6 +277,8 @@ create table notes.writes (
     revision       text,
     -- The error code of a write that failed.
     error_code     text,
+    -- The conflict that a write which failed with `notes.write.conflict` raised.
+    conflict_id    uuid,
     created_at     timestamptz not null,
     updated_at     timestamptz not null,
 
@@ -316,6 +318,45 @@ comment on table notes.write_operations is
     'The operations that report the outcome of one write: the first, and each retry of its key.';
 
 create index write_operations_write_idx on notes.write_operations (write_id);
+
+-- ---------------------------------------------------------------------------------------------
+-- conflicts: a write that met a revision its writer did not see (OBS-024 design D2)
+-- ---------------------------------------------------------------------------------------------
+
+-- The three sides are hashes; their bytes are in the blob root. A conflict stays open until a
+-- `resolve_conflict` write ends it.
+create table notes.conflicts (
+    conflict_id       uuid        primary key,
+    connection_id     uuid        not null references notes.connections (connection_id),
+    -- The write that raised the conflict, and its operation.
+    write_id          uuid        not null references notes.writes (write_id),
+    operation_id      uuid        not null,
+    path              text        not null,
+    path_key          text        not null,
+    origin            text        not null,
+    media_type        text        not null,
+    -- The revision that the writer saw, the revision of the vault, and the writer's content. A
+    -- side that does not exist is null: a `create` has no base, a deleted file no current
+    -- revision, a `delete` or a `rename` no content.
+    base_hash         text,
+    current_hash      text,
+    writer_hash       text,
+    -- `open`, or `resolved` after a resolution that the channel acknowledged.
+    state             text        not null,
+    created_at        timestamptz not null,
+    resolved_at       timestamptz,
+
+    constraint conflicts_state_is_known check (state in ('open', 'resolved')),
+    constraint conflicts_base_hash_is_sha256 check (base_hash ~ '^[0-9a-f]{64}$'),
+    constraint conflicts_current_hash_is_sha256 check (current_hash ~ '^[0-9a-f]{64}$'),
+    constraint conflicts_writer_hash_is_sha256 check (writer_hash ~ '^[0-9a-f]{64}$'),
+    constraint conflicts_resolution_has_a_time check ((state = 'resolved') = (resolved_at is not null))
+);
+
+comment on table notes.conflicts is
+    'A write that met a revision its writer did not see: the three sides, by hash.';
+
+create index conflicts_connection_idx on notes.conflicts (connection_id, created_at);
 
 -- ---------------------------------------------------------------------------------------------
 -- outbox: events Notes owes the bus, written in the same transaction as their cause

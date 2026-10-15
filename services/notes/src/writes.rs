@@ -5,6 +5,7 @@
 
 mod consumer;
 mod queue;
+mod report;
 mod request;
 
 use ratatoskr_event_envelope::CommandEnvelope;
@@ -12,6 +13,7 @@ use uuid::Uuid;
 
 use crate::files::{FileRecorder, RecordError};
 use queue::Locked;
+use report::{ReportRow, Step};
 use request::Request;
 
 pub use consumer::{COMMAND_STREAM, DurableError, WRITE_DURABLE, WRITE_FILTER, WriteConsumer};
@@ -160,62 +162,99 @@ impl Writes {
     /// [`WriteError`] when the database fails; the command is delivered again.
     pub async fn handle(&self, command: &CommandEnvelope) -> Result<Handled, WriteError> {
         let Some(request) = Request::parse(command) else {
+            if let Some((owner_id, operation_id)) = Request::operation_of(command) {
+                self.refused(owner_id, operation_id, INVALID).await?;
+            }
             return Ok(Handled::Refused { code: INVALID });
         };
         let database = self.recorder.database();
         let Some((mut transaction, connection)) =
             database.begin_file_change(request.connection_id).await?
         else {
-            return Ok(Handled::Refused {
-                code: CONNECTION_NOT_FOUND,
-            });
+            return self.refuse_request(&request, CONNECTION_NOT_FOUND).await;
         };
         // One code for a missing and a foreign connection, so that no other connection is
         // disclosed.
         if connection.owner_id != request.owner_id {
-            return Ok(Handled::Refused {
-                code: CONNECTION_NOT_FOUND,
-            });
+            drop(transaction);
+            return self.refuse_request(&request, CONNECTION_NOT_FOUND).await;
         }
         if !connection.write_mode_on {
-            return Ok(Handled::Refused { code: DISABLED });
+            drop(transaction);
+            return self.refuse_request(&request, DISABLED).await;
         }
-        if let Some((write_id, digest)) = transaction.write_of_key(&request.idempotency_key).await?
+        let mut locked = Locked {
+            recorder: &self.recorder,
+            transaction: &mut transaction,
+            connection: &connection,
+            connection_id: request.connection_id,
+        };
+        if let Some((write_id, digest)) = locked
+            .transaction
+            .write_of_key(&request.idempotency_key)
+            .await?
         {
             if digest != request.digest {
-                return Ok(Handled::Refused { code: INVALID });
+                drop(transaction);
+                return self.refuse_request(&request, INVALID).await;
             }
-            transaction
+            locked
+                .transaction
                 .attach_operation(request.operation_id, write_id)
                 .await?;
+            if let Some(write) = locked.transaction.write(write_id).await? {
+                locked.replay(request.operation_id, &write).await?;
+            }
             transaction.commit().await?;
             return Ok(Handled::Repeated { write_id });
         }
         if let Some(digest) = &request.content_hash {
             let usable = self
                 .recorder
-                .usable_length(&mut transaction, digest)
+                .usable_length(locked.transaction, digest)
                 .await?;
             if usable != request.content_length {
-                return Ok(Handled::Refused {
-                    code: CONTENT_MISSING,
-                });
+                drop(transaction);
+                return self.refuse_request(&request, CONTENT_MISSING).await;
             }
         }
         let write_id = Uuid::now_v7();
-        transaction
+        locked
+            .transaction
             .insert_write(&request.new_write(write_id))
             .await?;
-        Locked {
-            recorder: &self.recorder,
-            transaction: &mut transaction,
-            connection: &connection,
-            connection_id: request.connection_id,
-        }
-        .advance(&request.path_key)
-        .await?;
+        locked.report(write_id, Step::Queued).await?;
+        locked.advance(&request.path_key).await?;
         transaction.commit().await?;
         Ok(Handled::Queued { write_id })
+    }
+
+    /// Fail the operation of `request` with `code`, and answer that the command is refused.
+    async fn refuse_request(
+        &self,
+        request: &Request,
+        code: &'static str,
+    ) -> Result<Handled, WriteError> {
+        self.refused(request.owner_id, request.operation_id, code)
+            .await?;
+        Ok(Handled::Refused { code })
+    }
+
+    /// Write the report `failed` with `code` of the operation `operation_id` of `owner_id`, for a
+    /// command that queued nothing.
+    async fn refused(
+        &self,
+        owner_id: Uuid,
+        operation_id: Uuid,
+        code: &str,
+    ) -> Result<(), WriteError> {
+        match ReportRow::new(owner_id, operation_id, Step::Failed(code, None)) {
+            Ok(row) => self.recorder.database().insert_event(&row.event()).await?,
+            Err(error) => {
+                tracing::error!(%error, %operation_id, "a report of a write could not be built");
+            }
+        }
+        Ok(())
     }
 
     /// The writes of `connection_id` that its channel delivers now, in the order of acceptance.
@@ -310,13 +349,13 @@ impl Writes {
                     revision
                 };
                 locked.record(&write, revision).await?;
-                locked.transaction.succeed_write(write_id, revision).await?;
+                locked.succeed(&write, revision).await?;
             }
-            End::Refused(Refusal::BaseMismatch { .. }) => {
-                locked.transaction.fail_write(write_id, CONFLICT).await?;
+            End::Refused(Refusal::BaseMismatch { local_hash }) => {
+                locked.conflict(&write, local_hash.as_deref()).await?;
             }
             End::Refused(Refusal::Failed { code }) => {
-                locked.transaction.fail_write(write_id, code).await?;
+                locked.fail(&write, code).await?;
             }
         }
         locked.advance(&write.path_key).await?;
@@ -344,7 +383,7 @@ impl Writes {
             },
             "failed" => Outcome::Failed {
                 code: write.error_code.unwrap_or_default(),
-                conflict_id: None,
+                conflict_id: write.conflict_id,
             },
             _ => Outcome::Pending,
         }))

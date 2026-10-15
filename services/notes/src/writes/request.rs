@@ -99,6 +99,18 @@ impl Request {
         })
     }
 
+    /// The owner and the operation of `command` when it names them, for the report of a command
+    /// that [`Self::parse`] refuses.
+    pub(super) fn operation_of(command: &CommandEnvelope) -> Option<(Uuid, Uuid)> {
+        let owner_id = command.tenant_id?.user_id().0;
+        let operation_id = command
+            .payload
+            .get("operation_id")
+            .and_then(serde_json::Value::as_str)
+            .and_then(|operation_id| Uuid::parse_str(operation_id).ok())?;
+        Some((owner_id, operation_id))
+    }
+
     /// The row of this write.
     pub(super) fn new_write(&self, write_id: Uuid) -> NewWrite<'_> {
         NewWrite {
