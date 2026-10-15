@@ -18,6 +18,7 @@ use serde_json::{Value, json};
 use crate::support::channel::{
     Channel, OTHER_OWNER, OWNER, SECOND_DEVICE, SHORT_DEADLINE, SYNC_HINT, change, entry, sha256,
 };
+use crate::support::writes::{ORIGIN_HEADER, SESSION_KIND_HEADER, Writer};
 use crate::support::{device_of, terminal_report};
 
 #[tokio::test]
@@ -729,4 +730,102 @@ async fn failed_device_connect_has_its_report_at_once() {
     );
 
     channel.cleanup().await;
+}
+
+/// The chunk size that Edge declares for the content of a site edit: one chunk of 16 MiB.
+const SITE_CHUNK_BYTES: u32 = 16_777_216;
+
+/// The claims that Edge mints for a site owner session, with the origin claim `origin`.
+fn site_owner(origin: Option<&str>) -> Vec<(&'static str, String)> {
+    let mut claims = vec![(SESSION_KIND_HEADER, "site_owner".to_owned())];
+    claims.extend(origin.map(|origin| (ORIGIN_HEADER, origin.to_owned())));
+    claims
+}
+
+#[tokio::test]
+async fn site_owner_upload_registers_blob_only() {
+    let writer = Writer::new().await;
+    let bytes = b"# Plan\n\nEdited on the site.\n";
+    let connection = writer.vault(&[("Plan.md", b"# Plan\n")]).await;
+    let revisions = writer.channel.revisions(connection).await;
+    let events = writer.channel.events(connection).await;
+    let claims = site_owner(Some("site:site-a"));
+
+    let [opened, chunk, finalized] = writer
+        .claims_upload(OWNER, connection, &claims, SITE_CHUNK_BYTES, bytes)
+        .await;
+
+    assert_eq!(opened.status, StatusCode::CREATED, "{:?}", opened.body);
+    assert_eq!(chunk.status, StatusCode::OK, "{:?}", chunk.body);
+    assert_eq!(finalized.body["outcome"], "stored", "{:?}", finalized.body);
+    assert!(
+        writer.registered(connection, &sha256(bytes)).await,
+        "the blob is registered for the connection"
+    );
+    assert_eq!(writer.channel.revisions(connection).await, revisions);
+    assert_eq!(writer.channel.events(connection).await, events);
+
+    writer.cleanup().await;
+}
+
+#[tokio::test]
+async fn site_owner_cannot_send_change_batches() {
+    let writer = Writer::new().await;
+    let bytes = b"# Intruder\n";
+    let connection = writer.vault(&[("Home.md", b"home\n")]).await;
+    writer.channel.hold(OWNER, connection, bytes).await;
+    let events = writer.channel.events(connection).await;
+    let claims = site_owner(Some("site:site-a"));
+    let changes = json!({ "changes": [change(1, "created", "Intruder.md", bytes)] });
+
+    let batch = writer
+        .claims_call(OWNER, connection, "changes", &claims, changes)
+        .await;
+    let manifest = writer
+        .claims_call(
+            OWNER,
+            connection,
+            "manifest",
+            &claims,
+            json!({ "entries": [] }),
+        )
+        .await;
+
+    for answer in [&batch, &manifest] {
+        assert_eq!(answer.status, StatusCode::CONFLICT, "{:?}", answer.body);
+        assert_eq!(answer.body["code"], "notes.channel_mismatch");
+    }
+    assert_eq!(writer.current(connection, "Intruder.md").await, None);
+    assert_eq!(writer.channel.events(connection).await, events);
+
+    writer.cleanup().await;
+}
+
+#[tokio::test]
+async fn site_owner_without_site_origin_is_refused() {
+    let writer = Writer::new().await;
+    let bytes = b"# Plan\n\nFrom a claim that names no site.\n";
+    let connection = writer.vault(&[("Home.md", b"home\n")]).await;
+
+    for origin in [None, Some("platform"), Some("site:"), Some("site:Site_A")] {
+        let claims = site_owner(origin);
+        let [opened, _, finalized] = writer
+            .claims_upload(OWNER, connection, &claims, SITE_CHUNK_BYTES, bytes)
+            .await;
+
+        assert_eq!(
+            opened.status,
+            StatusCode::UNAUTHORIZED,
+            "{origin:?}: {:?}",
+            opened.body
+        );
+        assert_eq!(opened.body["code"], "notes.request.unauthenticated");
+        assert_ne!(finalized.body["outcome"], "stored", "{origin:?}");
+    }
+    assert!(
+        !writer.registered(connection, &sha256(bytes)).await,
+        "no blob is registered"
+    );
+
+    writer.cleanup().await;
 }

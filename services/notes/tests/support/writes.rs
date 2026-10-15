@@ -296,6 +296,14 @@ pub(crate) fn create(path: &str, blob: &Value) -> Value {
 /// The claim that Edge mints for the kind of the session of a request without a device.
 pub(crate) const SESSION_KIND_HEADER: &str = "x-ratatoskr-session-kind";
 
+/// The claim that Edge mints for a site owner session: the site that asked, `site:<site id>`.
+pub(crate) const ORIGIN_HEADER: &str = "x-ratatoskr-origin";
+
+/// The claims of a browser session of the owner.
+fn browser() -> [(&'static str, String); 1] {
+    [(SESSION_KIND_HEADER, "browser".to_owned())]
+}
+
 impl Writer {
     /// A JSON request from a browser session of `owner` to a route of `connection_id`.
     pub(crate) async fn session_call(
@@ -305,12 +313,25 @@ impl Writer {
         route: &str,
         body: Value,
     ) -> Answer {
+        self.claims_call(owner, connection_id, route, &browser(), body)
+            .await
+    }
+
+    /// A JSON request with the session `claims` of `owner` to a route of `connection_id`.
+    pub(crate) async fn claims_call(
+        &self,
+        owner: Uuid,
+        connection_id: Uuid,
+        route: &str,
+        claims: &[(&str, String)],
+        body: Value,
+    ) -> Answer {
         send_with(
             &self.channel.router,
             Method::POST,
             &format!("/v1/notes/connections/{connection_id}/{route}"),
             owner,
-            &[(SESSION_KIND_HEADER, "browser".to_owned())],
+            claims,
             Some(body),
         )
         .await
@@ -324,16 +345,31 @@ impl Writer {
         connection_id: Uuid,
         bytes: &[u8],
     ) -> [Answer; 3] {
+        self.claims_upload(owner, connection_id, &browser(), 65_536, bytes)
+            .await
+    }
+
+    /// Upload `bytes` with the session `claims` of `owner` to `connection_id` in one chunk of a
+    /// declared `chunk_size`. Returns the answers of the open, the chunk and the finalize.
+    pub(crate) async fn claims_upload(
+        &self,
+        owner: Uuid,
+        connection_id: Uuid,
+        claims: &[(&str, String)],
+        chunk_size: u32,
+        bytes: &[u8],
+    ) -> [Answer; 3] {
         let opened = self
-            .session_call(
+            .claims_call(
                 owner,
                 connection_id,
                 "blobs",
+                claims,
                 json!({
                     "declared_size_bytes": bytes.len(),
                     "media_type": "text/markdown",
                     "digest": { "algorithm": "sha256", "hex": sha256(bytes) },
-                    "chunk_size_bytes": 65_536,
+                    "chunk_size_bytes": chunk_size,
                 }),
             )
             .await;
@@ -341,21 +377,21 @@ impl Writer {
             .as_str()
             .unwrap_or("rst_00000000000000000000000000")
             .to_owned();
-        let request = Request::builder()
+        let mut request = Request::builder()
             .method(Method::PUT)
             .uri(format!(
                 "/v1/notes/connections/{connection_id}/blobs/{token}/chunks/0"
             ))
             .header(USER_HEADER, owner.to_string())
-            .header(SESSION_KIND_HEADER, "browser")
-            .header("content-type", "application/octet-stream")
-            .body(Body::from(bytes.to_vec()))
-            .expect("a request");
+            .header("content-type", "application/octet-stream");
+        for (name, value) in claims {
+            request = request.header(*name, value);
+        }
         let response = self
             .channel
             .router
             .clone()
-            .oneshot(request)
+            .oneshot(request.body(Body::from(bytes.to_vec())).expect("a request"))
             .await
             .expect("the router answers");
         let status = response.status();
@@ -370,10 +406,11 @@ impl Writer {
             body: serde_json::from_slice(&body).unwrap_or(Value::Null),
         };
         let finalized = self
-            .session_call(
+            .claims_call(
                 owner,
                 connection_id,
                 &format!("blobs/{token}/finalize"),
+                claims,
                 json!({ "resumption_token": token }),
             )
             .await;
