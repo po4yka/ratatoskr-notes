@@ -258,3 +258,104 @@ async fn delivers_each_command_to_the_write_path() {
     provision(&stream, None).await;
     writer.cleanup().await;
 }
+
+#[tokio::test]
+async fn a_failed_write_is_delivered_again() {
+    let writer = Writer::new().await;
+    let base = b"# Plan\n\nIn the vault.\n";
+    let mine = b"# Plan\n\nSent while the database fails.\n";
+    let connection = writer.vault(&[("Plan.md", base)]).await;
+    let blob = writer.stage(connection, mine).await;
+    let write = command(connection, &update("Plan.md", &sha256(base), &blob));
+    let client = async_nats::connect(nats_url())
+        .await
+        .expect("the test NATS server can be reached");
+    let context = jetstream::new(client);
+    let stream = context
+        .get_or_create_stream(stream::Config {
+            name: COMMAND_STREAM.to_owned(),
+            subjects: vec!["cmd.>".to_owned()],
+            ..Default::default()
+        })
+        .await
+        .expect("the command stream exists");
+    let _bus = BUS.lock().await;
+    stream.purge().await.expect("the command stream is emptied");
+    provision(
+        &stream,
+        Some(durable(WRITE_FILTER, Duration::from_secs(30))),
+    )
+    .await;
+    // The write path fails: its table is away.
+    let pool = writer.channel.fixture.pool();
+    sqlx::query("alter table notes.writes rename to writes_away")
+        .execute(pool)
+        .await
+        .expect("the table is renamed");
+    context
+        .publish(
+            WRITE_FILTER,
+            serde_json::to_vec(&write.envelope)
+                .expect("the command is JSON")
+                .into(),
+        )
+        .await
+        .expect("the command is published")
+        .await
+        .expect("the command is stored");
+    let runtime = Arc::new(RuntimeState::new(writer.channel.fixture.database.clone()));
+    let stop = CancellationToken::new();
+    let consumer = WriteConsumer::new(settings(), runtime, writer.writes.clone());
+    let running = tokio::spawn(consumer.run(stop.clone()));
+    let mut info = stream
+        .get_consumer::<pull::Config>(WRITE_DURABLE)
+        .await
+        .expect("the durable exists");
+    let mut first_delivery = false;
+    for _ in 0..50 {
+        if info
+            .info()
+            .await
+            .expect("the durable can be read")
+            .delivered
+            .consumer_sequence
+            >= 1
+        {
+            first_delivery = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    sqlx::query("alter table notes.writes_away rename to writes")
+        .execute(pool)
+        .await
+        .expect("the table is back");
+
+    let mut outcome = None;
+    for _ in 0..150 {
+        outcome = writer.outcome(&write).await;
+        if outcome.is_some() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    let state = info.info().await.expect("the durable can be read").clone();
+    stop.cancel();
+    let _ = running.await;
+
+    assert!(first_delivery, "the command is delivered");
+    assert_eq!(
+        outcome,
+        Some(Outcome::Pending),
+        "the second delivery queues the write"
+    );
+    assert!(
+        state.delivered.consumer_sequence >= 2,
+        "the failed command is delivered again: {:?}",
+        state.delivered
+    );
+
+    provision(&stream, None).await;
+    writer.cleanup().await;
+}
