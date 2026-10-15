@@ -314,16 +314,23 @@ impl Database {
 }
 
 /// Write `event` to the outbox in `transaction`. A second terminal report of one operation is not
-/// written: the index `outbox_one_terminal_report` keeps the first end.
+/// written: the index `outbox_one_terminal_report` keeps the first end, and the skip is logged with
+/// the operation id. Any other conflict, for example an event id that is in the outbox, is an
+/// error.
 pub(crate) async fn insert_outbox(
     transaction: &mut sqlx::Transaction<'static, sqlx::Postgres>,
     event: &OutboxEvent<'_>,
 ) -> Result<(), PersistenceError> {
-    sqlx::query(
+    // The target and its predicate are those of `outbox_one_terminal_report` in `schema.sql`.
+    let written = sqlx::query(
         "insert into notes.outbox
              (event_id, event_type, aggregate_type, aggregate_id, payload, created_at)
          values ($1, $2, $3, $4, $5, now())
-         on conflict do nothing",
+         on conflict ((payload -> 'payload' ->> 'operation_id'))
+             where event_type = 'platform.operation.reported.v1'
+               and payload -> 'payload' ->> 'status'
+                   in ('succeeded', 'partially_succeeded', 'failed')
+         do nothing",
     )
     .bind(event.event_id)
     .bind(event.event_type)
@@ -333,6 +340,18 @@ pub(crate) async fn insert_outbox(
     .execute(&mut **transaction)
     .await
     .map_err(PersistenceError::Query)?;
+    if written.rows_affected() == 0 {
+        let operation_id = event
+            .envelope
+            .pointer("/payload/operation_id")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
+        tracing::info!(
+            operation_id,
+            event_type = event.event_type,
+            "a second end of an operation is not written; its first end stays"
+        );
+    }
     Ok(())
 }
 
