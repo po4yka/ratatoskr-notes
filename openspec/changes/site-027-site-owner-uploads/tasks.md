@@ -29,3 +29,7 @@ command.
 
 - [x] 3.1 RED: add `services/notes/tests/site_owner_routes.rs::site_owner_reaches_only_uploads_and_conflicts`, one table row for each entry of the domain router, sent with the claims `site_owner` and `site:site-a`. The listed routes must not answer `401` `notes.request.unauthenticated`, the change and manifest routes answer `409` `notes.channel_mismatch`, and every other route answers `401` `notes.request.unauthenticated`; after the walk the owner still has one connection and it is not removed. Confirm that it fails on its assertion that no row is wrong, because nine routes serve the claim: the upload status, the connection list, the file list, a file read, an index read, the excluded folders (`200`), the write mode (`202`), the internal file list, and the removal of the connection (`204`).
 - [x] 3.2 GREEN: add a guard to the domain router that reads the session kind and the matched route. It passes a `site_owner` claim on a listed route, answers `notes.channel_mismatch` on the change and manifest routes, and answers `401` `notes.request.unauthenticated` on every other route. Verify 3.1, and verify that the other tests pass unchanged.
+
+## 4. Review follow-ups (review of SITE-027 in notes, items L1 to L4)
+
+- [x] 4.1 Refactor (L1): move every domain route into `routes()` in `services/notes/src/api.rs`, and apply the guard of the session claims to its result, so that each route is guarded by construction. No test: no behaviour changes; `site_owner_routes.rs` passes unchanged.

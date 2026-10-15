@@ -429,6 +429,17 @@ fn pipeline_of(
 /// credentials root: a directory under it is what a crash during a login left behind.
 pub fn domain_router<B: SystemdBus>(state: ApiState<B>) -> Router {
     remove_stale_credentials(&state.credentials_dir);
+    // The guard of the session claims wraps every route of `routes`: `route_layer` covers only
+    // the routes that are in the router when it is called.
+    routes::<B>()
+        .route_layer(axum::middleware::from_fn(site_owner::guard))
+        .layer(DefaultBodyLimit::max(MAX_REQUEST_BYTES))
+        .with_state(state)
+}
+
+/// Every route of the domain router. A new route goes here, so the guard of the session claims
+/// covers it.
+fn routes<B: SystemdBus>() -> Router<ApiState<B>> {
     Router::new()
         .route(
             "/v1/notes/connections",
@@ -496,10 +507,6 @@ pub fn domain_router<B: SystemdBus>(state: ApiState<B>) -> Router {
             site_owner::CHANGES,
             post(channel::post_changes::<B>).layer(DefaultBodyLimit::max(channel::MAX_BATCH_BYTES)),
         )
-        // After the routes, so that the guard reads the matched route.
-        .route_layer(axum::middleware::from_fn(site_owner::guard))
-        .layer(DefaultBodyLimit::max(MAX_REQUEST_BYTES))
-        .with_state(state)
 }
 
 /// Remove the credential files that earlier logins left behind. A failure is logged, and the
