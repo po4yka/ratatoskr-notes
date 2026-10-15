@@ -297,6 +297,10 @@ create table notes.writes (
     -- The number of the delivery of this write in its connection, from `connections.last_delivery`;
     -- null until the write is delivering.
     delivery_sequence bigint,
+    -- Whether the sync writer landed the write in the working tree of its `sync` connection. From
+    -- then on, the next change of its path that the watcher reports is its acknowledgement, also
+    -- with other bytes (OBS-024 design D6).
+    landed         boolean     not null default false,
     -- The SHA-256 of the file after a write that succeeded; null after a delete.
     revision       text,
     -- The error code of a write that failed.

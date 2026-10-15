@@ -8,7 +8,8 @@
 //! - the file has the hash that the write produces: the vault holds the write, which is
 //!   acknowledged (the watcher acknowledges it too when it sees the file first, see
 //!   `writes::echo`);
-//! - the file has the base of the write (no file for a `create`): the writer applies the write. New
+//! - the file has the base of the write (no file for a `create`): the writer marks the write
+//!   landed and applies it. New
 //!   bytes go to a temporary file in the same folder, which is flushed to disk and then renamed over
 //!   the file, so a reader sees the old or the new bytes and never a mix. A `delete` removes the
 //!   file, and a `rename` or a `move` renames it. The Headless client then sends the change to
@@ -75,6 +76,10 @@ enum Step {
     Acknowledge(Option<String>),
     /// The tree has the base: the write was applied, and its echo acknowledges it.
     Applied,
+    /// The tree has the base, and the write may land: a check that changed nothing.
+    Ready,
+    /// A file operation failed: the next pass tries again.
+    Retry,
     /// The tree has other bytes, with this hash (none: no file).
     Mismatch(Option<String>),
     /// The channel cannot apply the write.
@@ -130,10 +135,23 @@ impl SyncWriter {
         for delivery in self.writes.deliveries(connection_id).await? {
             let lock = self.lock(connection_id, &delivery.path);
             let _held = lock.lock().await;
-            let step = self.apply(&tree, &delivery).await;
+            let mut step = self.apply(&tree, &delivery, false).await;
+            if matches!(step, Step::Ready) {
+                // The write lands now: from here, the next change of its path that the watcher
+                // reports is its acknowledgement (design D6).
+                self.writes
+                    .set_landed(connection_id, delivery.write_id, true)
+                    .await?;
+                step = self.apply(&tree, &delivery, true).await;
+                if !matches!(step, Step::Applied | Step::Acknowledge(_)) {
+                    self.writes
+                        .set_landed(connection_id, delivery.write_id, false)
+                        .await?;
+                }
+            }
             done += 1;
             match step {
-                Step::Applied => {}
+                Step::Applied | Step::Ready | Step::Retry => {}
                 Step::Acknowledge(revision) => {
                     self.writes
                         .acknowledge(connection_id, delivery.write_id, revision.as_deref())
@@ -180,14 +198,15 @@ impl SyncWriter {
         Arc::clone(locks.entry((connection_id, path_key(path))).or_default())
     }
 
-    /// Compare the tree with the write and apply it when the tree has its base.
-    async fn apply(&self, tree: &Path, delivery: &Delivery) -> Step {
+    /// Compare the tree with the write, and apply it when the tree has its base and `land` is true;
+    /// when `land` is false, a write that would be applied is [`Step::Ready`] and nothing changes.
+    async fn apply(&self, tree: &Path, delivery: &Delivery, land: bool) -> Step {
         let blobs = self.blobs.clone();
         let delivery = delivery.clone();
         let tree = tree.to_path_buf();
         let applied = tokio::task::spawn_blocking(move || {
             let root = crate::watcher::beneath::open_root(&tree)?;
-            apply_blocking(&blobs, root.as_fd(), &delivery)
+            apply_blocking(&blobs, root.as_fd(), &delivery, land)
         })
         .await;
         match applied {
@@ -195,11 +214,11 @@ impl SyncWriter {
             Ok(Err(error)) if is_unsafe(&error) => Step::Unsafe,
             Ok(Err(error)) => {
                 tracing::error!(%error, "a write of a working tree failed; the next pass tries again");
-                Step::Applied
+                Step::Retry
             }
             Err(error) => {
                 tracing::error!(%error, "a write of a working tree stopped");
-                Step::Applied
+                Step::Retry
             }
         }
     }
@@ -210,6 +229,7 @@ fn apply_blocking(
     blobs: &BlobStore,
     root: BorrowedFd<'_>,
     delivery: &Delivery,
+    land: bool,
 ) -> std::io::Result<Step> {
     let Some((folder, name)) = split(&delivery.path) else {
         return Ok(Step::Unsafe);
@@ -234,6 +254,9 @@ fn apply_blocking(
             let Some(source) = blobs.path_of(&content) else {
                 return Ok(Step::Unsupported);
             };
+            if !land {
+                return Ok(Step::Ready);
+            }
             let parent = match parent {
                 Some(parent) => parent,
                 None => open_folder(root, folder, true)?.ok_or_else(missing)?,
@@ -243,6 +266,7 @@ fn apply_blocking(
         }
         "delete" => match (&current, &parent) {
             (None, _) => Ok(Step::Acknowledge(None)),
+            (Some(_), Some(_)) if current == base && !land => Ok(Step::Ready),
             (Some(_), Some(parent)) if current == base => {
                 rustix::fs::unlinkat(parent.as_fd(), name, AtFlags::empty())?;
                 Ok(Step::Applied)
@@ -269,6 +293,9 @@ fn apply_blocking(
             if moved.is_some() {
                 return mismatch(blobs, opened);
             }
+            if !land {
+                return Ok(Step::Ready);
+            }
             let target_parent = match target_parent {
                 Some(target_parent) => target_parent,
                 None => open_folder(root, target_folder, true)?.ok_or_else(missing)?,
@@ -282,6 +309,9 @@ fn apply_blocking(
             };
             if current != base {
                 return mismatch(blobs, Some(file));
+            }
+            if !land {
+                return Ok(Step::Ready);
             }
             set_property(blobs, parent.as_fd(), name, file, delivery)
         }

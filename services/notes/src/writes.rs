@@ -138,8 +138,8 @@ pub(crate) fn expected_hash(write: &ratatoskr_notes_persistence::WriteRow) -> Op
 
 /// Whether the change of `path` to the SHA-256 `digest` (`None`: the file left the tree) is the
 /// echo of the delivered write at the head of its queue, and if so acknowledge that write. A
-/// `create`, an `update` or a resolution is echoed by its path with its content hash, and a
-/// `delete` by the removal of its path. Returns the write that the echo acknowledged.
+/// `create`, an `update` or a resolution is echoed by its path with its content hash, or with any
+/// hash once the sync writer landed it in the tree, and a `delete` by the removal of its path. Returns the write that the echo acknowledged.
 ///
 /// # Errors
 ///
@@ -161,10 +161,13 @@ pub(crate) async fn echo(
     let Some(head) = head.filter(|head| head.state == "delivering" && head.path == path) else {
         return Ok(None);
     };
+    // After the write landed in the tree, the next change of its path is its acknowledgement,
+    // also with other bytes: the vault rewrote the file, for example Obsidian formatted it
+    // (design D6). Before it landed, only the exact bytes are.
     let echoes = match digest {
         Some(digest) => {
             matches!(head.kind.as_str(), "create" | "update" | "resolve_conflict")
-                && head.content_hash.as_deref() == Some(digest)
+                && (head.landed || head.content_hash.as_deref() == Some(digest))
         }
         None => head.kind == "delete",
     };
@@ -533,6 +536,25 @@ impl Writes {
             .recorder
             .database()
             .sync_connections_delivering()
+            .await?)
+    }
+
+    /// Mark the delivering write `write_id` of `connection_id` as landed in the working tree of its
+    /// `sync` connection, or no longer landed when its write did not happen.
+    ///
+    /// # Errors
+    ///
+    /// [`WriteError`] when the database fails.
+    pub async fn set_landed(
+        &self,
+        connection_id: Uuid,
+        write_id: Uuid,
+        landed: bool,
+    ) -> Result<(), WriteError> {
+        Ok(self
+            .recorder
+            .database()
+            .set_landed(connection_id, write_id, landed)
             .await?)
     }
 

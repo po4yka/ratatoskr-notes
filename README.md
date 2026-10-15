@@ -222,6 +222,10 @@ channel is a conflict.
 the hash of the delivered write at the head of its queue is the echo of that write and its
 acknowledgement: the content hash of a `create`, an `update` or a resolution, or the removal of the
 path of a `delete`. The write's revision becomes current, and one `notes.file.changed.v1` names it.
+After the sync writer landed a write in the working tree, the next change of its path that the
+watcher reports is its acknowledgement, also with other bytes: the vault rewrote the file after the
+write landed, for example Obsidian formatted it. Before the write landed, a change with other bytes
+is a change of the vault, and the write then fails as a conflict.
 When a channel acknowledges a write with another hash than the write named (a plugin formatted the
 file on save), the acknowledged bytes become current and are published once, the expected bytes
 never are, and the operation succeeds with that hash and the warning `notes.write.transformed`.

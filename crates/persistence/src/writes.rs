@@ -89,6 +89,8 @@ pub struct WriteRow {
     pub property_change: Option<String>,
     /// The order of acceptance in the connection.
     pub position: i64,
+    /// Whether the write landed in the working tree of its `sync` connection.
+    pub landed: bool,
     /// The number of the delivery of the write in its connection: the cursor of the queue of a
     /// device. `None` until the write is delivering.
     pub delivery_sequence: Option<i64>,
@@ -159,7 +161,7 @@ pub struct ConflictRow {
 const WRITE_COLUMNS: &str =
     "write_id, connection_id, operation_id, origin, kind, path, path_key, target_path,
      base_hash, content_hash, content_length, state, revision, error_code, conflict_id, resolves,
-     choice, target_path_key, property_key, property_change, position, delivery_sequence";
+     choice, target_path_key, property_key, property_change, position, delivery_sequence, landed";
 
 impl<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow> for WriteRow {
     fn from_row(row: &'r sqlx::postgres::PgRow) -> Result<Self, sqlx::Error> {
@@ -188,6 +190,7 @@ impl<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow> for WriteRow {
             property_key: row.try_get("property_key")?,
             property_change: row.try_get("property_change")?,
             position: row.try_get("position")?,
+            landed: row.try_get("landed")?,
             delivery_sequence: row.try_get("delivery_sequence")?,
         })
     }
@@ -606,6 +609,30 @@ impl Database {
         .await
         .map_err(query_error)?;
         Ok(rows)
+    }
+
+    /// Mark the delivering write `write_id` of `connection_id` landed or not.
+    ///
+    /// # Errors
+    ///
+    /// [`PersistenceError::Query`] when the statement fails.
+    pub async fn set_landed(
+        &self,
+        connection_id: Uuid,
+        write_id: Uuid,
+        landed: bool,
+    ) -> Result<(), PersistenceError> {
+        sqlx::query(
+            "update notes.writes set landed = $3, updated_at = now()
+             where connection_id = $1 and write_id = $2 and state = 'delivering'",
+        )
+        .bind(connection_id)
+        .bind(write_id)
+        .bind(landed)
+        .execute(self.pool())
+        .await
+        .map_err(query_error)?;
+        Ok(())
     }
 
     /// The `sync` connections that are `connecting` or `active` and have a delivering write.
