@@ -30,7 +30,9 @@ fn site_owner() -> [(&'static str, String); 2] {
 /// What a route answers to a site owner claim.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Expected {
-    /// The route serves the claim: the answer is not a refusal of the session kind.
+    /// The handler of the route serves the claim: the answer carries a code of the handler, which
+    /// is neither a refusal of the guard nor `notes.channel_mismatch`. Each such row names an id
+    /// that does not exist, so the handler answers with its own code.
     Served,
     /// `409` `notes.channel_mismatch`, as for every session on a device channel route.
     ChannelMismatch,
@@ -43,7 +45,7 @@ enum Expected {
 const ROUTES: [(Method, &str, Expected); 20] = [
     (
         Method::POST,
-        "/v1/notes/connections/{c}/blobs",
+        "/v1/notes/connections/{u}/blobs",
         Expected::Served,
     ),
     (
@@ -202,7 +204,12 @@ async fn site_owner_reaches_only_uploads_and_conflicts() {
         .filter(|(_, expected, answer)| {
             let refusal = (answer.status, answer.body["code"].as_str());
             match expected {
-                Expected::Served => refusal == unauthenticated,
+                Expected::Served => {
+                    refusal == unauthenticated
+                        || refusal
+                            .1
+                            .is_none_or(|code| code.is_empty() || code == "notes.channel_mismatch")
+                }
                 Expected::ChannelMismatch => {
                     refusal != (StatusCode::CONFLICT, Some("notes.channel_mismatch"))
                 }
