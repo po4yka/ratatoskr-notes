@@ -228,12 +228,15 @@ impl Locked<'_> {
                     Some(revision) => self.recorder.blob_length(revision).await.unwrap_or(0),
                     None => 0,
                 };
+                let transformed = super::expected_hash(write)
+                    .is_some_and(|expected| write.revision.as_deref() != Some(expected));
                 let result = FileResult {
                     file_id: file.file_id,
                     revision: write
                         .revision
                         .as_deref()
                         .map(|revision| (revision, media_type(path), length)),
+                    transformed,
                 };
                 self.report_one(operation_id, Step::Succeeded(Some(result)))
                     .await

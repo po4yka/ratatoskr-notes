@@ -7,13 +7,14 @@
 //! - `running` with the stage `queued` when the write waits in the queue of its file;
 //! - `running` with the stage `delivering` when the channel of the connection delivers it;
 //! - `succeeded` after the acknowledgement, with one result `notes.file` that names the file and
-//!   the `BlobRef` of its new revision (no `BlobRef` after a delete);
+//!   the `BlobRef` of its new revision (no `BlobRef` after a delete), and the warning
+//!   `notes.write.transformed` when the vault acknowledged other bytes than the write named;
 //! - `failed` with a typed error otherwise. A conflict is the non-retryable
 //!   `notes.write.conflict` with the extension `conflict_id`.
 //!
 //! A report carries no path and no content: the codes and the messages are fixed texts.
 
-use ratatoskr_error_contracts::{ErrorCode, ErrorEnvelope};
+use ratatoskr_error_contracts::{ErrorCode, ErrorEnvelope, WarningEnvelope};
 use ratatoskr_event_envelope::EventPayload as _;
 use ratatoskr_identifiers::{
     BlobOwner, BlobRef, ContentDigest, DigestAlgorithm, DigestHex, EntityRef, Extensions,
@@ -31,6 +32,12 @@ use crate::operation;
 /// The kind of the result of a write that succeeded.
 const RESULT_KIND: &str = "notes.file";
 
+/// The warning of a write whose acknowledged bytes differ from the bytes it named.
+const TRANSFORMED: (&str, &str) = (
+    "notes.write.transformed",
+    "The vault changed the bytes of the write when it applied it. Its bytes are current.",
+);
+
 /// The file that a write that succeeded leaves.
 #[derive(Debug, Clone, Copy)]
 pub(super) struct FileResult<'a> {
@@ -38,6 +45,9 @@ pub(super) struct FileResult<'a> {
     pub(super) file_id: Uuid,
     /// The SHA-256 of its bytes now, its media type and their length; `None` after a delete.
     pub(super) revision: Option<(&'a str, &'a str, u64)>,
+    /// The vault holds other bytes than the write named, for example because a plugin formatted
+    /// the file on save: the report carries the warning `notes.write.transformed`.
+    pub(super) transformed: bool,
 }
 
 /// One report of a write.
@@ -133,6 +143,16 @@ fn payload(operation_id: Uuid, step: Step<'_>) -> Result<OperationReported, Enve
             payload.status = OperationStatus::Succeeded;
             if let Some(file) = file {
                 payload.results.push(result(file)?);
+                if file.transformed {
+                    let (code, message) = TRANSFORMED;
+                    payload.warnings.push(WarningEnvelope {
+                        code: ErrorCode::parse(code).map_err(|_| EnvelopeBuildError::STAGE)?,
+                        message: SafeMessage::parse(message)
+                            .map_err(|_| EnvelopeBuildError::STAGE)?,
+                        field_path: None,
+                        extensions: Extensions::new(),
+                    });
+                }
             }
         }
         Step::Failed(code, conflict_id) => {

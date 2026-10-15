@@ -120,6 +120,59 @@ impl From<RecordError> for WriteError {
     }
 }
 
+/// The SHA-256 that the file at the path of `write` has after the vault applied it as written:
+/// the content of a `create`, an `update` or a resolution, and the base of a `rename` or a `move`.
+/// `None` for a `delete` and a `set_property`, whose bytes notes does not compute.
+pub(crate) fn expected_hash(write: &ratatoskr_notes_persistence::WriteRow) -> Option<&str> {
+    match write.kind.as_str() {
+        "create" | "update" | "resolve_conflict" => write.content_hash.as_deref(),
+        "rename" | "move" => write.base_hash.as_deref(),
+        _ => None,
+    }
+}
+
+/// Whether the change of `path` to the SHA-256 `digest` (`None`: the file left the tree) is the
+/// echo of the delivered write at the head of its queue, and if so acknowledge that write. A
+/// `create`, an `update` or a resolution is echoed by its path with its content hash, and a
+/// `delete` by the removal of its path. Returns the write that the echo acknowledged.
+///
+/// # Errors
+///
+/// [`RecordError`] when the database fails.
+pub(crate) async fn echo(
+    recorder: &FileRecorder,
+    connection_id: Uuid,
+    path: &str,
+    digest: Option<&str>,
+) -> Result<Option<Uuid>, RecordError> {
+    let Some((mut transaction, _)) = recorder.database().begin_file_change(connection_id).await?
+    else {
+        return Ok(None);
+    };
+    let head = transaction
+        .queue_head(&ratatoskr_notes_index::paths::path_key(path))
+        .await?;
+    drop(transaction);
+    let Some(head) = head.filter(|head| head.state == "delivering" && head.path == path) else {
+        return Ok(None);
+    };
+    let echoes = match digest {
+        Some(digest) => {
+            matches!(head.kind.as_str(), "create" | "update" | "resolve_conflict")
+                && head.content_hash.as_deref() == Some(digest)
+        }
+        None => head.kind == "delete",
+    };
+    if !echoes {
+        return Ok(None);
+    }
+    let acknowledged = Writes::new(recorder.clone())
+        .end(connection_id, head.write_id, End::Acknowledged(digest))
+        .await
+        .map_err(|_| RecordError::WRITE)?;
+    Ok(acknowledged.then_some(head.write_id))
+}
+
 /// How the channel ended a delivered write.
 #[derive(Debug, Clone, Copy)]
 enum End<'a> {

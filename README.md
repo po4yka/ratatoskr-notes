@@ -217,6 +217,14 @@ acknowledgement of the channel makes the revision current and writes `notes.file
 refusal of the channel leaves the previous revision current; a base mismatch reported by the
 channel is a conflict.
 
+**Acknowledgement and echo.** On the `sync` channel, a change of the working tree with the path and
+the hash of the delivered write at the head of its queue is the echo of that write and its
+acknowledgement: the content hash of a `create`, an `update` or a resolution, or the removal of the
+path of a `delete`. The write's revision becomes current, and one `notes.file.changed.v1` names it.
+When a channel acknowledges a write with another hash than the write named (a plugin formatted the
+file on save), the acknowledged bytes become current and are published once, the expected bytes
+never are, and the operation succeeds with that hash and the warning `notes.write.transformed`.
+
 **Reports.** Notes is the only reporter of `notes.file.write`. Each report goes to the outbox as
 `platform.operation.reported.v1`:
 

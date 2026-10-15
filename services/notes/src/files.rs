@@ -51,6 +51,12 @@ pub enum Recorded {
     },
     /// Nothing changed and nothing is published.
     Nothing,
+    /// The change is the echo of a write that notes delivered through the `sync` channel: it
+    /// acknowledged that write, which made its revision current and published it once.
+    Acknowledged {
+        /// The write.
+        write_id: Uuid,
+    },
 }
 
 /// A change could not be recorded. The message names no path: a file name is the owner's content.
@@ -62,6 +68,9 @@ impl RecordError {
     /// The channel acknowledged a write with bytes that the blob root does not hold.
     pub(crate) const ACKNOWLEDGED_BYTES: Self =
         Self("the acknowledged bytes are not in the blob root");
+
+    /// The write that a change acknowledged could not be ended.
+    pub(crate) const WRITE: Self = Self("the write that the change acknowledged");
 }
 
 impl From<ratatoskr_notes_persistence::PersistenceError> for RecordError {
@@ -144,7 +153,9 @@ impl FileRecorder {
 
     /// Record one change of a file of `connection_id`. A connection that is not `connecting` or
     /// `active`, an excluded path, a path that the contract refuses, equal bytes and a collision
-    /// record [`Recorded::Nothing`].
+    /// record [`Recorded::Nothing`]. A change with the path and the hash of a write that notes
+    /// delivered and that waits for its acknowledgement is that acknowledgement
+    /// ([`Recorded::Acknowledged`]): the echo of Ratatoskr's own write (OBS-024 design D6).
     ///
     /// # Errors
     ///
@@ -164,6 +175,13 @@ impl FileRecorder {
         if VaultPath::parse(&path).is_err() {
             tracing::warn!(%connection_id, "a file whose path the contract refuses is not indexed");
             return Ok(Recorded::Nothing);
+        }
+        let digest = match change {
+            TreeChange::Revision { digest, .. } => Some(digest.as_str()),
+            TreeChange::Removed { .. } => None,
+        };
+        if let Some(write_id) = crate::writes::echo(self, connection_id, &path, digest).await? {
+            return Ok(Recorded::Acknowledged { write_id });
         }
         let note_index = match change {
             TreeChange::Revision { digest, length, .. } => {
