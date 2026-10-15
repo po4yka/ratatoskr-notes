@@ -23,13 +23,16 @@ pub(super) struct Request {
     pub(super) base_hash: Option<String>,
     pub(super) content_hash: Option<String>,
     pub(super) content_length: Option<u64>,
+    /// The conflict that a `resolve_conflict` ends, and the wire word of its choice. Its path,
+    /// its base and, except for `custom`, its content come from the conflict.
+    pub(super) resolution: Option<(Uuid, &'static str)>,
 }
 
 impl Request {
     /// The facts of `command`, or `None` when it is not a valid write command of a user: another
     /// command type, a payload that `notes/write-request.v1` refuses, no `user:` tenant, or an
-    /// aggregate that is not its operation. A `resolve_conflict`, which names a conflict and not a
-    /// path, is not taken yet.
+    /// aggregate that is not its operation. A `resolve_conflict` names a conflict and not a path:
+    /// its path is empty here.
     pub(super) fn parse(command: &CommandEnvelope) -> Option<Self> {
         let payload: FileWriteRequested = command.payload_as().ok()?;
         let owner_id = command.tenant_id?.user_id().0;
@@ -37,6 +40,7 @@ impl Request {
         if command.aggregate_id.to_wire() != format!("operation:{operation_id}") {
             return None;
         }
+        let mut resolution = None;
         let (kind, path, target_path, base_hash, content) = match &payload.operation {
             WriteOperation::Create(create) => (
                 "create",
@@ -76,7 +80,10 @@ impl Request {
                     _ => None,
                 },
             ),
-            // A resolution names a conflict, not a path.
+            WriteOperation::ResolveConflict(resolve) => {
+                resolution = Some((resolve.conflict_id.0, resolve.choice.as_str()));
+                ("resolve_conflict", "", None, None, resolve.blob.as_ref())
+            }
             _ => return None,
         };
         let path = nfc_path(path);
@@ -96,6 +103,7 @@ impl Request {
             base_hash: base_hash.map(str::to_owned),
             content_hash: content.map(|blob| blob.digest.hex.as_str().to_owned()),
             content_length: content.map(|blob| blob.length_bytes),
+            resolution,
         })
     }
 
@@ -126,6 +134,7 @@ impl Request {
             base_hash: self.base_hash.as_deref(),
             content_hash: self.content_hash.as_deref(),
             content_length: self.content_length,
+            resolves: self.resolution,
         }
     }
 }

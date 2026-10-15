@@ -29,7 +29,7 @@ pub use crate::connections::{
 pub use crate::files::{FileRow, FileTransaction, LockedConnection, NewCollision, NewRevision};
 pub use crate::outbox::PendingEvent;
 pub use crate::reads::{ConnectionStatus, FileSummary};
-pub use crate::writes::{ConflictRow, NewConflict, NewWrite, WriteRow};
+pub use crate::writes::{ConflictRow, NewConflict, NewWrite, OpenConflict, WriteRow};
 
 /// The schema, embedded at compile time.
 ///

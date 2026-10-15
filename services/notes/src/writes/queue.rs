@@ -16,14 +16,28 @@ use ratatoskr_notes_persistence::{
 };
 use uuid::Uuid;
 
-use super::CONFLICT;
-use super::conflict::{self, Raised, Sides};
+use super::conflict::{self, Raised, Resolved, Sides};
 use super::report::{FileResult, ReportRow, Step};
+use super::{CONFLICT, CONFLICT_NOT_FOUND};
 use crate::events::EnvelopeBuildError;
 use crate::files::{FileRecorder, RecordError, Revision, media_type};
 
 /// The event type of a raised conflict.
 const RAISED: &str = "notes.conflict.raised.v1";
+
+/// The event type of a resolved conflict.
+const RESOLVED: &str = "notes.conflict.resolved.v1";
+
+/// What the head of a queue does now.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Check {
+    /// The base is current: deliver the write.
+    Deliver,
+    /// The base is not current: a conflict with this current revision of the file.
+    Conflict(Option<String>),
+    /// The write cannot be delivered: fail it with this code.
+    Fail(&'static str),
+}
 
 /// The changes of the files of one connection, under the lock of its row.
 pub(super) struct Locked<'a> {
@@ -35,60 +49,115 @@ pub(super) struct Locked<'a> {
 
 impl Locked<'_> {
     /// Deliver the head of the queue of `path_key` when it waits and its base is current. A head
-    /// whose base is not current fails as a conflict, and the next write becomes the head.
+    /// whose base is not current fails as a conflict, and the next write becomes the head. A
+    /// resolution `keep_current` whose base is current needs no delivery: it ends at once.
     pub(super) async fn advance(&mut self, path_key: &str) -> Result<(), RecordError> {
         while let Some(head) = self.transaction.queue_head(path_key).await? {
             if head.state != "queued" {
                 return Ok(());
             }
             match self.check_base(&head).await? {
-                Ok(()) => {
+                Check::Deliver if head.choice.as_deref() == Some("keep_current") => {
+                    let revision = head.base_hash.as_deref();
+                    self.succeed(&head, revision).await?;
+                    self.resolved(&head, revision).await?;
+                }
+                Check::Deliver => {
                     self.transaction.deliver_write(head.write_id).await?;
                     self.report(head.write_id, Step::Delivering).await?;
                     return Ok(());
                 }
-                Err(current) => self.conflict(&head, current.as_deref()).await?,
+                Check::Conflict(current) => self.conflict(&head, current.as_deref()).await?,
+                Check::Fail(code) => self.fail(&head, code).await?,
             }
         }
         Ok(())
     }
 
-    /// `Ok` when `write` may be delivered now; otherwise the current revision of its file, or
-    /// `None` when no present file holds its path key. A `create` passes only when no present
-    /// file has its path key, which is case-folded and in NFC; every other write only when the
-    /// present file with its path key has its base revision. A `rename` or a `move` also needs a
-    /// target path key that no other present file holds.
-    async fn check_base(
-        &mut self,
-        write: &WriteRow,
-    ) -> Result<Result<(), Option<String>>, RecordError> {
+    /// Whether `write` may be delivered now. A `create` passes only when no present file has its
+    /// path key, which is case-folded and in NFC; every other write only when the present file
+    /// with its path key has its base revision, and a resolution only while its conflict is open
+    /// and the file still has the revision that the conflict recorded. A `rename` or a `move` also
+    /// needs a target path key that no other present file holds.
+    async fn check_base(&mut self, write: &WriteRow) -> Result<Check, RecordError> {
         let current = self
             .transaction
             .file_by_key(&write.path_key)
             .await?
             .filter(|file| file.present)
             .map(|file| file.revision);
-        let base_is_current = match write.kind.as_str() {
-            "create" => current.is_none(),
-            "resolve_conflict" => true,
+        let base_is_current = match (write.kind.as_str(), write.resolves) {
+            ("create", _) => current.is_none(),
+            ("resolve_conflict", Some(conflict_id)) => {
+                if self.transaction.open_conflict(conflict_id).await?.is_none() {
+                    return Ok(Check::Fail(CONFLICT_NOT_FOUND));
+                }
+                write.base_hash == current
+            }
             _ => current.is_some() && write.base_hash == current,
         };
         if !base_is_current {
-            return Ok(Err(current));
+            return Ok(Check::Conflict(current));
         }
         let Some(target) = write.target_path.as_deref() else {
-            return Ok(Ok(()));
+            return Ok(Check::Deliver);
         };
         let target_key = path_key(target);
         if target_key == write.path_key {
-            return Ok(Ok(()));
+            return Ok(Check::Deliver);
         }
         let taken = self
             .transaction
             .file_by_key(&target_key)
             .await?
             .is_some_and(|file| file.present);
-        Ok(if taken { Err(current) } else { Ok(()) })
+        Ok(if taken {
+            Check::Conflict(current)
+        } else {
+            Check::Deliver
+        })
+    }
+
+    /// Mark the conflict that the resolution `write` ends `resolved`, and write
+    /// `notes.conflict.resolved.v1` with the file at `revision`. A write that ends no conflict
+    /// changes nothing.
+    pub(super) async fn resolved(
+        &mut self,
+        write: &WriteRow,
+        revision: Option<&str>,
+    ) -> Result<(), RecordError> {
+        let Some(conflict_id) = write.resolves else {
+            return Ok(());
+        };
+        self.transaction.resolve_conflict(conflict_id).await?;
+        let Some(revision) = revision else {
+            return Ok(());
+        };
+        let event_id = Uuid::now_v7();
+        let envelope = conflict::resolved_envelope(
+            event_id,
+            &Resolved {
+                conflict_id,
+                owner_id: self.connection.owner_id,
+                operation_id: write.operation_id,
+                connection_id: self.connection_id,
+                path: &write.path,
+                origin: &write.origin,
+                revision,
+            },
+        )?;
+        let envelope = serde_json::to_value(envelope).map_err(|_| EnvelopeBuildError::SERIALIZE)?;
+        let aggregate_id = conflict::conflict_aggregate(conflict_id);
+        self.transaction
+            .write_event(&OutboxEvent {
+                event_id,
+                event_type: RESOLVED,
+                aggregate_type: conflict::CONFLICT_AGGREGATE,
+                aggregate_id: &aggregate_id,
+                envelope: &envelope,
+            })
+            .await?;
+        Ok(())
     }
 
     /// Record a conflict of `write` with the revision `current` of the vault, with a merge

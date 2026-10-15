@@ -261,7 +261,14 @@ async fn resolution_is_published_on_acknowledgement() {
     .await;
     let conflict_id = last_conflict(&writer, connection).await;
 
-    let resolution = command(connection, &resolve(&conflict_id, "keep_writer"));
+    // The site that raised the conflict also resolves it; the resolved event names who resolved.
+    let resolution = command_with(
+        OWNER,
+        connection,
+        "site:docs",
+        "site-resolution",
+        &resolve(&conflict_id, "keep_writer"),
+    );
     writer.send(&resolution).await;
     let delivered = writer.deliveries(connection).await;
     let before = writer.events_of(connection, RESOLVED).await;

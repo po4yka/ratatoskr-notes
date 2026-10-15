@@ -271,6 +271,10 @@ create table notes.writes (
     -- The SHA-256 and the length of the uploaded bytes that the write puts at the path.
     content_hash   text,
     content_length bigint,
+    -- The conflict that a `resolve_conflict` ends, and its choice. No foreign key: the table
+    -- `conflicts` names its write and comes after this one.
+    resolves       uuid,
+    choice         text,
     -- `queued`, then `delivering`, then `succeeded` or `failed`.
     state          text        not null,
     -- The SHA-256 of the file after a write that succeeded; null after a delete.
@@ -295,6 +299,10 @@ create table notes.writes (
     constraint writes_content_length_is_not_negative check (content_length >= 0),
     constraint writes_path_is_bounded check (length(path) between 1 and 1024),
     constraint writes_failure_has_a_code check ((state = 'failed') = (error_code is not null)),
+    constraint writes_resolution_names_its_conflict
+        check ((kind = 'resolve_conflict') = (resolves is not null and choice is not null)),
+    constraint writes_choice_is_known
+        check (choice in ('keep_current', 'keep_writer', 'accept_merge', 'custom')),
     constraint writes_one_per_idempotency_key unique (connection_id, idempotency_key),
     constraint writes_idempotency_key_is_sha256 check (idempotency_key ~ '^[0-9a-f]{64}$'),
     constraint writes_request_digest_is_sha256 check (request_digest ~ '^[0-9a-f]{64}$')

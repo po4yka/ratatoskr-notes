@@ -6,12 +6,17 @@
 //! For `text/markdown` and `text/plain`, when notes holds the bytes of all three sides as UTF-8
 //! text, the conflict carries a merge proposal: the merged bytes go to the blob root, and the event
 //! names their hash and whether the merge has overlapping hunks.
+//!
+//! `notes.conflict.resolved.v1` follows the acknowledgement of the `resolve_conflict` write, with
+//! the operation and the origin of that write and the revision after it.
 
 use ratatoskr_event_envelope::{EventEnvelope, EventPayload as _};
 use ratatoskr_identifiers::{
     DigestHex, MediaType, NotesConflictId, NotesConnectionId, OperationId,
 };
-use ratatoskr_notes_contracts::{ConflictRaised, MergeProposal, VaultPath, WriteOrigin};
+use ratatoskr_notes_contracts::{
+    ConflictRaised, ConflictResolved, MergeProposal, VaultPath, WriteOrigin,
+};
 use sha2::{Digest as _, Sha256};
 use uuid::Uuid;
 
@@ -139,6 +144,45 @@ pub(super) fn raised_envelope(
         &conflict_aggregate(raised.conflict_id),
         &operation::operation_aggregate(raised.operation_id),
         raised.owner_id,
+        &payload,
+    )
+}
+
+/// What a resolved conflict names: the resolution write and the revision after it.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct Resolved<'a> {
+    pub(super) conflict_id: Uuid,
+    pub(super) owner_id: Uuid,
+    pub(super) operation_id: Uuid,
+    pub(super) connection_id: Uuid,
+    pub(super) path: &'a str,
+    pub(super) origin: &'a str,
+    pub(super) revision: &'a str,
+}
+
+/// The envelope of `notes.conflict.resolved.v1` for `resolved`.
+///
+/// # Errors
+///
+/// [`EnvelopeBuildError`] when a value does not satisfy the contract.
+pub(super) fn resolved_envelope(
+    event_id: Uuid,
+    resolved: &Resolved<'_>,
+) -> Result<EventEnvelope, EnvelopeBuildError> {
+    let payload = ConflictResolved {
+        conflict_id: NotesConflictId(resolved.conflict_id),
+        operation_id: OperationId(resolved.operation_id),
+        connection_id: NotesConnectionId(resolved.connection_id),
+        path: VaultPath::parse(resolved.path).map_err(|_| EnvelopeBuildError::STAGE)?,
+        origin: WriteOrigin::parse(resolved.origin).map_err(|_| EnvelopeBuildError::STAGE)?,
+        revision: DigestHex::parse(resolved.revision).map_err(|_| EnvelopeBuildError::STAGE)?,
+    };
+    events::correlated_envelope(
+        event_id,
+        ConflictResolved::event_type(),
+        &conflict_aggregate(resolved.conflict_id),
+        &operation::operation_aggregate(resolved.operation_id),
+        resolved.owner_id,
         &payload,
     )
 }

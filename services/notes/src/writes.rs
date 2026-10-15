@@ -132,6 +132,9 @@ const DISABLED: &str = "notes.write.disabled";
 /// The code of a write whose content notes does not hold for its connection.
 const CONTENT_MISSING: &str = "notes.write.content_missing";
 
+/// The code of a resolution whose conflict the connection does not hold open.
+const CONFLICT_NOT_FOUND: &str = "notes.conflict.not_found";
+
 /// The code of a write that met a revision that its writer did not see.
 const CONFLICT: &str = "notes.write.conflict";
 
@@ -155,6 +158,12 @@ impl Writes {
     /// uploaded or holds as a revision, with the declared length; otherwise the command is
     /// refused with `notes.write.content_missing`.
     ///
+    /// A `resolve_conflict` names an open conflict of the connection (else
+    /// `notes.conflict.not_found`). It writes the file of the conflict on the revision that the
+    /// conflict recorded as current: `keep_current` that revision, `keep_writer` the writer's
+    /// content, `accept_merge` the merge proposal, and `custom` uploaded bytes. A choice without
+    /// its side is refused with `notes.request.invalid`.
+    ///
     /// A command whose idempotency key names an earlier write of the connection queues nothing:
     /// with the same origin and operation its operation reports the outcome of that write, and
     /// with others it is refused with `notes.request.invalid`.
@@ -163,7 +172,7 @@ impl Writes {
     ///
     /// [`WriteError`] when the database fails; the command is delivered again.
     pub async fn handle(&self, command: &CommandEnvelope) -> Result<Handled, WriteError> {
-        let Some(request) = Request::parse(command) else {
+        let Some(mut request) = Request::parse(command) else {
             if let Some((owner_id, operation_id)) = Request::operation_of(command) {
                 self.refused(owner_id, operation_id, INVALID).await?;
             }
@@ -210,7 +219,43 @@ impl Writes {
             transaction.commit().await?;
             return Ok(Handled::Repeated { write_id });
         }
-        if let Some(digest) = &request.content_hash {
+        // The content of a resolution other than `custom` is a side of its conflict, which notes
+        // holds; the content of any other write is bytes that the client uploaded.
+        let uploaded = request
+            .resolution
+            .is_none_or(|(_, choice)| choice == "custom");
+        if let Some((conflict_id, choice)) = request.resolution {
+            let Some(conflict) = locked.transaction.open_conflict(conflict_id).await? else {
+                drop(transaction);
+                return self.refuse_request(&request, CONFLICT_NOT_FOUND).await;
+            };
+            let content = match choice {
+                "keep_writer" => conflict.writer_hash,
+                "accept_merge" => conflict.merged_hash,
+                _ => request.content_hash.clone(),
+            };
+            // `keep_writer` needs content and `accept_merge` a proposal, and the resolved event
+            // needs a revision, which `keep_current` of a deleted file does not have.
+            let usable = match choice {
+                "keep_current" => conflict.current_hash.is_some(),
+                _ => content.is_some(),
+            };
+            if !usable {
+                drop(transaction);
+                return self.refuse_request(&request, INVALID).await;
+            }
+            if !uploaded {
+                request.content_length = match &content {
+                    Some(digest) => self.recorder.blob_length(digest).await,
+                    None => None,
+                };
+            }
+            request.content_hash = content;
+            request.path_key = conflict.path_key;
+            request.path = conflict.path;
+            request.base_hash = conflict.current_hash;
+        }
+        if let Some(digest) = request.content_hash.as_ref().filter(|_| uploaded) {
             let usable = self
                 .recorder
                 .usable_length(locked.transaction, digest)
@@ -352,6 +397,7 @@ impl Writes {
                 };
                 locked.record(&write, revision).await?;
                 locked.succeed(&write, revision).await?;
+                locked.resolved(&write, revision).await?;
             }
             End::Refused(Refusal::BaseMismatch { local_hash }) => {
                 locked.conflict(&write, local_hash.as_deref()).await?;

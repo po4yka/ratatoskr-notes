@@ -199,6 +199,8 @@ nothing:
 | The tenant holds the connection, and the connection is `connecting` or `active` | `notes.connection.not_found` (also for a connection of another owner) |
 | The write mode of the connection is on (it starts off) | `notes.write.disabled` |
 | The idempotency key of the connection, when an earlier write has it, comes with the same origin and operation | `notes.request.invalid` |
+| A `resolve_conflict` names an open conflict of the connection | `notes.conflict.not_found` |
+| A `resolve_conflict` has the side that its choice takes (see Resolution) | `notes.request.invalid` |
 | The connection uploaded the bytes of the `BlobRef`, or holds them as a revision, with the declared length | `notes.write.content_missing` |
 
 A command whose key repeats an earlier write with the same origin and operation queues nothing:
@@ -235,6 +237,26 @@ notes writes `notes.conflict.raised.v1` (contract `notes/conflict.v1`, aggregate
 `notes_conflict:<conflict id>`, correlated to the operation) with the conflict id, the operation,
 the connection, the path, the origin, the media type, the three hashes and the proposal. The event
 carries hashes and never file content.
+
+**Resolution.** A conflict stays open until a `resolve_conflict` write ends it. The command names
+the conflict and a choice, and no `base_hash`: the resolution writes the file of the conflict on the
+revision that the conflict recorded as current. It waits in the queue of that file like any other
+write. At the head, notes checks that the conflict is still open (else `notes.conflict.not_found`)
+and that the file still has that revision. When the vault changed the file again, the resolution
+raises a second conflict (the old current revision as base, the new one as current, the side of the
+choice as the writer's content), fails with `notes.write.conflict`, and changes nothing; the first
+conflict stays open.
+
+| Choice | Content that the resolution writes | Refused with `notes.request.invalid` when |
+|---|---|---|
+| `keep_current` | Nothing: the current revision stays. The resolution ends at the head without a delivery. | The vault holds no current revision of the file. |
+| `keep_writer` | The writer's content of the conflict. | The conflict has no writer's content (a `delete`, a `rename`). |
+| `accept_merge` | The merge proposal of the conflict, also one with overlapping hunks. | The conflict has no merge proposal. |
+| `custom` | The bytes of `blob`, which the owner uploaded to the connection first. | Never: the contract requires `blob`. |
+
+When the channel acknowledges the resolution (or at once for `keep_current`), notes marks the
+conflict `resolved` and writes `notes.conflict.resolved.v1` with the conflict id, the operation and
+the origin of the resolution, the connection, the path and the revision after it.
 
 `GET /v1/notes/conflicts/{conflict_id}` answers a conflict of a connection of the owner:
 `conflict_id`, `operation_id`, `connection_id`, `path`, `origin`, `media_type`, `state` (`open` or

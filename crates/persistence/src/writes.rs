@@ -36,6 +36,8 @@ pub struct NewWrite<'a> {
     pub content_hash: Option<&'a str>,
     /// The number of those bytes.
     pub content_length: Option<u64>,
+    /// The conflict that a `resolve_conflict` ends, and its choice.
+    pub resolves: Option<(Uuid, &'a str)>,
 }
 
 /// One recorded write.
@@ -69,6 +71,25 @@ pub struct WriteRow {
     pub error_code: Option<String>,
     /// The conflict that a write which failed with a conflict raised.
     pub conflict_id: Option<Uuid>,
+    /// The conflict that a `resolve_conflict` ends.
+    pub resolves: Option<Uuid>,
+    /// The choice of a `resolve_conflict`.
+    pub choice: Option<String>,
+}
+
+/// An open conflict of a connection, as a resolution reads it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OpenConflict {
+    /// The NFC path of the file.
+    pub path: String,
+    /// The path key of `path`.
+    pub path_key: String,
+    /// The revision of the vault when the conflict was raised.
+    pub current_hash: Option<String>,
+    /// The writer's content.
+    pub writer_hash: Option<String>,
+    /// The merged bytes of the merge proposal.
+    pub merged_hash: Option<String>,
 }
 
 /// One conflict to record.
@@ -121,7 +142,8 @@ pub struct ConflictRow {
 
 /// The columns of a [`WriteRow`], in its order.
 const WRITE_COLUMNS: &str = "write_id, operation_id, origin, kind, path, path_key, target_path,
-     base_hash, content_hash, content_length, state, revision, error_code, conflict_id";
+     base_hash, content_hash, content_length, state, revision, error_code, conflict_id, resolves,
+     choice";
 
 /// The row of a [`WriteRow`].
 type WriteTuple = (
@@ -139,6 +161,8 @@ type WriteTuple = (
     Option<String>,
     Option<String>,
     Option<Uuid>,
+    Option<Uuid>,
+    Option<String>,
 );
 
 fn write_row(
@@ -157,6 +181,8 @@ fn write_row(
         revision,
         error_code,
         conflict_id,
+        resolves,
+        choice,
     ): WriteTuple,
 ) -> WriteRow {
     WriteRow {
@@ -175,6 +201,8 @@ fn write_row(
         revision,
         error_code,
         conflict_id,
+        resolves,
+        choice,
     }
 }
 
@@ -189,9 +217,9 @@ impl FileTransaction {
             "insert into notes.writes
                  (write_id, connection_id, operation_id, idempotency_key, request_digest, origin,
                   kind, path, path_key, target_path, base_hash, content_hash, content_length,
-                  state, created_at, updated_at)
-             values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, 'queued', now(),
-                     now())",
+                  resolves, choice, state, created_at, updated_at)
+             values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, 'queued',
+                     now(), now())",
         )
         .bind(write.write_id)
         .bind(self.connection_id)
@@ -210,6 +238,8 @@ impl FileTransaction {
                 .content_length
                 .map(|length| i64::try_from(length).unwrap_or(i64::MAX)),
         )
+        .bind(write.resolves.map(|(conflict_id, _)| conflict_id))
+        .bind(write.resolves.map(|(_, choice)| choice))
         .execute(&mut *self.transaction)
         .await
         .map_err(query_error)?;
@@ -379,6 +409,61 @@ impl FileTransaction {
         .bind(self.connection_id)
         .bind(write.write_id)
         .bind(conflict.conflict_id)
+        .execute(&mut *self.transaction)
+        .await
+        .map_err(query_error)?;
+        Ok(())
+    }
+
+    /// The open conflict `conflict_id` of this connection.
+    ///
+    /// # Errors
+    ///
+    /// [`PersistenceError::Query`] when the statement fails.
+    pub async fn open_conflict(
+        &mut self,
+        conflict_id: Uuid,
+    ) -> Result<Option<OpenConflict>, PersistenceError> {
+        type Row = (
+            String,
+            String,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+        );
+        let row: Option<Row> = sqlx::query_as(
+            "select path, path_key, current_hash, writer_hash, merged_hash
+                 from notes.conflicts
+                 where connection_id = $1 and conflict_id = $2 and state = 'open'",
+        )
+        .bind(self.connection_id)
+        .bind(conflict_id)
+        .fetch_optional(&mut *self.transaction)
+        .await
+        .map_err(query_error)?;
+        Ok(row.map(
+            |(path, path_key, current_hash, writer_hash, merged_hash)| OpenConflict {
+                path,
+                path_key,
+                current_hash,
+                writer_hash,
+                merged_hash,
+            },
+        ))
+    }
+
+    /// Mark the open conflict `conflict_id` of this connection `resolved`.
+    ///
+    /// # Errors
+    ///
+    /// [`PersistenceError::Query`] when the statement fails.
+    pub async fn resolve_conflict(&mut self, conflict_id: Uuid) -> Result<(), PersistenceError> {
+        sqlx::query(
+            "update notes.conflicts set state = 'resolved', resolved_at = now()
+             where connection_id = $1 and conflict_id = $2 and state = 'open'",
+        )
+        .bind(self.connection_id)
+        .bind(conflict_id)
         .execute(&mut *self.transaction)
         .await
         .map_err(query_error)?;
