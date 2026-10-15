@@ -12,7 +12,8 @@
                               │   │
                               │   └──► outbox ──► NATS (evt.notes.*)
                               │
-                              └──D-Bus──► systemd: ratatoskr-notes-sync@<id>
+                              └──D-Bus──► systemd: ratatoskr-notes-sync-pull@<id>
+                                                   ratatoskr-notes-sync-bidi@<id>
                                                    ratatoskr-notes-login@<id>
                                                    ratatoskr-notes-cleanup@<id>
 ```

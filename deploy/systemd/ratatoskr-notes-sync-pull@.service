@@ -1,24 +1,28 @@
-# Runs the continuous Obsidian Sync client of one `sync` connection: `ob sync --continuous` into the
-# working tree of the connection. The instance name is the connection id. ratatoskr-notes starts it
-# through the systemd D-Bus API after the first login of the connection succeeded, and again at each
-# start of the service. It stops it at a disconnect and when the Sync login expired (workspace
-# change add-notes-vault-connections, design D3). The unit is not enabled: only the service starts
-# it.
+# Runs the continuous Obsidian Sync client of one `sync` connection in the mode `pull-only`:
+# `ob sync --continuous` into the working tree of the connection. The instance name is the
+# connection id. ratatoskr-notes starts it through the systemd D-Bus API after the first login,
+# at each start of the service while the write mode of the connection is off, and when the write
+# mode goes off.
+# It stops it at a disconnect, when the Sync login expired (workspace change
+# add-notes-vault-connections, design D3), and when the write mode changes. The unit is not enabled:
+# only the service starts it.
 #
-# Every start first runs `ob sync-config`: the mode, the conflict strategy `conflict`, no sync of the
-# `.obsidian` configuration, and the device name ratatoskr-<id> in the Sync history. The mode follows
-# the write mode of the connection (OBS-024 design D5): ratatoskr-notes writes the file
-# /run/ratatoskr-notes/sync-modes/<id> with the line RATATOSKR_SYNC_MODE=bidirectional while the
-# write mode is on, and RATATOSKR_SYNC_MODE=pull-only while it is off, and starts the unit again
-# after each change. Without the file the unit stays pull-only (the Environment= default), so a
-# missing file never lets Ratatoskr write into a vault.
-# PROVISIONAL: the values are the documented flags of ob 0.0.14. Spike 3.3 of
+# Each write mode has its own fixed unit (OBS-024 design D5): ratatoskr-notes-sync-pull@.service
+# while the write mode of the connection is off, ratatoskr-notes-sync-bidi@.service while it is on.
+# The service stops ratatoskr-notes-sync-bidi@<id>.service before it starts this unit, so the two
+# never run together. The mode is a literal argument: the unit reads no EnvironmentFile= and expands
+# no variable, so no file that another user writes can set PATH, NODE_OPTIONS or LD_PRELOAD for ob
+# (the policy of release_artifact_callers.rs in ratatoskr-workspace).
+#
+# Every start first runs `ob sync-config`: the mode `pull-only`, the conflict strategy
+# `conflict`, no sync of the `.obsidian` configuration, and the device name ratatoskr-<id> in the
+# Sync history. PROVISIONAL: the values are the documented flags of ob 0.0.14. Spike 3.3 of
 # add-notes-vault-connections has not run, so how ob treats a local write, its echo and a race in
 # each mode is not measured.
 #
 # The unit logs to the journal namespace ratatoskr-notes-sync, not to the system journal (owner
 # decision A of 2026-10-14). ratatoskr-notes reads that namespace and no other journal; read it
-# with `journalctl --namespace=ratatoskr-notes-sync --unit=ratatoskr-notes-sync@<id>.service`.
+# with `journalctl --namespace=ratatoskr-notes-sync --unit=ratatoskr-notes-sync-pull@<id>.service`.
 # PROVISIONAL: ratatoskr-notes reads one line of this journal, `Failed to authenticate:`, which ob
 # 0.0.14 logs while its login token is refused. The line comes from the code of ob, not from a real
 # expired token; spike 3.1 confirms it. The version of obsidian-headless is pinned by the deploy
@@ -27,9 +31,9 @@
 # services/notes/tests/sync_supervisor.rs runs the ExecStartPre= and ExecStart= lines of this file
 # through the fake systemd bus. The fake moves the trees root and the clients root into a temporary
 # directory and replaces `ob` by a stub. Keep each command on one line, and use no backslash and no
-# `$` except `${NAME}` for a variable of Environment= or EnvironmentFile=.
+# `$`.
 [Unit]
-Description=Ratatoskr notes: continuous Obsidian Sync of connection %i
+Description=Ratatoskr notes: continuous Obsidian Sync (pull-only) of connection %i
 Documentation=https://github.com/po4yka/ratatoskr-notes
 Wants=network-online.target
 After=network-online.target
@@ -52,10 +56,7 @@ UMask=0007
 # ob keeps its state under $XDG_CONFIG_HOME/obsidian-headless on Linux (spike 3.2).
 Environment=HOME=/mnt/nvme/ratatoskr/notes/clients/%i
 Environment=XDG_CONFIG_HOME=/mnt/nvme/ratatoskr/notes/clients/%i
-Environment=RATATOSKR_SYNC_MODE=pull-only
-# Read by systemd as root. Its settings override the Environment= lines above.
-EnvironmentFile=-/run/ratatoskr-notes/sync-modes/%i
-ExecStartPre=/usr/bin/ob sync-config --path /mnt/nvme/ratatoskr/notes/trees/%i --mode ${RATATOSKR_SYNC_MODE} --conflict-strategy conflict --configs "" --device-name ratatoskr-%i
+ExecStartPre=/usr/bin/ob sync-config --path /mnt/nvme/ratatoskr/notes/trees/%i --mode pull-only --conflict-strategy conflict --configs "" --device-name ratatoskr-%i
 ExecStart=/usr/bin/ob sync --continuous --path /mnt/nvme/ratatoskr/notes/trees/%i
 Restart=on-failure
 RestartSec=30

@@ -9,8 +9,9 @@
 //! command in place, and copies each `LoadCredential=` file
 //! into a fresh directory that it names in `$CREDENTIALS_DIRECTORY` and removes after the run.
 //!
-//! When the service starts `ratatoskr-notes-sync@<id>.service`, the fake runs the `ExecStartPre=`
-//! and `ExecStart=` lines of the shipped sync template in the same way. The stub `ob` records
+//! When the service starts `ratatoskr-notes-sync-pull@<id>.service` or
+//! `ratatoskr-notes-sync-bidi@<id>.service`, the fake runs the `ExecStartPre=` and `ExecStart=`
+//! lines of the shipped sync template of that write mode in the same way. The stub `ob` records
 //! `ob sync --continuous` and returns at once, so the start job of the unit is done when its
 //! command started, as for a unit of `Type=exec`.
 //!
@@ -55,9 +56,6 @@ use crate::support::journal::Journals;
 
 /// Where the service writes the credential files of a login on the host.
 const HOST_CREDENTIALS_ROOT: &str = "/run/ratatoskr-notes/credentials";
-
-/// Where the service writes the mode file of each sync unit on the host.
-const HOST_SYNC_MODES_ROOT: &str = "/run/ratatoskr-notes/sync-modes";
 
 /// Where the shipped units find `ob` on the host.
 const HOST_OB: &str = "/usr/bin/ob";
@@ -497,15 +495,6 @@ impl FakeSystemd {
                 &self.credentials_root().display().to_string(),
             )
             .replace(
-                HOST_SYNC_MODES_ROOT,
-                &self
-                    .directory
-                    .path()
-                    .join("sync-modes")
-                    .display()
-                    .to_string(),
-            )
-            .replace(
                 HOST_OB,
                 &self.directory.path().join("ob").display().to_string(),
             )
@@ -660,7 +649,8 @@ impl SystemdBus for FakeSystemd {
         }
         for template in [
             "ratatoskr-notes-cleanup@.service",
-            "ratatoskr-notes-sync@.service",
+            "ratatoskr-notes-sync-pull@.service",
+            "ratatoskr-notes-sync-bidi@.service",
         ] {
             if let Some(instance) = instance_of(unit, template) {
                 return self.run_template(template, instance).await;

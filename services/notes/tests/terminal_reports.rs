@@ -225,7 +225,7 @@ async fn expired_login_has_its_report_at_once() {
     .execute(fixture.pool())
     .await
     .expect("a connecting connection is inserted");
-    let unit = format!("ratatoskr-notes-sync@{connection}.service");
+    let unit = format!("ratatoskr-notes-sync-pull@{connection}.service");
 
     let (state, mut stops) = stopping_state(&fixture, &systemd);
     state.resume_sync_connections().await;
@@ -257,7 +257,7 @@ async fn login_expiry_before_its_record_reports_once() {
         .with_after_sync_start(move |connection_id| {
             let (pool, journals) = (pool.clone(), journals.clone());
             async move {
-                let unit = format!("ratatoskr-notes-sync@{connection_id}.service");
+                let unit = format!("ratatoskr-notes-sync-pull@{connection_id}.service");
                 journals
                     .journals()
                     .log_auth_failures(&unit, Duration::from_mins(10));
@@ -314,7 +314,7 @@ async fn unreadable_operation_expires_no_login_without_its_report() {
     .execute(fixture.pool())
     .await
     .expect("a connecting connection is inserted");
-    let unit = format!("ratatoskr-notes-sync@{connection}.service");
+    let unit = format!("ratatoskr-notes-sync-pull@{connection}.service");
     // The connect operation of the connection cannot be read for a while.
     rename(&fixture, "operation_id", "operation_id_hidden").await;
     let state = ApiState::new(fixture.database.clone(), systemd.clone())

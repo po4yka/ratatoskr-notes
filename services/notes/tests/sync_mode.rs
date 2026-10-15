@@ -3,7 +3,7 @@
 //! Headless client mode", task 6.3).
 //!
 //! The tests run the real `serve()` with the fake systemd bus, which runs the lines of the shipped
-//! `deploy/systemd/ratatoskr-notes-sync@.service` with a stub `ob` that records its arguments.
+//! `deploy/systemd/ratatoskr-notes-sync-pull@.service` and `-bidi@.service` with a stub `ob` that records its arguments.
 
 #![allow(
     clippy::expect_used,

@@ -158,12 +158,13 @@ async fn disconnect_removes_unit_tree_state_and_secrets() {
     .await;
     assert_eq!(answer.status, StatusCode::NO_CONTENT, "{:?}", answer.body);
 
-    // The sync unit and a login that still runs are stopped, then the cleanup unit runs, through
+    // The sync units and a login that still runs are stopped, then the cleanup unit runs, through
     // the bus and nothing else.
     assert_eq!(
         systemd.calls()[calls_of_connect..],
         [
-            Call::Stop(format!("ratatoskr-notes-sync@{id}.service")),
+            Call::Stop(format!("ratatoskr-notes-sync-pull@{id}.service")),
+            Call::Stop(format!("ratatoskr-notes-sync-bidi@{id}.service")),
             Call::Stop(format!("ratatoskr-notes-login@{id}.service")),
             Call::Start(format!("ratatoskr-notes-cleanup@{id}.service")),
         ]
@@ -366,7 +367,8 @@ async fn next_start_fails_an_interrupted_login() {
     assert_eq!(
         systemd.calls()[calls_before..],
         [
-            Call::Stop(format!("ratatoskr-notes-sync@{interrupted}.service")),
+            Call::Stop(format!("ratatoskr-notes-sync-pull@{interrupted}.service")),
+            Call::Stop(format!("ratatoskr-notes-sync-bidi@{interrupted}.service")),
             Call::Stop(format!("ratatoskr-notes-login@{interrupted}.service")),
             Call::Start(format!("ratatoskr-notes-cleanup@{interrupted}.service")),
         ],
@@ -605,11 +607,13 @@ async fn serve_reconciles_before_it_accepts() {
     assert_eq!(
         systemd.calls(),
         [
-            Call::Stop(format!("ratatoskr-notes-sync@{interrupted}.service")),
+            Call::Stop(format!("ratatoskr-notes-sync-pull@{interrupted}.service")),
+            Call::Stop(format!("ratatoskr-notes-sync-bidi@{interrupted}.service")),
             Call::Stop(format!("ratatoskr-notes-login@{interrupted}.service")),
             Call::Start(format!("ratatoskr-notes-cleanup@{interrupted}.service")),
             Call::Start(format!("ratatoskr-notes-login@{id}.service")),
-            Call::Start(format!("ratatoskr-notes-sync@{id}.service")),
+            Call::Stop(format!("ratatoskr-notes-sync-bidi@{id}.service")),
+            Call::Start(format!("ratatoskr-notes-sync-pull@{id}.service")),
         ],
         "the start reconciles through the given bus before the first request starts its login"
     );

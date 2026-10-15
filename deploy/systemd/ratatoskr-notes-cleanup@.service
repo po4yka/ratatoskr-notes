@@ -1,8 +1,8 @@
 # Removes the Obsidian Sync client of one removed connection: the Sync configuration that
 # `ob sync-setup` wrote, the working tree, and the client state. The instance name is the
 # connection id. ratatoskr-notes starts it through the systemd D-Bus API when the owner removes a
-# `sync` connection, after it has stopped ratatoskr-notes-sync@<id>.service, and waits for it to
-# finish (workspace change add-notes-vault-connections, design D3).
+# `sync` connection, after it has stopped ratatoskr-notes-sync-pull@<id>.service and
+# ratatoskr-notes-sync-bidi@<id>.service, and waits for it to finish (workspace change add-notes-vault-connections, design D3).
 #
 # services/notes/tests/connections.rs runs the ExecStart= lines of this file through the fake
 # systemd bus. The fake moves the trees root, the clients root and `ob` into a temporary directory.
@@ -10,7 +10,7 @@
 [Unit]
 Description=Ratatoskr notes: remove the Sync client of connection %i
 Documentation=https://github.com/po4yka/ratatoskr-notes
-After=ratatoskr-notes-sync@%i.service
+After=ratatoskr-notes-sync-pull@%i.service ratatoskr-notes-sync-bidi@%i.service
 
 [Service]
 Type=oneshot

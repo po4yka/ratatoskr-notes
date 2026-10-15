@@ -399,16 +399,9 @@ impl<B: SystemdBus> ApiState<B> {
 
     /// Write the credential files of a login under `path` instead of [`DEFAULT_CREDENTIALS_DIR`].
     /// For tests: the login unit reads [`DEFAULT_CREDENTIALS_DIR`] on the host.
-    ///
-    /// The mode files of the sync units go to `sync-modes` beside it, under the same runtime
-    /// directory, instead of [`crate::systemd::SYNC_MODES_ROOT`].
     #[must_use]
     pub fn with_credentials_dir(mut self, path: impl Into<PathBuf>) -> Self {
         self.credentials_dir = path.into();
-        if let Some(runtime) = self.credentials_dir.parent() {
-            self.supervisor
-                .set_sync_modes_dir(runtime.join("sync-modes"));
-        }
         self
     }
 }
@@ -645,15 +638,16 @@ async fn set_excluded_folders<B: SystemdBus>(
     }
 }
 
-/// Stop the sync unit and the login unit, then run the cleanup unit and wait for it (workspace
-/// design D3). The stop of a unit that does not run does nothing. The login unit is stopped so
-/// that it cannot write to the client state after the cleanup unit removed it.
+/// Stop the sync units of both write modes and the login unit, then run the cleanup unit and wait
+/// for it (workspace design D3). The stop of a unit that does not run does nothing. The login unit
+/// is stopped so that it cannot write to the client state after the cleanup unit removed it.
 async fn clean_up_sync_client<B: SystemdBus>(
     systemd: &B,
     connection_id: Uuid,
 ) -> Result<(), ApiFault> {
     for (unit, stop) in [
-        (UnitName::sync(connection_id), true),
+        (UnitName::sync(connection_id, false), true),
+        (UnitName::sync(connection_id, true), true),
         (UnitName::login(connection_id), true),
         (UnitName::cleanup(connection_id), false),
     ] {

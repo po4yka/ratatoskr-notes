@@ -94,32 +94,41 @@ fn path_builder_puts_tree_and_client_state_in_split_roots() {
 
 #[test]
 fn sync_unit_logs_to_its_namespace_and_reads_the_split_roots() {
-    let unit = settings("ratatoskr-notes-sync@.service");
+    for template in [
+        "ratatoskr-notes-sync-pull@.service",
+        "ratatoskr-notes-sync-bidi@.service",
+    ] {
+        assert_sync_unit(template);
+    }
+}
+
+fn assert_sync_unit(template: &str) {
+    let unit = settings(template);
     let (tree, client) = (text(&tree_dir(ID)), text(&client_dir(ID)));
     assert_eq!(
         values(&unit, "LogNamespace"),
         [SYNC_LOG_NAMESPACE],
-        "decision A: the namespace that the service reads"
+        "{template}: decision A: the namespace that the service reads"
     );
     assert_eq!(
         values(&unit, "UMask"),
         ["0007"],
-        "write-back: the group of the trees writes the tree"
+        "{template}: write-back: the group of the trees writes the tree"
     );
-    assert_client_environment("sync", &unit);
+    assert_client_environment(template, &unit);
     for key in ["ExecStartPre", "ExecStart"] {
         for command in values(&unit, key) {
             assert!(
                 command.contains(&format!(" --path {tree} "))
                     || command.ends_with(&format!(" --path {tree}")),
-                "{key}= runs ob in the working tree: {command}"
+                "{template}: {key}= runs ob in the working tree: {command}"
             );
         }
     }
     assert_eq!(
         read_write_paths(&unit),
         BTreeSet::from([tree, client]),
-        "the sync unit writes the tree and the client state of its connection only"
+        "{template}: the sync unit writes the tree and the client state of its connection only"
     );
 }
 
@@ -177,7 +186,8 @@ fn login_and_cleanup_units_use_the_split_roots() {
 #[test]
 fn no_unit_uses_the_old_connections_root() {
     for template in [
-        "ratatoskr-notes-sync@.service",
+        "ratatoskr-notes-sync-pull@.service",
+        "ratatoskr-notes-sync-bidi@.service",
         "ratatoskr-notes-login@.service",
         "ratatoskr-notes-cleanup@.service",
     ] {

@@ -1,7 +1,7 @@
 //! The systemd template units of a `sync` connection, reached through one trait.
 //!
-//! Notes starts and stops `ratatoskr-notes-sync@<id>.service`,
-//! `ratatoskr-notes-login@<id>.service` and `ratatoskr-notes-cleanup@<id>.service` through the
+//! Notes starts and stops `ratatoskr-notes-sync-pull@<id>.service`,
+//! `ratatoskr-notes-sync-bidi@<id>.service`, `ratatoskr-notes-login@<id>.service` and `ratatoskr-notes-cleanup@<id>.service` through the
 //! systemd D-Bus API (workspace design D3). Every call goes through [`SystemdBus`], so a test uses
 //! a fake bus and production uses [`DbusSystemd`]. The journal of the sync units, which has no
 //! D-Bus API, is read through the same trait.
@@ -19,15 +19,22 @@ use uuid::Uuid;
 /// The name of one template unit instance for one connection.
 ///
 /// The constructors are the only way to make one, so a caller cannot ask systemd for a unit
-/// outside the three templates that the polkit rule allows.
+/// outside the four templates that the polkit rule allows.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UnitName(String);
 
 impl UnitName {
-    /// `ratatoskr-notes-sync@<id>.service`: the continuous `ob sync` of a connection.
+    /// The continuous `ob sync` of a connection in one write mode (OBS-024 design D5):
+    /// `ratatoskr-notes-sync-bidi@<id>.service` when `bidirectional`, and
+    /// `ratatoskr-notes-sync-pull@<id>.service` otherwise. Each template names its mode as a
+    /// literal argument, so no file that another user writes sets the mode or the environment of
+    /// `ob`.
     #[must_use]
-    pub fn sync(connection_id: Uuid) -> Self {
-        Self(format!("ratatoskr-notes-sync@{connection_id}.service"))
+    pub fn sync(connection_id: Uuid, bidirectional: bool) -> Self {
+        let mode = if bidirectional { "bidi" } else { "pull" };
+        Self(format!(
+            "ratatoskr-notes-sync-{mode}@{connection_id}.service"
+        ))
     }
 
     /// `ratatoskr-notes-login@<id>.service`: the oneshot unit that runs `ob login` and
@@ -66,13 +73,6 @@ pub const TREES_ROOT: &str = "/mnt/nvme/ratatoskr/notes/trees";
 /// creates it with the owner `ratatoskr-notes-sync` and mode 0700: it holds the Sync token and the
 /// end-to-end key in plain text.
 pub const CLIENTS_ROOT: &str = "/mnt/nvme/ratatoskr/notes/clients";
-
-/// Where the service writes the write mode of each sync unit, on tmpfs: one file per connection,
-/// named by the connection id, with the line `RATATOSKR_SYNC_MODE=bidirectional` or
-/// `RATATOSKR_SYNC_MODE=pull-only`. The sync unit reads it with `EnvironmentFile=`. It is a sibling
-/// of [`crate::api::DEFAULT_CREDENTIALS_DIR`] under the runtime directory of the service. A missing
-/// file leaves the unit in its default, `pull-only`.
-pub const SYNC_MODES_ROOT: &str = "/run/ratatoskr-notes/sync-modes";
 
 /// The working tree of a `sync` connection on the host, which `ob` writes and the watcher reads.
 #[must_use]
@@ -428,11 +428,11 @@ mod tests {
     fn journalctl_json_entry_is_a_line() {
         // The form of `journalctl --output=json --output-fields=MESSAGE,_SYSTEMD_UNIT` of systemd
         // 252 in debian:12-slim.
-        let entry = r#"{"__CURSOR":"s=94dc;i=3","__REALTIME_TIMESTAMP":"1791977342156364","MESSAGE":"Error: Failed to authenticate: stub","_SYSTEMD_UNIT":"ratatoskr-notes-sync@0192.service","_BOOT_ID":"022ee5327c954d1ea0c8f4a2e531e6ef","__MONOTONIC_TIMESTAMP":"18685091972"}"#;
+        let entry = r#"{"__CURSOR":"s=94dc;i=3","__REALTIME_TIMESTAMP":"1791977342156364","MESSAGE":"Error: Failed to authenticate: stub","_SYSTEMD_UNIT":"ratatoskr-notes-sync-pull@0192.service","_BOOT_ID":"022ee5327c954d1ea0c8f4a2e531e6ef","__MONOTONIC_TIMESTAMP":"18685091972"}"#;
         assert_eq!(
             journal_line(entry),
             Some(JournalLine {
-                unit: "ratatoskr-notes-sync@0192.service".to_owned(),
+                unit: "ratatoskr-notes-sync-pull@0192.service".to_owned(),
                 monotonic: Duration::from_micros(18_685_091_972),
                 message: "Error: Failed to authenticate: stub".to_owned(),
             })

@@ -4,7 +4,7 @@
 //!
 //! The tests run the real `serve()` with the fake systemd bus and the compose database. The fake
 //! runs the `ExecStartPre=` and `ExecStart=` lines of the shipped
-//! `deploy/systemd/ratatoskr-notes-sync@.service` with a stub `ob` that records its arguments, so
+//! `deploy/systemd/ratatoskr-notes-sync-pull@.service` and `-bidi@.service` with a stub `ob` that records its arguments, so
 //! the tests check the shipped unit. The stub `ob` of a sync unit logs to a fake journal under
 //! paused time (`support/journal.rs`). The fake can also end the journal follower, as a stop of
 //! `journalctl` does, and refuse the journal to the service, as journald refuses a user without
@@ -100,15 +100,18 @@ async fn connect_starts_one_unit_in_pull_only_mode() {
     let sync: Vec<String> = ["sync", "--continuous", "--path", &tree]
         .map(str::to_owned)
         .to_vec();
-    let sync_unit = Call::Start(format!("ratatoskr-notes-sync@{id}.service"));
+    let sync_unit = Call::Start(format!("ratatoskr-notes-sync-pull@{id}.service"));
+    let other_mode = Call::Stop(format!("ratatoskr-notes-sync-bidi@{id}.service"));
 
     assert_eq!(
         calls_of_first_start,
         [
             Call::Start(format!("ratatoskr-notes-login@{id}.service")),
+            other_mode.clone(),
             sync_unit.clone(),
         ],
-        "after the login, the connect starts the one sync unit of the connection"
+        "after the login, the connect stops the unit of write mode on and starts the one \
+         pull-only sync unit of the connection"
     );
     assert_eq!(
         sync_calls(&ob_of_first_start),
@@ -118,7 +121,7 @@ async fn connect_starts_one_unit_in_pull_only_mode() {
     );
     assert_eq!(
         systemd.calls()[calls_of_first_start.len()..],
-        [sync_unit],
+        [other_mode, sync_unit],
         "the next start of the service starts the same unit again, and no other"
     );
     assert_eq!(
@@ -165,7 +168,7 @@ async fn auth_failure_stops_the_unit_and_waits_for_the_owner() {
     let fixture = TestDatabase::create().await.expect("a test database");
     let systemd = FakeSystemd::new();
     let id = insert_active_connection(&fixture).await;
-    let unit = format!("ratatoskr-notes-sync@{id}.service");
+    let unit = format!("ratatoskr-notes-sync-pull@{id}.service");
 
     let api = free_address();
     let unknown = format!("/v1/notes/connections/{}", Uuid::nil());
@@ -256,7 +259,7 @@ async fn ended_follower_is_started_again() {
     let fixture = TestDatabase::create().await.expect("a test database");
     let systemd = FakeSystemd::new();
     let id = insert_active_connection(&fixture).await;
-    let unit = format!("ratatoskr-notes-sync@{id}.service");
+    let unit = format!("ratatoskr-notes-sync-pull@{id}.service");
 
     let api = free_address();
     let unknown = format!("/v1/notes/connections/{}", Uuid::nil());
@@ -320,10 +323,10 @@ async fn lines_go_to_their_own_connection() {
     .execute(fixture.pool())
     .await
     .expect("a second active connection is inserted");
-    let expired_unit = format!("ratatoskr-notes-sync@{expired}.service");
-    let other_unit = format!("ratatoskr-notes-sync@{other_vault}.service");
+    let expired_unit = format!("ratatoskr-notes-sync-pull@{expired}.service");
+    let other_unit = format!("ratatoskr-notes-sync-pull@{other_vault}.service");
     // A sync unit that this process did not start.
-    let unknown_unit = format!("ratatoskr-notes-sync@{}.service", Uuid::now_v7());
+    let unknown_unit = format!("ratatoskr-notes-sync-pull@{}.service", Uuid::now_v7());
 
     let api = free_address();
     let unknown = format!("/v1/notes/connections/{}", Uuid::nil());
@@ -352,10 +355,12 @@ async fn lines_go_to_their_own_connection() {
         "active",
         "2 minutes of failures of another unit do not expire this connection"
     );
+    // Each start stops the unit of the other write mode first, so only the stops of the pull-only
+    // units that run are counted here.
     let unit_stops: Vec<Call> = systemd
         .calls()
         .into_iter()
-        .filter(|call| matches!(call, Call::Stop(_)))
+        .filter(|call| matches!(call, Call::Stop(unit) if unit.starts_with("ratatoskr-notes-sync-pull@")))
         .collect();
     assert_eq!(
         unit_stops,

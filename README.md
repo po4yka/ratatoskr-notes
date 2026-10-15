@@ -369,16 +369,18 @@ the client state `/mnt/nvme/ratatoskr/notes/clients/<id>` (owner decision B of 2
 | Unit | Type | Started | Does |
 |---|---|---|---|
 | `ratatoskr-notes-login@.service` | oneshot | at the connect of a `sync` connection | `ob login`, then `ob sync-setup`. The exit status names the failure: 10 login failed, 11 MFA code needed, 12 end-to-end password wrong, 13 no such remote vault. |
-| `ratatoskr-notes-sync@.service` | long-running | by the Sync supervisor, after the first login, at each start of the service and after each write-mode change | `ob sync-config --mode <mode> --conflict-strategy conflict --configs ""` with the device name `ratatoskr-<id>`, then `ob sync --continuous`. The mode is `bidirectional` while the write mode is on and `pull-only` while it is off. It is stopped at a disconnect. `MemoryMax=512M` is provisional until spike 3.1 measures it. |
+| `ratatoskr-notes-sync-pull@.service` | long-running | by the Sync supervisor while the write mode is off: after the first login, at each start of the service, and when the write mode goes off | `ob sync-config --mode pull-only --conflict-strategy conflict --configs ""` with the device name `ratatoskr-<id>`, then `ob sync --continuous`. It is stopped at a disconnect and when the write mode goes on. `MemoryMax=512M` is provisional until spike 3.1 measures it. |
+| `ratatoskr-notes-sync-bidi@.service` | long-running | by the Sync supervisor while the write mode is on: at each start of the service, and when the write mode goes on | The same with `--mode bidirectional`. It is stopped at a disconnect and when the write mode goes off. |
 | `ratatoskr-notes-cleanup@.service` | oneshot | at a disconnect, and after a failed login | `ob sync-unlink`, then removes the working tree and the client state. |
 
-The three units are in `deploy/systemd/`. None of them is enabled: only the service starts them.
-The service writes the mode of each sync unit to `/run/ratatoskr-notes/sync-modes/<id>`
-(`RATATOSKR_SYNC_MODE=bidirectional` or `RATATOSKR_SYNC_MODE=pull-only`), which the unit reads with
-`EnvironmentFile=`, before each start of the unit. Without the file the unit is `pull-only`. A
-write-mode change of a `sync` connection runs after the `202`: on writes `bidirectional` and starts
-the unit again, then sets the mode; off sets the mode, then writes `pull-only` and starts the unit
-again. The operation ends `succeeded` after that, or `failed` with the retryable
+The four units are in `deploy/systemd/`. None of them is enabled: only the service starts them.
+Each write mode has its own sync unit, with the mode and the conflict strategy as literal
+arguments: no unit reads an `EnvironmentFile=` or expands a variable, so no file that another user
+writes can set `PATH`, `NODE_OPTIONS` or `LD_PRELOAD` for `ob`. Before the service starts the sync
+unit of one mode, it stops the unit of the other, so the two never run together. A write-mode
+change of a `sync` connection runs after the `202`: on starts the `bidirectional` unit in place of
+the `pull-only` unit, then sets the mode; off sets the mode, then starts the `pull-only` unit in
+place of the `bidirectional` unit. The operation ends `succeeded` after that, or `failed` with the retryable
 `notes.sync.reconfigure_failed` when the unit does not start again; a failed "on" leaves the mode off
 and the unit `pull-only`. The modes and the conflict strategy are the documented flags of `ob`
 0.0.14 and are provisional until spike 3.3 measures how `ob` treats a local write.
@@ -398,7 +400,7 @@ the service checks that it can read the namespace. When it cannot, it logs
 `notes.sync.journal_unreadable` with the reason that `journalctl` gives, and an expired login is
 not found. When the follower ends, the service starts a new one after 1 second. It doubles the
 wait, up to 1 minute, while the follower keeps ending. To read the journal of a sync unit, run
-`journalctl --namespace=ratatoskr-notes-sync --unit=ratatoskr-notes-sync@<id>.service`.
+`journalctl --namespace=ratatoskr-notes-sync --unit='ratatoskr-notes-sync-*@<id>.service'`.
 
 ## Blob root and its read group
 

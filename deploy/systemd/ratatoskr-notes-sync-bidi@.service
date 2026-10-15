@@ -1,0 +1,99 @@
+# Runs the continuous Obsidian Sync client of one `sync` connection in the mode `bidirectional`:
+# `ob sync --continuous` into the working tree of the connection. The instance name is the
+# connection id. ratatoskr-notes starts it through the systemd D-Bus API at each start of the
+# service while the write mode of the connection is on, and when the write mode goes on.
+# It stops it at a disconnect, when the Sync login expired (workspace change
+# add-notes-vault-connections, design D3), and when the write mode changes. The unit is not enabled:
+# only the service starts it.
+#
+# Each write mode has its own fixed unit (OBS-024 design D5): ratatoskr-notes-sync-pull@.service
+# while the write mode of the connection is off, ratatoskr-notes-sync-bidi@.service while it is on.
+# The service stops ratatoskr-notes-sync-pull@<id>.service before it starts this unit, so the two
+# never run together. The mode is a literal argument: the unit reads no EnvironmentFile= and expands
+# no variable, so no file that another user writes can set PATH, NODE_OPTIONS or LD_PRELOAD for ob
+# (the policy of release_artifact_callers.rs in ratatoskr-workspace).
+#
+# Every start first runs `ob sync-config`: the mode `bidirectional`, the conflict strategy
+# `conflict`, no sync of the `.obsidian` configuration, and the device name ratatoskr-<id> in the
+# Sync history. PROVISIONAL: the values are the documented flags of ob 0.0.14. Spike 3.3 of
+# add-notes-vault-connections has not run, so how ob treats a local write, its echo and a race in
+# each mode is not measured.
+#
+# The unit logs to the journal namespace ratatoskr-notes-sync, not to the system journal (owner
+# decision A of 2026-10-14). ratatoskr-notes reads that namespace and no other journal; read it
+# with `journalctl --namespace=ratatoskr-notes-sync --unit=ratatoskr-notes-sync-bidi@<id>.service`.
+# PROVISIONAL: ratatoskr-notes reads one line of this journal, `Failed to authenticate:`, which ob
+# 0.0.14 logs while its login token is refused. The line comes from the code of ob, not from a real
+# expired token; spike 3.1 confirms it. The version of obsidian-headless is pinned by the deploy
+# role of ratatoskr-workspace, because a release can change the line.
+#
+# services/notes/tests/sync_supervisor.rs runs the ExecStartPre= and ExecStart= lines of this file
+# through the fake systemd bus. The fake moves the trees root and the clients root into a temporary
+# directory and replaces `ob` by a stub. Keep each command on one line, and use no backslash and no
+# `$`.
+[Unit]
+Description=Ratatoskr notes: continuous Obsidian Sync (bidirectional) of connection %i
+Documentation=https://github.com/po4yka/ratatoskr-notes
+Wants=network-online.target
+After=network-online.target
+# A sync that fails is started again after RestartSec=, without a limit.
+StartLimitIntervalSec=0
+
+[Service]
+# The start job is done when ob runs.
+Type=exec
+# The owner of the working tree and of the client state, which the login unit created.
+User=ratatoskr-notes-sync
+Group=ratatoskr-notes-sync
+# Owner decision B of 2026-10-14, as changed for write-back (OBS-024): the trees root
+# /mnt/nvme/ratatoskr/notes/trees has the group ratatoskr-notes-trees, the setgid bit and mode 2770,
+# and both ratatoskr-notes and ratatoskr-notes-sync are members of the group. So each file that ob
+# writes in the tree gets that group, and with this umask mode 0660 (a directory 2770): the service
+# reads and writes the tree, and ob replaces what the service wrote. The client state keeps mode
+# 0700 from the login unit.
+UMask=0007
+# ob keeps its state under $XDG_CONFIG_HOME/obsidian-headless on Linux (spike 3.2).
+Environment=HOME=/mnt/nvme/ratatoskr/notes/clients/%i
+Environment=XDG_CONFIG_HOME=/mnt/nvme/ratatoskr/notes/clients/%i
+ExecStartPre=/usr/bin/ob sync-config --path /mnt/nvme/ratatoskr/notes/trees/%i --mode bidirectional --conflict-strategy conflict --configs "" --device-name ratatoskr-%i
+ExecStart=/usr/bin/ob sync --continuous --path /mnt/nvme/ratatoskr/notes/trees/%i
+Restart=on-failure
+RestartSec=30
+# The journal namespace that ratatoskr-notes reads (SYNC_LOG_NAMESPACE in
+# services/notes/src/systemd.rs). systemd starts systemd-journald@ratatoskr-notes-sync.service for
+# it. The deploy role gives the group ratatoskr-notes read access to its directory. Check this on a
+# real Debian 12 host (systemd 252).
+LogNamespace=ratatoskr-notes-sync
+# ob stops cleanly on SIGTERM (spike 3.2). A disconnect waits for this stop, and Edge ends a request
+# after 300 seconds.
+TimeoutStopSec=30
+
+# One ob is one Node.js process. PROVISIONAL: 512M is not measured. Spike 3.1 measures the resident
+# memory of one continuous sync of a 1 GiB vault, and this value becomes that measurement plus 50 %.
+MemoryMax=512M
+TasksMax=64
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+ProtectKernelLogs=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+RestrictNamespaces=yes
+RestrictRealtime=yes
+CapabilityBoundingSet=
+# ob is Node.js: no MemoryDenyWriteExecute=, because the JIT needs writable and executable pages.
+# ob reaches https://api.obsidian.md and wss://*.obsidian.md over TCP.
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+SystemCallFilter=@system-service
+SystemCallArchitectures=native
+# The working tree and the client state of this connection only. The login unit created both.
+ReadWritePaths=/mnt/nvme/ratatoskr/notes/trees/%i /mnt/nvme/ratatoskr/notes/clients/%i
