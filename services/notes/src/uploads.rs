@@ -11,7 +11,8 @@
 //! The sessions are kept in memory and are bounded: at most [`MAX_SESSIONS_PER_CONNECTION`] for
 //! one connection and [`MAX_OPEN_SESSIONS`] for the service at a time, each for
 //! [`SESSION_LIFETIME`]. The count and the insert of a new session are one step under one lock. A restart forgets them, and the store deletes their staged copies at
-//! its next open; a device then opens a new session, as for an expired one.
+//! its next open; a device then opens a new session, as for an expired one. A client that gives
+//! up an upload closes its session, which deletes the staged copy and frees the slot at once.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -71,6 +72,8 @@ struct Session {
     declared: String,
     part: PathBuf,
     expires: Instant,
+    /// The session was closed. A step that waited for its lock finds no session.
+    closed: bool,
 }
 
 /// The place of one session in the table: its connection and its expiry, which the table reads
@@ -132,6 +135,7 @@ impl Uploads {
             declared: request.digest.hex.as_str().to_owned(),
             part,
             expires,
+            closed: false,
         };
         let part = session.part.clone();
         let slot = Slot {
@@ -235,6 +239,20 @@ impl Uploads {
         Ok(session.reference.finalize(owner, computed)?)
     }
 
+    /// Close the open session `token` of `connection_id`: delete its staged copy and end it, so
+    /// that it no longer counts toward the open sessions.
+    ///
+    /// # Errors
+    ///
+    /// [`UploadRefusal::Transfer`] when no open session of `connection_id` answers the token.
+    pub async fn close(&self, connection_id: Uuid, token: &str) -> Result<(), UploadRefusal> {
+        let (_, mut session) = self.session(connection_id, token).await?;
+        session.closed = true;
+        BlobStore::discard_part(&session.part);
+        self.lock().remove(token);
+        Ok(())
+    }
+
     /// The open session `token` of `connection_id`, held until the step ends. A session of another
     /// connection answers as one that does not exist; an expired one is forgotten.
     async fn session(
@@ -253,7 +271,7 @@ impl Uploads {
             .status_view(&resumption_token)
             .session_state
             == UploadSessionState::Open;
-        if session.connection_id != connection_id || !open {
+        if session.connection_id != connection_id || !open || session.closed {
             return Err(unknown());
         }
         if session.expires <= Instant::now() {

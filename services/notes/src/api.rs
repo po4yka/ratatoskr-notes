@@ -474,6 +474,10 @@ pub fn domain_router<B: SystemdBus>(state: ApiState<B>) -> Router {
             post(blobs::open_upload::<B>),
         )
         .route(
+            "/v1/notes/connections/{connection_id}/blobs/{token}",
+            delete(blobs::close_upload::<B>),
+        )
+        .route(
             "/v1/notes/connections/{connection_id}/blobs/{token}/chunks/{index}",
             put(blobs::put_chunk::<B>).layer(DefaultBodyLimit::max(blobs::MAX_CHUNK_BYTES)),
         )

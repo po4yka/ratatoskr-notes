@@ -5,7 +5,8 @@
 //! - `POST .../blobs` opens a session, `201` with `UploadSessionOpened`;
 //! - `PUT .../blobs/{token}/chunks/{index}` takes the raw bytes of one chunk;
 //! - `GET .../blobs/{token}/status` answers the resume view;
-//! - `POST .../blobs/{token}/finalize` answers `stored` or `digest_mismatch` at `200`.
+//! - `POST .../blobs/{token}/finalize` answers `stored` or `digest_mismatch` at `200`;
+//! - `DELETE .../blobs/{token}` closes an open session and deletes its chunks, `204`.
 //!
 //! The device of the connection uploads the bytes of its changes. The owner's session uploads the
 //! content of a write (OBS-024): an upload registers the bytes for the connection, and only a
@@ -164,6 +165,24 @@ pub(super) async fn upload_status<B: SystemdBus>(
         .await
         .map_err(fault)?;
     Ok(Json(status))
+}
+
+/// `DELETE /v1/notes/connections/{id}/blobs/{token}`: close an open session. Its chunks are
+/// deleted and its slot is free. An unknown token, or a token of another connection, answers
+/// `404` `blob_transfer.session_unknown`.
+pub(super) async fn close_upload<B: SystemdBus>(
+    State(state): State<ApiState<B>>,
+    headers: HeaderMap,
+    path: Result<Path<(Uuid, String)>, PathRejection>,
+) -> Result<StatusCode, ApiFault> {
+    let Path((connection_id, token)) = path.map_err(|_| ApiFault::NotFound)?;
+    authorize(&state, &headers, connection_id).await?;
+    state
+        .uploads
+        .close(connection_id, &token)
+        .await
+        .map_err(fault)?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 /// `POST /v1/notes/connections/{id}/blobs/{token}/finalize`: verify the SHA-256 of the bytes and

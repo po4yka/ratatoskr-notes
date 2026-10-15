@@ -158,8 +158,11 @@ The connection keeps the highest device sequence that it committed. The answer i
 `POST .../blobs` opens a session (`201`), `PUT .../blobs/{token}/chunks/{index}` takes the raw
 bytes of one chunk, `GET .../blobs/{token}/status` answers the resume view, and
 `POST .../blobs/{token}/finalize` with `{"resumption_token": ...}` answers `200` with the outcome
-`stored` or `digest_mismatch`. Bytes with another SHA-256 than the declared one are deleted, and
-no blob is registered. At most 4 sessions of one connection and 64 of the service are open, each
+`stored` or `digest_mismatch`. `DELETE .../blobs/{token}` closes an open session: it deletes the
+chunks that arrived, frees the slot of the session and answers `204`; an unknown token, or a token
+of another connection, answers `404` `blob_transfer.session_unknown`. Edge closes the session of a
+site edit after a failed chunk or finalize. Bytes with another SHA-256 than the declared one are
+deleted, and no blob is registered. At most 4 sessions of one connection and 64 of the service are open, each
 for one hour (more answer `503` with `notes.service.unavailable`), and a declaration over the
 size limit (64 MiB) answers `400` with `notes.request.invalid`. A restart forgets the open
 sessions; the device opens a new one.
