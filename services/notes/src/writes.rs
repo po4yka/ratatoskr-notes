@@ -190,7 +190,8 @@ pub(crate) async fn echo(
 
 /// The outcome of the rename `leader` whose write group is `group`: pending while a write of the
 /// group is open; failed when one failed, with `notes.write.partially_applied` when another
-/// succeeded; else succeeded with the file of the rename.
+/// succeeded, else with the code of the rename (or of the first failed write) and the conflict of
+/// the group when there is one; else succeeded with the file of the rename.
 fn group_outcome(
     leader: &ratatoskr_notes_persistence::WriteRow,
     group: &[ratatoskr_notes_persistence::WriteRow],
@@ -201,19 +202,19 @@ fn group_outcome(
     {
         return Outcome::Pending;
     }
-    let Some(failed) = group.iter().find(|write| write.state == "failed") else {
+    if !group.iter().any(|write| write.state == "failed") {
         return Outcome::Succeeded {
             revision: leader.revision.clone(),
         };
-    };
+    }
     let code = if group.iter().any(|write| write.state == "succeeded") {
-        PARTIALLY_APPLIED.to_owned()
+        PARTIALLY_APPLIED
     } else {
-        failed.error_code.clone().unwrap_or_default()
+        group::failure_code(group, leader.write_id).unwrap_or_default()
     };
     Outcome::Failed {
-        code,
-        conflict_id: failed.conflict_id,
+        code: code.to_owned(),
+        conflict_id: group.iter().find_map(|write| write.conflict_id),
     }
 }
 

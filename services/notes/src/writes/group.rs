@@ -138,6 +138,16 @@ pub(super) async fn insert_members(
     Ok(())
 }
 
+/// The code of the failure of the group `group_id`: the code of its rename when the rename failed,
+/// else the code of its first failed write.
+pub(super) fn failure_code(group: &[WriteRow], group_id: Uuid) -> Option<&str> {
+    group
+        .iter()
+        .find(|write| write.write_id == group_id && write.state == "failed")
+        .or_else(|| group.iter().find(|write| write.state == "failed"))
+        .and_then(|write| write.error_code.as_deref())
+}
+
 /// The file name of `path` in lower case: the key of Obsidian's lookup by name.
 fn name_key(path: &str) -> String {
     path.rsplit_once('/')
@@ -254,7 +264,10 @@ impl Locked<'_> {
     }
 
     /// After a write of the group `group_id` ended, end the operation of the rename when no write
-    /// of the group is open any more.
+    /// of the group is open any more: `succeeded` when every write succeeded; with one conflict when
+    /// a part was applied (`notes.write.partially_applied`) or a file was stale
+    /// (`notes.write.conflict`); otherwise, when the channel failed the group and applied nothing,
+    /// with the code of that failure and no conflict.
     pub(super) async fn settle_group(&mut self, group_id: Uuid) -> Result<(), RecordError> {
         let group = self.transaction.group_writes(group_id).await?;
         if group
@@ -272,6 +285,13 @@ impl Locked<'_> {
             return self.group_succeeded(group_id, &group).await;
         }
         let applied = group.iter().any(|write| write.state == "succeeded");
+        let stale = group
+            .iter()
+            .any(|write| write.state == "failed" && write.error_code.as_deref() == Some(CONFLICT));
+        if !applied && !stale {
+            let code = failure_code(&group, group_id).unwrap_or(CONFLICT);
+            return self.report(group_id, Step::Failed(code, None)).await;
+        }
         self.end_group(group_id, &failed, applied).await
     }
 

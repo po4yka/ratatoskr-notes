@@ -239,7 +239,8 @@ the whole group with one conflict whose `stale_paths` names every stale file, an
 delivered. Each write of a delivered group becomes current when the channel acknowledges it. The
 operation ends with the last of them: `succeeded` with one result per file, or, when the channel
 applied only a part, `failed` with `notes.write.partially_applied` and one conflict that names every
-file that was not applied.
+file that was not applied. When the channel fails the group with a code and applies nothing, and no
+file was stale, the operation fails with that code and no conflict.
 On `sync`, the writer renames the file and writes the renamed note's own new bytes at the target,
 and writes each rewrite only after the rename landed; a refused rename fails its rewrites that did
 not land, so no link names a path whose file did not move.
