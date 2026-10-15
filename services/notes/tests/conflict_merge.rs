@@ -9,12 +9,13 @@
 
 mod support;
 
+use ratatoskr_notes::writes::Outcome;
 use ratatoskr_notes_contracts::ConflictRaised;
 use serde_json::{Value, json};
 use uuid::Uuid;
 
 use crate::support::channel::{OWNER, sha256};
-use crate::support::writes::{Writer, command_with, update};
+use crate::support::writes::{Writer, command, command_with, resolve, update};
 
 /// The event type of a raised conflict.
 const RAISED: &str = "notes.conflict.raised.v1";
@@ -177,6 +178,117 @@ async fn attachment_conflict_has_no_proposal() {
     assert_eq!(raised.len(), 1, "exactly one conflict is raised");
     assert_eq!(raised[0]["media_type"], "image/png");
     assert_eq!(raised[0].get("merge_proposal"), None);
+
+    writer.cleanup().await;
+}
+
+/// The event type of a resolved conflict.
+const RESOLVED: &str = "notes.conflict.resolved.v1";
+
+/// The id of the last conflict that `connection` raised.
+async fn last_conflict(writer: &Writer, connection: Uuid) -> String {
+    writer
+        .events_of(connection, RAISED)
+        .await
+        .last()
+        .and_then(|event| event["conflict_id"].as_str().map(str::to_owned))
+        .expect("a conflict is raised")
+}
+
+#[tokio::test]
+async fn resolution_races_vault_change() {
+    let writer = Writer::new().await;
+    let base: &[u8] = b"# Plan\n\nThe draft that the writer read.\n";
+    let phone: &[u8] = b"# Plan\n\nThe draft that the phone saved.\n";
+    let mine: &[u8] = b"# Plan\n\nThe draft that the writer saved.\n";
+    let later: &[u8] = b"# Plan\n\nThe phone saved again meanwhile.\n";
+    let connection = stale_update(
+        &writer,
+        "Plan.md",
+        "text/markdown",
+        [base, phone, mine],
+        "platform",
+    )
+    .await;
+    let first = last_conflict(&writer, connection).await;
+
+    writer.vault_change(connection, "Plan.md", later).await;
+    let resolution = command(connection, &resolve(&first, "keep_writer"));
+    writer.send(&resolution).await;
+    let raised = writer.events_of(connection, RAISED).await;
+    let read = writer.conflict(OWNER, &first).await;
+
+    assert!(
+        writer.deliveries(connection).await.is_empty(),
+        "nothing is delivered over the newer revision"
+    );
+    assert_eq!(raised.len(), 2, "a second conflict is raised");
+    assert_ne!(raised[1]["conflict_id"], json!(first));
+    assert_eq!(raised[1]["current_hash"], json!(sha256(later)));
+    assert_eq!(raised[1]["writer_hash"], json!(sha256(mine)));
+    assert_eq!(raised[1]["base_hash"], json!(sha256(phone)));
+    assert!(
+        matches!(
+            writer.outcome(&resolution).await,
+            Some(Outcome::Failed { ref code, conflict_id: Some(_) }) if code == "notes.write.conflict"
+        ),
+        "{:?}",
+        writer.outcome(&resolution).await
+    );
+    assert_eq!(
+        writer.current(connection, "Plan.md").await,
+        Some(sha256(later))
+    );
+    assert_eq!(read.body["state"], "open", "the first conflict stays open");
+    assert!(writer.events_of(connection, RESOLVED).await.is_empty());
+
+    writer.cleanup().await;
+}
+
+#[tokio::test]
+async fn resolution_is_published_on_acknowledgement() {
+    let writer = Writer::new().await;
+    let base: &[u8] = b"# Plan\n\nThe draft that the writer read.\n";
+    let phone: &[u8] = b"# Plan\n\nThe draft that the phone saved.\n";
+    let mine: &[u8] = b"# Plan\n\nThe draft that the writer saved.\n";
+    let connection = stale_update(
+        &writer,
+        "Plan.md",
+        "text/markdown",
+        [base, phone, mine],
+        "site:docs",
+    )
+    .await;
+    let conflict_id = last_conflict(&writer, connection).await;
+
+    let resolution = command(connection, &resolve(&conflict_id, "keep_writer"));
+    writer.send(&resolution).await;
+    let delivered = writer.deliveries(connection).await;
+    let before = writer.events_of(connection, RESOLVED).await;
+    for delivery in &delivered {
+        writer.acknowledge(connection, delivery).await;
+    }
+    let resolved = writer.events_of(connection, RESOLVED).await;
+    let read = writer.conflict(OWNER, &conflict_id).await;
+
+    assert_eq!(delivered.len(), 1, "{delivered:?}");
+    assert_eq!(delivered[0].kind, "resolve_conflict");
+    assert_eq!(delivered[0].base_hash, Some(sha256(phone)));
+    assert_eq!(delivered[0].content_hash, Some(sha256(mine)));
+    assert!(
+        before.is_empty(),
+        "nothing is resolved before the acknowledgement"
+    );
+    assert_eq!(resolved.len(), 1);
+    assert_eq!(resolved[0]["conflict_id"], json!(conflict_id));
+    assert_eq!(resolved[0]["revision"], json!(sha256(mine)));
+    assert_eq!(resolved[0]["origin"], "site:docs");
+    assert_eq!(resolved[0]["path"], "Plan.md");
+    assert_eq!(
+        writer.current(connection, "Plan.md").await,
+        Some(sha256(mine))
+    );
+    assert_eq!(read.body["state"], "resolved");
 
     writer.cleanup().await;
 }

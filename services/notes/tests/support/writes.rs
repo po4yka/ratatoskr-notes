@@ -426,3 +426,8 @@ impl Writer {
         .expect("the outbox can be read")
     }
 }
+
+/// `resolve_conflict` of `conflict_id` with `choice`.
+pub(crate) fn resolve(conflict_id: &str, choice: &str) -> Value {
+    json!({ "resolve_conflict": { "conflict_id": conflict_id, "choice": choice } })
+}
