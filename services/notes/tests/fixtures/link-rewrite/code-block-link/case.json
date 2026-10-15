@@ -1,0 +1,10 @@
+{
+  "from": "A.md",
+  "to": "B.md",
+  "settings": {
+    "newLinkFormat": "shortest"
+  },
+  "covers": [
+    "code-block"
+  ]
+}

@@ -1,0 +1,11 @@
+{
+  "from": "Targets/Shortest.md",
+  "to": "Targets/Shortest Renamed.md",
+  "settings": {
+    "newLinkFormat": "shortest"
+  },
+  "covers": [
+    "shortest-path",
+    "markdown-encoded-space"
+  ]
+}

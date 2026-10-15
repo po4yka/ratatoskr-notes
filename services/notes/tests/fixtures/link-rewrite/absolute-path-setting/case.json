@@ -1,0 +1,10 @@
+{
+  "from": "Projects/Beta.md",
+  "to": "Archive/2024/Beta.md",
+  "settings": {
+    "newLinkFormat": "absolute"
+  },
+  "covers": [
+    "absolute-path"
+  ]
+}

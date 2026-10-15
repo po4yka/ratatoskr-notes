@@ -1,0 +1,10 @@
+{
+  "from": "Notes/Plan.md",
+  "to": "Archive/Plan.md",
+  "settings": {
+    "newLinkFormat": "shortest"
+  },
+  "covers": [
+    "shortest-path-collision"
+  ]
+}

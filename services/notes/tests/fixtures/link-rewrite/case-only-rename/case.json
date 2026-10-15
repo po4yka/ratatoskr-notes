@@ -1,0 +1,10 @@
+{
+  "from": "Idea.md",
+  "to": "idea.md",
+  "settings": {
+    "newLinkFormat": "shortest"
+  },
+  "covers": [
+    "letter-case"
+  ]
+}

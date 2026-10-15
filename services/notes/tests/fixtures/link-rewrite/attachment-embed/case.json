@@ -1,0 +1,11 @@
+{
+  "from": "Images/photo.png",
+  "to": "Media/photo 2024.png",
+  "settings": {
+    "newLinkFormat": "shortest"
+  },
+  "covers": [
+    "embed-attachment",
+    "markdown-encoded-space"
+  ]
+}

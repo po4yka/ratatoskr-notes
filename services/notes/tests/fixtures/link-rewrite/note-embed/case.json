@@ -1,0 +1,10 @@
+{
+  "from": "Parts/Embedded.md",
+  "to": "Parts/Included.md",
+  "settings": {
+    "newLinkFormat": "shortest"
+  },
+  "covers": [
+    "embed-note"
+  ]
+}

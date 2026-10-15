@@ -1,0 +1,2 @@
+[[Idea]]
+[md](Idea.md)

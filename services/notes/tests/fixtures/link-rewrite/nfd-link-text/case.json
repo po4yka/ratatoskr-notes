@@ -1,0 +1,10 @@
+{
+  "from": "Résumé.md",
+  "to": "CV.md",
+  "settings": {
+    "newLinkFormat": "shortest"
+  },
+  "covers": [
+    "nfd-nfc"
+  ]
+}

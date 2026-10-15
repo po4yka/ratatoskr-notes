@@ -1,0 +1,9 @@
+{
+  "id": "ratatoskr-link-recorder",
+  "name": "Ratatoskr link recorder",
+  "version": "0.1.0",
+  "minAppVersion": "1.0.0",
+  "description": "Records the golden fixtures of the notes link rewrite. Runs only in the isolated profile of tools/record-link-fixtures.sh.",
+  "author": "Ratatoskr",
+  "isDesktopOnly": true
+}

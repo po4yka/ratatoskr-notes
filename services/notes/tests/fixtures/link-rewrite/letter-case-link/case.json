@@ -1,0 +1,10 @@
+{
+  "from": "Plan.md",
+  "to": "Roadmap.md",
+  "settings": {
+    "newLinkFormat": "shortest"
+  },
+  "covers": [
+    "letter-case"
+  ]
+}

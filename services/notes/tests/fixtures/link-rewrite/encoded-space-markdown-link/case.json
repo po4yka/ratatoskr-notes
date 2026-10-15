@@ -1,0 +1,11 @@
+{
+  "from": "My Note.md",
+  "to": "Your Note.md",
+  "settings": {
+    "newLinkFormat": "shortest"
+  },
+  "covers": [
+    "markdown-encoded-space",
+    "heading"
+  ]
+}

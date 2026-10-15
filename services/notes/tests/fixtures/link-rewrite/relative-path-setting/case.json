@@ -1,0 +1,10 @@
+{
+  "from": "Projects/Alpha.md",
+  "to": "Archive/2024/Alpha.md",
+  "settings": {
+    "newLinkFormat": "relative"
+  },
+  "covers": [
+    "relative-path"
+  ]
+}

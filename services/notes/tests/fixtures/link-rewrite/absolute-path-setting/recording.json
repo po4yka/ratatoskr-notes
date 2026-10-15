@@ -1,0 +1,9 @@
+{
+  "obsidian": "1.14.4",
+  "installer": "1.8.10",
+  "settings": {
+    "alwaysUpdateLinks": true,
+    "newLinkFormat": "absolute",
+    "useMarkdownLinks": false
+  }
+}

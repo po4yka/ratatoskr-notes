@@ -1,0 +1,10 @@
+{
+  "from": "Target.md",
+  "to": "Goal.md",
+  "settings": {
+    "newLinkFormat": "shortest"
+  },
+  "covers": [
+    "block-reference"
+  ]
+}

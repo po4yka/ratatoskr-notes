@@ -1,0 +1,10 @@
+{
+  "from": "Targets/Collide.md",
+  "to": "Targets/Other/Epsilon.md",
+  "settings": {
+    "newLinkFormat": "shortest"
+  },
+  "covers": [
+    "shortest-path-collision"
+  ]
+}
