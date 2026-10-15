@@ -61,6 +61,9 @@ create table notes.connections (
     -- committed. A batch continues at the next number; a batch that starts later is a gap, and a
     -- change at or below it is a repeat that changes nothing (workspace design D5). 0 for `sync`.
     device_sequence    bigint      not null default 0,
+    -- Whether Ratatoskr may write into the vault (OBS-024 design D8). Every connection starts
+    -- `off`; the owner turns it on.
+    write_mode         text        not null default 'off',
     created_at         timestamptz not null,
     updated_at         timestamptz not null,
 
@@ -85,7 +88,9 @@ create table notes.connections (
     constraint connections_device_sequence_is_not_negative
         check (device_sequence >= 0),
     constraint connections_excluded_folders_are_bounded
-        check (cardinality(excluded_folders) <= 64)
+        check (cardinality(excluded_folders) <= 64),
+    constraint connections_write_mode_is_known
+        check (write_mode in ('off', 'on'))
 );
 
 comment on table notes.connections is

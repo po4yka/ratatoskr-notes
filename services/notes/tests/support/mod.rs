@@ -13,6 +13,7 @@ pub(crate) mod cmdline;
 pub(crate) mod journal;
 pub(crate) mod logs;
 pub(crate) mod systemd;
+pub(crate) mod writes;
 
 use std::future::Future;
 use std::net::{Ipv4Addr, SocketAddr};
