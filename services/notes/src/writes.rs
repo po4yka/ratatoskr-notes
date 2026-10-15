@@ -326,6 +326,9 @@ impl Writes {
             .await?;
         locked.report(write_id, Step::Queued).await?;
         locked.advance(&request.path_key).await?;
+        if let Some(target_key) = request.target_path_key.as_deref() {
+            locked.advance(target_key).await?;
+        }
         let raised = std::mem::take(&mut locked.raised);
         transaction.commit().await?;
         self.announce(&raised).await;
@@ -504,11 +507,35 @@ impl Writes {
                 locked.fail(&write, code).await?;
             }
         }
-        locked.advance(&write.path_key).await?;
+        for key in queue::keys_of(&write) {
+            locked.advance(key).await?;
+        }
         let raised = std::mem::take(&mut locked.raised);
         transaction.commit().await?;
         self.announce(&raised).await;
         Ok(true)
+    }
+
+    /// Whether a change of `connection_id` may name the bytes with the SHA-256 `digest`: the
+    /// connection uploaded them or holds them as a revision, and the blob store holds them.
+    ///
+    /// # Errors
+    ///
+    /// [`WriteError`] when the database fails.
+    pub async fn may_name(&self, connection_id: Uuid, digest: &str) -> Result<bool, WriteError> {
+        let Some((mut transaction, _)) = self
+            .recorder
+            .database()
+            .begin_file_change(connection_id)
+            .await?
+        else {
+            return Ok(false);
+        };
+        let usable = self
+            .recorder
+            .usable_length(&mut transaction, digest)
+            .await?;
+        Ok(usable.is_some())
     }
 
     /// The outcome of the write of `operation_id`, or `None` when no write has it.

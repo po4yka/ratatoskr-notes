@@ -38,6 +38,7 @@ mod channel;
 mod conflicts;
 mod connect;
 mod device_connect;
+mod device_operations;
 mod fault;
 mod read;
 mod removals;
@@ -457,6 +458,18 @@ pub fn domain_router<B: SystemdBus>(state: ApiState<B>) -> Router {
         .route(
             "/v1/notes/connections/{connection_id}/excluded-folders",
             put(set_excluded_folders::<B>),
+        )
+        .route(
+            "/v1/notes/connections/{connection_id}/device-operations",
+            get(device_operations::list_operations::<B>),
+        )
+        .route(
+            "/v1/notes/connections/{connection_id}/device-operations/{operation_id}/content",
+            get(device_operations::read_content::<B>),
+        )
+        .route(
+            "/v1/notes/connections/{connection_id}/device-operations/{operation_id}/result",
+            post(device_operations::post_result::<B>),
         )
         .route(
             "/v1/notes/connections/{connection_id}/write-mode",

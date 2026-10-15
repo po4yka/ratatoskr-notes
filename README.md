@@ -55,7 +55,8 @@ links and backlinks). The device channels use `POST /v1/notes/connections/{id}/c
 `POST /v1/notes/connections/{id}/manifest` and the upload routes under
 `/v1/notes/connections/{id}/blobs` (see Device channels). `GET /v1/notes/conflicts/{id}` reads a
 conflict of a write, and `PUT /v1/notes/connections/{id}/write-mode` sets the write mode of a
-connection (see Writes). Every route answers only for the owner in the claim of Edge.
+connection. The device of a `plugin` or `cli` connection reads its writes at
+`GET /v1/notes/connections/{id}/device-operations` and below it (see Writes). Every route answers only for the owner in the claim of Edge.
 
 ## Connections
 
@@ -224,6 +225,32 @@ path of a `delete`. The write's revision becomes current, and one `notes.file.ch
 When a channel acknowledges a write with another hash than the write named (a plugin formatted the
 file on save), the acknowledged bytes become current and are published once, the expected bytes
 never are, and the operation succeeds with that hash and the warning `notes.write.transformed`.
+
+**Device queue.** The delivered writes of a `plugin` or `cli` connection, in the order of
+acceptance, are the queue that its device reads through Edge, with the device claims. Only the
+device that the connection registered, of the kind of its channel, reads or answers it; any other
+device, also one of the owner, gets `404` `notes.connection.not_found`. A `rename` or a `move` is in
+the queue of its path and of its target, and is delivered only at the head of both, so a later write
+of the new path reaches the device after it.
+
+- `GET /v1/notes/connections/{id}/device-operations?after=<cursor>` answers
+  `{"operations": [...], "next_cursor": "<cursor>"}` with at most 256 operations after the cursor
+  (from the start when it is absent). Each operation has `operation_id`, `cursor`, `kind`
+  (`create`, `update`, `rename`, `move`, `delete` or `set_property`; a conflict resolution is an
+  `update`, or a `create` of a deleted file), `path`, `target_path`, `base_hash` (the hash that the
+  local file must have; `null` for a `create`), `content` (the notes-owned `BlobRef` of the bytes
+  to write, or of the JSON value of a `set_property`), `property_key`, `property_change` (`set` or
+  `remove`) and `expected_sha256` (the hash of the file after the operation as written, when notes
+  knows it). An operation stays in the queue until its result arrives.
+- `GET .../device-operations/{operation_id}/content` streams the bytes of `content`.
+- `POST .../device-operations/{operation_id}/result` takes `{"outcome": "applied", "sha256": "<hash
+  of the file at the path, or at the target of a rename>"}` (no hash after a `delete`),
+  `{"outcome": "base_mismatch", "local_sha256": "<hash>"}`, or `{"outcome": "failed", "code":
+  "<typed code>"}`, and answers `{"operation_id": ..., "state": "succeeded" | "failed" |
+  "delivering"}`. An `applied` hash names bytes that the device uploaded to the connection first;
+  otherwise the answer is `409` `notes.channel.bytes_missing` with the hash, and the device sends
+  the result again after the upload. A result for an operation that ended answers its end again.
+  An unknown operation answers `404` `notes.device_operation.not_found`.
 
 **Reports.** Notes is the only reporter of `notes.file.write`. Each report goes to the outbox as
 `platform.operation.reported.v1`:

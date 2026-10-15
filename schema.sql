@@ -242,9 +242,12 @@ comment on table notes.path_collisions is
 -- ---------------------------------------------------------------------------------------------
 
 -- The queue of a file is the open writes (`queued` or `delivering`) of one connection with one
--- path key, in the order of `position`. Only the head of a queue is delivered; the next write
--- waits until the channel acknowledged or refused the head (OBS-024 design D1). A write keeps its
--- row after it ended.
+-- path key, in the order of `position`, and the open `rename` and `move` writes whose target has
+-- that key. Only the head of a queue is delivered, and a `rename` or a `move` only when it is the
+-- head of both queues; the next write waits until the channel acknowledged or refused the head
+-- (OBS-024 design D1). A write keeps its row after it ended. The delivering writes of a `plugin` or
+-- `cli` connection, in the order of `position`, are the queue that its device reads (design D5);
+-- `position` is the cursor of that queue.
 create table notes.writes (
     write_id       uuid        primary key,
     connection_id  uuid        not null references notes.connections (connection_id),
@@ -264,8 +267,9 @@ create table notes.writes (
     -- The NFC path that the write changes, and its case-folded key, which names the queue.
     path           text        not null,
     path_key       text        not null,
-    -- The new path of a `rename` or a `move`.
+    -- The new path of a `rename` or a `move`, and its case-folded key.
     target_path    text,
+    target_path_key text,
     -- The revision that the writer saw.
     base_hash      text,
     -- The SHA-256 and the length of the uploaded bytes that the write puts at the path.
@@ -275,6 +279,10 @@ create table notes.writes (
     -- `conflicts` names its write and comes after this one.
     resolves       uuid,
     choice         text,
+    -- The frontmatter property of a `set_property`, and whether it is `set` (to the JSON value
+    -- whose bytes `content_hash` names) or `remove`.
+    property_key    text,
+    property_change text,
     -- `queued`, then `delivering`, then `succeeded` or `failed`.
     state          text        not null,
     -- The SHA-256 of the file after a write that succeeded; null after a delete.
@@ -303,6 +311,11 @@ create table notes.writes (
         check ((kind = 'resolve_conflict') = (resolves is not null and choice is not null)),
     constraint writes_choice_is_known
         check (choice in ('keep_current', 'keep_writer', 'accept_merge', 'custom')),
+    constraint writes_target_has_its_key
+        check ((target_path is null) = (target_path_key is null)),
+    constraint writes_property_names_its_change
+        check ((kind = 'set_property') = (property_key is not null and property_change is not null)),
+    constraint writes_property_change_is_known check (property_change in ('set', 'remove')),
     constraint writes_one_per_idempotency_key unique (connection_id, idempotency_key),
     constraint writes_idempotency_key_is_sha256 check (idempotency_key ~ '^[0-9a-f]{64}$'),
     constraint writes_request_digest_is_sha256 check (request_digest ~ '^[0-9a-f]{64}$')
@@ -313,6 +326,13 @@ comment on table notes.writes is
 
 create index writes_open_idx on notes.writes (connection_id, path_key, position)
     where state in ('queued', 'delivering');
+
+create index writes_open_target_idx on notes.writes (connection_id, target_path_key, position)
+    where state in ('queued', 'delivering') and target_path_key is not null;
+
+-- The queue that the device of a `plugin` or `cli` connection reads.
+create index writes_delivering_idx on notes.writes (connection_id, position)
+    where state = 'delivering';
 
 -- Every operation that waits for a write: the first one, and each one that repeated its
 -- idempotency key. Each of them reports the outcome of the write.

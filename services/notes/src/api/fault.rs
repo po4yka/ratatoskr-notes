@@ -46,6 +46,7 @@ pub(super) enum ApiFault {
     ConnectionRemoved,
     FileNotFound,
     ConflictNotFound,
+    DeviceOperationNotFound,
     ChannelMismatch,
     SequenceGap {
         committed: u64,
@@ -68,6 +69,7 @@ impl ApiFault {
             Self::NotFound
             | Self::FileNotFound
             | Self::ConflictNotFound
+            | Self::DeviceOperationNotFound
             | Self::Transfer(
                 TransferErrorCode::SessionUnknown | TransferErrorCode::SessionExpired,
             ) => StatusCode::NOT_FOUND,
@@ -139,6 +141,11 @@ impl ApiFault {
             Self::ConflictNotFound => (
                 "notes.conflict.not_found",
                 "The conflict does not exist.",
+                false,
+            ),
+            Self::DeviceOperationNotFound => (
+                "notes.device_operation.not_found",
+                "The operation is not in the queue of this connection.",
                 false,
             ),
             Self::Transfer(code) => (code.as_str(), transfer_message(*code), code.retryable()),

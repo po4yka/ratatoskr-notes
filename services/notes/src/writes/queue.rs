@@ -49,28 +49,47 @@ pub(super) struct Locked<'a> {
 impl Locked<'_> {
     /// Deliver the head of the queue of `path_key` when it waits and its base is current. A head
     /// whose base is not current fails as a conflict, and the next write becomes the head. A
-    /// resolution `keep_current` whose base is current needs no delivery: it ends at once.
+    /// resolution `keep_current` whose base is current needs no delivery: it ends at once. A
+    /// `rename` or a `move` is in the queue of its path and of its target, and is delivered only
+    /// when it is the head of both; when it ends here, the other queue moves on too.
     pub(super) async fn advance(&mut self, path_key: &str) -> Result<(), RecordError> {
-        while let Some(head) = self.transaction.queue_head(path_key).await? {
-            if head.state != "queued" {
-                return Ok(());
-            }
-            match self.check_base(&head).await? {
-                Check::Deliver if head.choice.as_deref() == Some("keep_current") => {
-                    let revision = head.base_hash.as_deref();
-                    self.succeed(&head, revision).await?;
-                    self.resolved(&head, revision).await?;
+        let mut keys = vec![path_key.to_owned()];
+        while let Some(key) = keys.pop() {
+            while let Some(head) = self.transaction.queue_head(&key).await? {
+                if head.state != "queued" || !self.heads_every_queue(&head).await? {
+                    break;
                 }
-                Check::Deliver => {
-                    self.transaction.deliver_write(head.write_id).await?;
-                    self.report(head.write_id, Step::Delivering).await?;
-                    return Ok(());
+                let other = keys_of(&head).into_iter().find(|other| *other != key);
+                match self.check_base(&head).await? {
+                    Check::Deliver if head.choice.as_deref() == Some("keep_current") => {
+                        let revision = head.base_hash.as_deref();
+                        self.succeed(&head, revision).await?;
+                        self.resolved(&head, revision).await?;
+                    }
+                    Check::Deliver => {
+                        self.transaction.deliver_write(head.write_id).await?;
+                        self.report(head.write_id, Step::Delivering).await?;
+                        break;
+                    }
+                    Check::Conflict(current) => self.conflict(&head, current.as_deref()).await?,
+                    Check::Fail(code) => self.fail(&head, code).await?,
                 }
-                Check::Conflict(current) => self.conflict(&head, current.as_deref()).await?,
-                Check::Fail(code) => self.fail(&head, code).await?,
+                keys.extend(other.map(str::to_owned));
             }
         }
         Ok(())
+    }
+
+    /// Whether `write` is the head of every queue it is in: the queue of its path, and for a
+    /// `rename` or a `move` the queue of its target too.
+    async fn heads_every_queue(&mut self, write: &WriteRow) -> Result<bool, RecordError> {
+        for key in keys_of(write) {
+            let head = self.transaction.queue_head(key).await?;
+            if head.is_none_or(|head| head.write_id != write.write_id) {
+                return Ok(false);
+            }
+        }
+        Ok(true)
     }
 
     /// Whether `write` may be delivered now. A `create` passes only when no present file has its
@@ -328,4 +347,16 @@ impl Locked<'_> {
         }
         Ok(())
     }
+}
+
+/// The path keys of the queues that `write` is in: its path, and the target of a `rename` or a
+/// `move` when that is another key.
+pub(super) fn keys_of(write: &WriteRow) -> Vec<&str> {
+    let mut keys = vec![write.path_key.as_str()];
+    if let Some(target) = write.target_path_key.as_deref()
+        && target != write.path_key
+    {
+        keys.push(target);
+    }
+    keys
 }

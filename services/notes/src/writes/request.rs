@@ -26,6 +26,10 @@ pub(super) struct Request {
     /// The conflict that a `resolve_conflict` ends, and the wire word of its choice. Its path,
     /// its base and, except for `custom`, its content come from the conflict.
     pub(super) resolution: Option<(Uuid, &'static str)>,
+    /// The property of a `set_property`, and `set` or `remove`.
+    pub(super) property: Option<(String, &'static str)>,
+    /// The path key of `target_path`.
+    pub(super) target_path_key: Option<String>,
 }
 
 impl Request {
@@ -41,6 +45,7 @@ impl Request {
             return None;
         }
         let mut resolution = None;
+        let mut property = None;
         let (kind, path, target_path, base_hash, content) = match &payload.operation {
             WriteOperation::Create(create) => (
                 "create",
@@ -70,16 +75,24 @@ impl Request {
                 Some(delete.base_hash.as_str()),
                 None,
             ),
-            WriteOperation::SetProperty(property) => (
-                "set_property",
-                property.path.as_str(),
-                None,
-                Some(property.base_hash.as_str()),
-                match &property.property_change {
-                    PropertyChange::Set(blob) => Some(blob),
-                    _ => None,
-                },
-            ),
+            WriteOperation::SetProperty(set) => {
+                let change = match &set.property_change {
+                    PropertyChange::Set(_) => "set",
+                    PropertyChange::Remove => "remove",
+                    _ => return None,
+                };
+                property = Some((set.property_key.as_str().to_owned(), change));
+                (
+                    "set_property",
+                    set.path.as_str(),
+                    None,
+                    Some(set.base_hash.as_str()),
+                    match &set.property_change {
+                        PropertyChange::Set(blob) => Some(blob),
+                        _ => None,
+                    },
+                )
+            }
             WriteOperation::ResolveConflict(resolve) => {
                 resolution = Some((resolve.conflict_id.0, resolve.choice.as_str()));
                 ("resolve_conflict", "", None, None, resolve.blob.as_ref())
@@ -87,6 +100,7 @@ impl Request {
             _ => return None,
         };
         let path = nfc_path(path);
+        let target_path = target_path.map(nfc_path);
         // The digest of what the writer asked for, to tell a retry from a reused key.
         let request = serde_json::to_vec(&(payload.origin.as_str(), &payload.operation)).ok()?;
         Some(Self {
@@ -99,11 +113,13 @@ impl Request {
             kind,
             path_key: path_key(&path),
             path,
-            target_path: target_path.map(nfc_path),
+            target_path_key: target_path.as_deref().map(path_key),
+            target_path,
             base_hash: base_hash.map(str::to_owned),
             content_hash: content.map(|blob| blob.digest.hex.as_str().to_owned()),
             content_length: content.map(|blob| blob.length_bytes),
             resolution,
+            property,
         })
     }
 
@@ -131,10 +147,15 @@ impl Request {
             path: &self.path,
             path_key: &self.path_key,
             target_path: self.target_path.as_deref(),
+            target_path_key: self.target_path_key.as_deref(),
             base_hash: self.base_hash.as_deref(),
             content_hash: self.content_hash.as_deref(),
             content_length: self.content_length,
             resolves: self.resolution,
+            property: self
+                .property
+                .as_ref()
+                .map(|(key, change)| (key.as_str(), *change)),
         }
     }
 }

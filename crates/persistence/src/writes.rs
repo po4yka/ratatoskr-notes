@@ -30,6 +30,8 @@ pub struct NewWrite<'a> {
     pub path_key: &'a str,
     /// The new path of a `rename` or a `move`.
     pub target_path: Option<&'a str>,
+    /// The path key of `target_path`.
+    pub target_path_key: Option<&'a str>,
     /// The revision that the writer saw.
     pub base_hash: Option<&'a str>,
     /// The SHA-256 of the uploaded bytes that the write puts at the path.
@@ -38,6 +40,8 @@ pub struct NewWrite<'a> {
     pub content_length: Option<u64>,
     /// The conflict that a `resolve_conflict` ends, and its choice.
     pub resolves: Option<(Uuid, &'a str)>,
+    /// The property of a `set_property`, and `set` or `remove`.
+    pub property: Option<(&'a str, &'a str)>,
 }
 
 /// One recorded write.
@@ -45,6 +49,8 @@ pub struct NewWrite<'a> {
 pub struct WriteRow {
     /// The write.
     pub write_id: Uuid,
+    /// Its connection.
+    pub connection_id: Uuid,
     /// Its operation.
     pub operation_id: Uuid,
     /// Its origin.
@@ -75,6 +81,14 @@ pub struct WriteRow {
     pub resolves: Option<Uuid>,
     /// The choice of a `resolve_conflict`.
     pub choice: Option<String>,
+    /// The path key of `target_path`.
+    pub target_path_key: Option<String>,
+    /// The property of a `set_property`.
+    pub property_key: Option<String>,
+    /// `set` or `remove` for a `set_property`.
+    pub property_change: Option<String>,
+    /// The order of acceptance in the connection: the cursor of the queue of a device.
+    pub position: i64,
 }
 
 /// An open conflict of a connection, as a resolution reads it.
@@ -138,69 +152,40 @@ pub struct ConflictRow {
     pub state: String,
 }
 
-/// The columns of a [`WriteRow`], in its order.
-const WRITE_COLUMNS: &str = "write_id, operation_id, origin, kind, path, path_key, target_path,
+/// The columns of a [`WriteRow`].
+const WRITE_COLUMNS: &str =
+    "write_id, connection_id, operation_id, origin, kind, path, path_key, target_path,
      base_hash, content_hash, content_length, state, revision, error_code, conflict_id, resolves,
-     choice";
+     choice, target_path_key, property_key, property_change, position";
 
-/// The row of a [`WriteRow`].
-type WriteTuple = (
-    Uuid,
-    Uuid,
-    String,
-    String,
-    String,
-    String,
-    Option<String>,
-    Option<String>,
-    Option<String>,
-    Option<i64>,
-    String,
-    Option<String>,
-    Option<String>,
-    Option<Uuid>,
-    Option<Uuid>,
-    Option<String>,
-);
-
-fn write_row(
-    (
-        write_id,
-        operation_id,
-        origin,
-        kind,
-        path,
-        path_key,
-        target_path,
-        base_hash,
-        content_hash,
-        content_length,
-        state,
-        revision,
-        error_code,
-        conflict_id,
-        resolves,
-        choice,
-    ): WriteTuple,
-) -> WriteRow {
-    WriteRow {
-        write_id,
-        operation_id,
-        origin,
-        kind,
-        path,
-        path_key,
-        target_path,
-        base_hash,
-        content_hash,
-        // A CHECK keeps the length at 0 or more.
-        content_length: content_length.map(|length| u64::try_from(length).unwrap_or_default()),
-        state,
-        revision,
-        error_code,
-        conflict_id,
-        resolves,
-        choice,
+impl<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow> for WriteRow {
+    fn from_row(row: &'r sqlx::postgres::PgRow) -> Result<Self, sqlx::Error> {
+        use sqlx::Row as _;
+        let content_length: Option<i64> = row.try_get("content_length")?;
+        Ok(Self {
+            write_id: row.try_get("write_id")?,
+            connection_id: row.try_get("connection_id")?,
+            operation_id: row.try_get("operation_id")?,
+            origin: row.try_get("origin")?,
+            kind: row.try_get("kind")?,
+            path: row.try_get("path")?,
+            path_key: row.try_get("path_key")?,
+            target_path: row.try_get("target_path")?,
+            base_hash: row.try_get("base_hash")?,
+            content_hash: row.try_get("content_hash")?,
+            // A CHECK keeps the length at 0 or more.
+            content_length: content_length.map(|length| u64::try_from(length).unwrap_or_default()),
+            state: row.try_get("state")?,
+            revision: row.try_get("revision")?,
+            error_code: row.try_get("error_code")?,
+            conflict_id: row.try_get("conflict_id")?,
+            resolves: row.try_get("resolves")?,
+            choice: row.try_get("choice")?,
+            target_path_key: row.try_get("target_path_key")?,
+            property_key: row.try_get("property_key")?,
+            property_change: row.try_get("property_change")?,
+            position: row.try_get("position")?,
+        })
     }
 }
 
@@ -215,9 +200,10 @@ impl FileTransaction {
             "insert into notes.writes
                  (write_id, connection_id, operation_id, idempotency_key, request_digest, origin,
                   kind, path, path_key, target_path, base_hash, content_hash, content_length,
-                  resolves, choice, state, created_at, updated_at)
-             values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, 'queued',
-                     now(), now())",
+                  resolves, choice, target_path_key, property_key, property_change, state,
+                  created_at, updated_at)
+             values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17,
+                     $18, 'queued', now(), now())",
         )
         .bind(write.write_id)
         .bind(self.connection_id)
@@ -238,6 +224,9 @@ impl FileTransaction {
         )
         .bind(write.resolves.map(|(conflict_id, _)| conflict_id))
         .bind(write.resolves.map(|(_, choice)| choice))
+        .bind(write.target_path_key)
+        .bind(write.property.map(|(key, _)| key))
+        .bind(write.property.map(|(_, change)| change))
         .execute(&mut *self.transaction)
         .await
         .map_err(query_error)?;
@@ -290,7 +279,8 @@ impl FileTransaction {
         Ok(())
     }
 
-    /// The head of the queue of the path key `path_key`: its oldest open write.
+    /// The head of the queue of the path key `path_key`: its oldest open write, of that path key or
+    /// a `rename` or `move` to it.
     ///
     /// # Errors
     ///
@@ -299,9 +289,10 @@ impl FileTransaction {
         &mut self,
         path_key: &str,
     ) -> Result<Option<WriteRow>, PersistenceError> {
-        let row: Option<WriteTuple> = sqlx::query_as(&format!(
+        let row: Option<WriteRow> = sqlx::query_as(&format!(
             "select {WRITE_COLUMNS} from notes.writes
-             where connection_id = $1 and path_key = $2 and state in ('queued', 'delivering')
+             where connection_id = $1 and (path_key = $2 or target_path_key = $2)
+               and state in ('queued', 'delivering')
              order by position limit 1"
         ))
         .bind(self.connection_id)
@@ -309,7 +300,7 @@ impl FileTransaction {
         .fetch_optional(&mut *self.transaction)
         .await
         .map_err(query_error)?;
-        Ok(row.map(write_row))
+        Ok(row)
     }
 
     /// The write `write_id` of this connection.
@@ -318,7 +309,7 @@ impl FileTransaction {
     ///
     /// [`PersistenceError::Query`] when the statement fails.
     pub async fn write(&mut self, write_id: Uuid) -> Result<Option<WriteRow>, PersistenceError> {
-        let row: Option<WriteTuple> = sqlx::query_as(&format!(
+        let row: Option<WriteRow> = sqlx::query_as(&format!(
             "select {WRITE_COLUMNS} from notes.writes
              where connection_id = $1 and write_id = $2"
         ))
@@ -327,7 +318,7 @@ impl FileTransaction {
         .fetch_optional(&mut *self.transaction)
         .await
         .map_err(query_error)?;
-        Ok(row.map(write_row))
+        Ok(row)
     }
 
     /// Mark the write `write_id` `delivering`.
@@ -522,7 +513,7 @@ impl FileTransaction {
     ///
     /// [`PersistenceError::Query`] when the statement fails.
     pub async fn queued_writes(&mut self) -> Result<Vec<WriteRow>, PersistenceError> {
-        let rows: Vec<WriteTuple> = sqlx::query_as(&format!(
+        let rows: Vec<WriteRow> = sqlx::query_as(&format!(
             "select {WRITE_COLUMNS} from notes.writes
              where connection_id = $1 and state = 'queued'
              order by position"
@@ -531,7 +522,7 @@ impl FileTransaction {
         .fetch_all(&mut *self.transaction)
         .await
         .map_err(query_error)?;
-        Ok(rows.into_iter().map(write_row).collect())
+        Ok(rows)
     }
 
     /// The operations that report the outcome of the write `write_id`, the first one first.
@@ -585,7 +576,7 @@ impl Database {
         &self,
         connection_id: Uuid,
     ) -> Result<Vec<WriteRow>, PersistenceError> {
-        let rows: Vec<WriteTuple> = sqlx::query_as(&format!(
+        let rows: Vec<WriteRow> = sqlx::query_as(&format!(
             "select {WRITE_COLUMNS} from notes.writes
              where connection_id = $1 and state = 'delivering'
              order by position"
@@ -594,7 +585,32 @@ impl Database {
         .fetch_all(self.pool())
         .await
         .map_err(query_error)?;
-        Ok(rows.into_iter().map(write_row).collect())
+        Ok(rows)
+    }
+
+    /// The delivering writes of `connection_id` after the position `after`, at most `limit`, in
+    /// the order of acceptance: the queue that the device of a `plugin` or `cli` connection reads.
+    ///
+    /// # Errors
+    ///
+    /// [`PersistenceError::Query`] when the statement fails.
+    pub async fn device_queue(
+        &self,
+        connection_id: Uuid,
+        after: i64,
+        limit: i64,
+    ) -> Result<Vec<WriteRow>, PersistenceError> {
+        sqlx::query_as(&format!(
+            "select {WRITE_COLUMNS} from notes.writes
+             where connection_id = $1 and state = 'delivering' and position > $2
+             order by position limit $3"
+        ))
+        .bind(connection_id)
+        .bind(after)
+        .bind(limit)
+        .fetch_all(self.pool())
+        .await
+        .map_err(query_error)
     }
 
     /// The write that the operation `operation_id` reports: the write it asked for, or the
@@ -607,7 +623,7 @@ impl Database {
         &self,
         operation_id: Uuid,
     ) -> Result<Option<WriteRow>, PersistenceError> {
-        let row: Option<WriteTuple> = sqlx::query_as(&format!(
+        let row: Option<WriteRow> = sqlx::query_as(&format!(
             "select {WRITE_COLUMNS} from notes.writes
              where write_id = (select write_id from notes.write_operations
                                where operation_id = $1)"
@@ -616,7 +632,7 @@ impl Database {
         .fetch_optional(self.pool())
         .await
         .map_err(query_error)?;
-        Ok(row.map(write_row))
+        Ok(row)
     }
 
     /// The conflict `conflict_id` of a connection of `owner_id`. A conflict of another owner reads
