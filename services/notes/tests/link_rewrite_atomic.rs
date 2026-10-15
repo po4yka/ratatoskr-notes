@@ -297,3 +297,81 @@ async fn sync_writes_no_rewrite_when_the_rename_fails() {
 
     writer.cleanup().await;
 }
+
+#[tokio::test]
+async fn a_retried_result_settles_the_rest_of_the_group() {
+    let writer = Writer::new().await;
+    let a = b"# A\n";
+    let x0 = b"[[A]]\n";
+    let x1 = b"[[B]]\n";
+    let y0 = b"See [[A]] too.\n";
+    let y1 = b"See [[B]] too.\n";
+    let connection = writer
+        .vault(&[("A.md", a), ("X.md", x0), ("Y.md", y0)])
+        .await;
+    let renamed = command(connection, &rename("A.md", &sha256(a), "B.md"));
+    assert!(matches!(
+        writer.send(&renamed).await,
+        Handled::Queued { .. }
+    ));
+    let device = device_of(OWNER);
+    let read = writer
+        .device_operations(OWNER, device, connection, None)
+        .await;
+    let operation_id = read.body["operations"][0]["operation_id"]
+        .as_str()
+        .expect("the rename is in the queue")
+        .to_owned();
+
+    // A first result recorded the rename and X.md, and then the service failed before Y.md.
+    let deliveries = writer.deliveries(connection).await;
+    for delivery in &deliveries {
+        let digest = match delivery.path.as_str() {
+            "A.md" => sha256(a),
+            "X.md" => sha256(x1),
+            _ => continue,
+        };
+        assert!(
+            writer
+                .writes
+                .acknowledge(connection, delivery.write_id, Some(&digest))
+                .await
+                .expect("the acknowledgement is recorded"),
+            "{delivery:?}"
+        );
+    }
+
+    // The device sends the result again.
+    let answer = writer
+        .device_result(
+            OWNER,
+            device,
+            connection,
+            &operation_id,
+            json!({
+                "outcome": "applied",
+                "sha256": sha256(a),
+                "rewrites": [
+                    { "path": "X.md", "outcome": "applied", "sha256": sha256(x1) },
+                    { "path": "Y.md", "outcome": "applied", "sha256": sha256(y1) },
+                ],
+            }),
+        )
+        .await;
+    assert_eq!(answer.status, StatusCode::OK, "{:?}", answer.body);
+
+    assert_eq!(
+        writer.current(connection, "Y.md").await,
+        Some(sha256(y1)),
+        "the retry settles the rewrite that was still delivering"
+    );
+    assert_eq!(
+        writer.outcome(&renamed).await,
+        Some(Outcome::Succeeded {
+            revision: Some(sha256(a))
+        })
+    );
+    assert_eq!(answer.body["state"], "succeeded", "{:?}", answer.body);
+
+    writer.cleanup().await;
+}
