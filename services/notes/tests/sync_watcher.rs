@@ -208,3 +208,46 @@ async fn linked_tree_root_leaks_no_outside_content() {
     stop.cancel();
     watching.await.expect("the watcher stops");
 }
+
+#[tokio::test(start_paused = true)]
+async fn temporary_file_of_a_write_is_not_a_change() {
+    let tree = tempfile::tempdir().expect("a working tree");
+    std::fs::write(tree.path().join("Plan.md"), "# Plan\n").expect("a note");
+    // What a write of notes leaves for a moment beside the file it replaces (OBS-024 task 7.6).
+    let part = "# Plan\n\nThe bytes of a write on their way.\n";
+    std::fs::write(tree.path().join(".ratatoskr-write-0192abcd.part"), part)
+        .expect("a temporary file of a write");
+    let blob_root = tempfile::tempdir().expect("a blob root");
+    let (sender, mut changes) = mpsc::channel(16);
+    let stop = CancellationToken::new();
+    let watching = watcher::watch(
+        tree.path().to_owned(),
+        BlobStore::new(blob_root.path()),
+        sender,
+        stop.clone(),
+    );
+
+    let mut seen = Vec::new();
+    while let Ok(Some(change)) = tokio::time::timeout(Duration::from_mins(20), changes.recv()).await
+    {
+        seen.push(change);
+    }
+    let paths: Vec<PathBuf> = seen
+        .iter()
+        .map(|change| match change {
+            TreeChange::Revision { path, .. } | TreeChange::Removed { path } => path.clone(),
+        })
+        .collect();
+    assert_eq!(
+        paths,
+        [PathBuf::from("Plan.md")],
+        "only the note is a change; the temporary file of a write is not"
+    );
+    assert!(
+        !holds(blob_root.path(), part),
+        "no blob holds the bytes of the temporary file"
+    );
+
+    stop.cancel();
+    watching.await.expect("the watcher stops");
+}
