@@ -98,6 +98,8 @@ pub struct WriteRow {
     pub delivery_sequence: Option<i64>,
     /// The write group of a rename and its link rewrites: the `write_id` of the rename.
     pub group_id: Option<Uuid>,
+    /// The SHA-256 of the file that the channel reported with a base mismatch.
+    pub local_hash: Option<String>,
 }
 
 /// An open conflict of a connection, as a resolution reads it.
@@ -168,7 +170,7 @@ pub(crate) const WRITE_COLUMNS: &str =
     "write_id, connection_id, operation_id, origin, kind, path, path_key, target_path,
      base_hash, content_hash, content_length, state, revision, error_code, conflict_id, resolves,
      choice, target_path_key, property_key, property_change, position, delivery_sequence, landed,
-     group_id";
+     group_id, local_hash";
 
 impl<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow> for WriteRow {
     fn from_row(row: &'r sqlx::postgres::PgRow) -> Result<Self, sqlx::Error> {
@@ -200,6 +202,7 @@ impl<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow> for WriteRow {
             landed: row.try_get("landed")?,
             delivery_sequence: row.try_get("delivery_sequence")?,
             group_id: row.try_get("group_id")?,
+            local_hash: row.try_get("local_hash")?,
         })
     }
 }

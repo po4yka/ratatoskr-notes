@@ -92,6 +92,30 @@ impl FileTransaction {
         Ok(())
     }
 
+    /// Record `local_hash`, the hash of the file that the channel reported with a base mismatch,
+    /// on the write `write_id`.
+    ///
+    /// # Errors
+    ///
+    /// [`PersistenceError::Query`] when the statement fails.
+    pub async fn set_local_hash(
+        &mut self,
+        write_id: Uuid,
+        local_hash: Option<&str>,
+    ) -> Result<(), PersistenceError> {
+        sqlx::query(
+            "update notes.writes set local_hash = $3, updated_at = now()
+              where connection_id = $1 and write_id = $2",
+        )
+        .bind(self.connection_id)
+        .bind(write_id)
+        .bind(local_hash)
+        .execute(&mut *self.transaction)
+        .await
+        .map_err(query_error)?;
+        Ok(())
+    }
+
     /// Name the conflict `conflict_id` on the write `write_id`, which failed with it.
     ///
     /// # Errors

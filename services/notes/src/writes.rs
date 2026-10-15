@@ -597,7 +597,13 @@ impl Writes {
             }
             (End::Refused(refusal), Some(group_id)) => {
                 let code = match refusal {
-                    Refusal::BaseMismatch { .. } => CONFLICT,
+                    Refusal::BaseMismatch { local_hash } => {
+                        locked
+                            .transaction
+                            .set_local_hash(write.write_id, local_hash.as_deref())
+                            .await?;
+                        CONFLICT
+                    }
                     Refusal::Failed { code } => code.as_str(),
                 };
                 locked.transaction.fail_write(write.write_id, code).await?;

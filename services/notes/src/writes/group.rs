@@ -314,12 +314,16 @@ impl Locked<'_> {
         let Some(first) = stale.first() else {
             return Ok(());
         };
-        let current = self
-            .transaction
-            .file_by_key(&first.path_key)
-            .await?
-            .filter(|file| file.present)
-            .map(|file| file.revision);
+        // The hash that the channel reported for the file, or else its current revision.
+        let current = match &first.local_hash {
+            Some(local) => Some(local.clone()),
+            None => self
+                .transaction
+                .file_by_key(&first.path_key)
+                .await?
+                .filter(|file| file.present)
+                .map(|file| file.revision),
+        };
         let conflict_id = Uuid::now_v7();
         self.transaction
             .raise_conflict(&NewConflict {

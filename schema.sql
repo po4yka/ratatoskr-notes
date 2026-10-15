@@ -312,6 +312,9 @@ create table notes.writes (
     -- `update` of a linking note. Null for a write outside a group. A group is delivered only when
     -- it is the head of every queue it touches, and it ends as one operation.
     group_id       uuid,
+    -- The SHA-256 of the file that the channel reported when it refused the write with a base
+    -- mismatch; a conflict of a write group names it as the current side.
+    local_hash     text,
     created_at     timestamptz not null,
     updated_at     timestamptz not null,
 
@@ -325,6 +328,7 @@ create table notes.writes (
     constraint writes_base_hash_is_sha256 check (base_hash ~ '^[0-9a-f]{64}$'),
     constraint writes_content_hash_is_sha256 check (content_hash ~ '^[0-9a-f]{64}$'),
     constraint writes_revision_is_sha256 check (revision ~ '^[0-9a-f]{64}$'),
+    constraint writes_local_hash_is_sha256 check (local_hash ~ '^[0-9a-f]{64}$'),
     constraint writes_content_length_is_not_negative check (content_length >= 0),
     constraint writes_path_is_bounded check (length(path) between 1 and 1024),
     constraint writes_failure_has_a_code check ((state = 'failed') = (error_code is not null)),

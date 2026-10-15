@@ -305,7 +305,10 @@ always comes after that read's `next_cursor`. Each operation has `operation_id`,
   with rewrites adds `"rewrites": [{"path": ..., "outcome": "applied", "sha256": ...} or
   {"path": ..., "outcome": "base_mismatch", "local_sha256": ...}]`, and a linking note that the
   list does not name counts as not applied),
-  `{"outcome": "base_mismatch", "local_sha256": "<hash>"}`, or `{"outcome": "failed", "code":
+  `{"outcome": "base_mismatch", "local_sha256": "<hash>"}` (a rename with rewrites may add
+  `"rewrites": [{"path": ..., "outcome": "base_mismatch", "local_sha256": ...}]` with the local hash
+  of each linking note; an `applied` entry there answers `400`, and the conflict of the group names
+  the local hash that the device reported for its first stale file), or `{"outcome": "failed", "code":
   "<typed code>"}`, and answers `{"operation_id": ..., "state": "succeeded" | "failed" |
   "delivering"}`. An `applied` hash names bytes that the device uploaded to the connection first;
   otherwise the answer is `409` `notes.channel.bytes_missing` with the hash, and the device sends

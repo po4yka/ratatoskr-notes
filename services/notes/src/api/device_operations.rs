@@ -59,10 +59,13 @@ pub(super) enum DeviceResult {
         #[serde(default)]
         rewrites: Vec<RewriteResult>,
     },
-    /// The local file did not have the base hash; nothing was applied.
+    /// The local file did not have the base hash; nothing was applied. For a rename with link
+    /// rewrites, `rewrites` may name the local hash of each linking note, each as `base_mismatch`.
     BaseMismatch {
         #[serde(default)]
         local_sha256: Option<String>,
+        #[serde(default)]
+        rewrites: Vec<RewriteResult>,
     },
     /// The device could not apply the operation, with a typed error code.
     Failed { code: String },
@@ -172,10 +175,6 @@ pub(super) async fn post_result<B: SystemdBus>(
         .await?
         .ok_or(ApiFault::DeviceOperationNotFound)?;
     let writes = Writes::new(state.recorder());
-    let unavailable = |error: crate::writes::WriteError| {
-        tracing::error!(%error, %connection_id, "the result of a device could not be recorded");
-        ApiFault::Unavailable
-    };
     let rewrites = rewrites_of(&state, &write).await?;
     // The rename and each rewrite end in transactions of their own. When the service failed
     // between two of them, the device sends the result again: the writes that are still
@@ -183,67 +182,21 @@ pub(super) async fn post_result<B: SystemdBus>(
     let open =
         write.state == "delivering" || rewrites.iter().any(|member| member.state == "delivering");
     if open {
+        let ended = Ended {
+            writes: &writes,
+            connection_id,
+            write: &write,
+            rewrites: &rewrites,
+        };
         match result {
             DeviceResult::Applied {
                 sha256,
                 rewrites: results,
-            } => {
-                let ends = rewrite_ends(&rewrites, results);
-                for digest in ends.iter().filter_map(|(_, end)| match end {
-                    RewriteEnd::Applied(digest) => Some(digest),
-                    RewriteEnd::Refused(_) => None,
-                }) {
-                    if !writes
-                        .may_name(connection_id, digest)
-                        .await
-                        .map_err(unavailable)?
-                    {
-                        return Err(ApiFault::BytesMissing {
-                            missing: vec![digest.clone()],
-                        });
-                    }
-                }
-                let revision = if write.kind == "delete" {
-                    None
-                } else {
-                    let digest = sha256.filter(|digest| is_sha256(digest));
-                    let digest = digest.ok_or(ApiFault::InvalidRequest)?;
-                    if !writes
-                        .may_name(connection_id, &digest)
-                        .await
-                        .map_err(unavailable)?
-                    {
-                        return Err(ApiFault::BytesMissing {
-                            missing: vec![digest],
-                        });
-                    }
-                    Some(digest)
-                };
-                writes
-                    .acknowledge(connection_id, write.write_id, revision.as_deref())
-                    .await
-                    .map_err(unavailable)?;
-                for (member, end) in ends {
-                    match end {
-                        RewriteEnd::Applied(digest) => {
-                            writes
-                                .acknowledge(connection_id, member, Some(&digest))
-                                .await
-                        }
-                        RewriteEnd::Refused(refusal) => {
-                            writes.refuse(connection_id, member, refusal).await
-                        }
-                    }
-                    .map_err(unavailable)?;
-                }
-            }
-            DeviceResult::BaseMismatch { local_sha256 } => {
-                let local_hash = local_sha256.filter(|digest| is_sha256(digest));
-                let refusal = Refusal::BaseMismatch { local_hash };
-                refuse_all(&writes, connection_id, &write, &rewrites, &refusal)
-                    .await
-                    .map_err(unavailable)?;
-            }
+            } => ended.applied(sha256, results).await?,
+            DeviceResult::BaseMismatch {
+                local_sha256,
+                rewrites: results,
+            } => ended.base_mismatch(local_sha256, results).await?,
             DeviceResult::Failed { code } => {
                 if ratatoskr_error_contracts::ErrorCode::parse(&code).is_err() {
                     return Err(ApiFault::InvalidRequest);
@@ -251,11 +204,15 @@ pub(super) async fn post_result<B: SystemdBus>(
                 let refusal = Refusal::Failed { code };
                 refuse_all(&writes, connection_id, &write, &rewrites, &refusal)
                     .await
-                    .map_err(unavailable)?;
+                    .map_err(|error| unavailable(connection_id, &error))?;
             }
         }
     }
-    let state_word = match writes.outcome(operation_id).await.map_err(unavailable)? {
+    let state_word = match writes
+        .outcome(operation_id)
+        .await
+        .map_err(|error| unavailable(connection_id, &error))?
+    {
         Some(Outcome::Succeeded { .. }) => "succeeded",
         Some(Outcome::Failed { .. }) => "failed",
         _ => "delivering",
@@ -263,6 +220,117 @@ pub(super) async fn post_result<B: SystemdBus>(
     Ok(Json(
         json!({ "operation_id": operation_id, "state": state_word }),
     ))
+}
+
+/// The fault of a result that could not be recorded; the device sends it again.
+fn unavailable(connection_id: Uuid, error: &crate::writes::WriteError) -> ApiFault {
+    tracing::error!(%error, %connection_id, "the result of a device could not be recorded");
+    ApiFault::Unavailable
+}
+
+/// The writes that one device result ends: a write, and the rewrites of its group.
+struct Ended<'a> {
+    writes: &'a Writes,
+    connection_id: Uuid,
+    write: &'a WriteRow,
+    rewrites: &'a [WriteRow],
+}
+
+impl Ended<'_> {
+    /// Answer `409` with `digest` when the connection may not name it.
+    async fn require(&self, digest: &str) -> Result<(), ApiFault> {
+        let usable = self
+            .writes
+            .may_name(self.connection_id, digest)
+            .await
+            .map_err(|error| unavailable(self.connection_id, &error))?;
+        if usable {
+            Ok(())
+        } else {
+            Err(ApiFault::BytesMissing {
+                missing: vec![digest.to_owned()],
+            })
+        }
+    }
+
+    /// `applied`: acknowledge the write with `sha256` and each rewrite as `results` says. Every
+    /// hash is checked before anything is recorded.
+    async fn applied(
+        &self,
+        sha256: Option<String>,
+        results: Vec<RewriteResult>,
+    ) -> Result<(), ApiFault> {
+        let ends = rewrite_ends(self.rewrites, results);
+        for (_, end) in &ends {
+            if let RewriteEnd::Applied(digest) = end {
+                self.require(digest).await?;
+            }
+        }
+        let revision = if self.write.kind == "delete" {
+            None
+        } else {
+            let digest = sha256.filter(|digest| is_sha256(digest));
+            let digest = digest.ok_or(ApiFault::InvalidRequest)?;
+            self.require(&digest).await?;
+            Some(digest)
+        };
+        let fault = |error: crate::writes::WriteError| unavailable(self.connection_id, &error);
+        self.writes
+            .acknowledge(self.connection_id, self.write.write_id, revision.as_deref())
+            .await
+            .map_err(fault)?;
+        for (member, end) in ends {
+            match end {
+                RewriteEnd::Applied(digest) => {
+                    self.writes
+                        .acknowledge(self.connection_id, member, Some(&digest))
+                        .await
+                }
+                RewriteEnd::Refused(refusal) => {
+                    self.writes
+                        .refuse(self.connection_id, member, refusal)
+                        .await
+                }
+            }
+            .map_err(fault)?;
+        }
+        Ok(())
+    }
+
+    /// `base_mismatch`: nothing was applied. Each rewrite is refused first, with the local hash
+    /// that `results` names for its note, so that the conflict of the group names it; then the
+    /// write itself, with `local_sha256`. A rewrite named `applied` is invalid.
+    async fn base_mismatch(
+        &self,
+        local_sha256: Option<String>,
+        results: Vec<RewriteResult>,
+    ) -> Result<(), ApiFault> {
+        if results
+            .iter()
+            .any(|result| matches!(result, RewriteResult::Applied { .. }))
+        {
+            return Err(ApiFault::InvalidRequest);
+        }
+        let fault = |error: crate::writes::WriteError| unavailable(self.connection_id, &error);
+        for (member, end) in rewrite_ends(self.rewrites, results) {
+            if let RewriteEnd::Refused(refusal) = end {
+                self.writes
+                    .refuse(self.connection_id, member, refusal)
+                    .await
+                    .map_err(fault)?;
+            }
+        }
+        let local_hash = local_sha256.filter(|digest| is_sha256(digest));
+        self.writes
+            .refuse(
+                self.connection_id,
+                self.write.write_id,
+                Refusal::BaseMismatch { local_hash },
+            )
+            .await
+            .map_err(fault)?;
+        Ok(())
+    }
 }
 
 /// The connection of the path when the device of the request is the one that the connection
