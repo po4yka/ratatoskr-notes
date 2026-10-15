@@ -250,8 +250,14 @@ create table notes.writes (
     connection_id  uuid        not null references notes.connections (connection_id),
     -- The order of acceptance.
     position       bigint      generated always as identity,
-    -- The operation that Edge minted for the write (kind `notes.file.write`).
+    -- The operation that Edge minted for the write (kind `notes.file.write`). A retry under
+    -- another operation is in `write_operations`.
     operation_id   uuid        not null,
+    -- The idempotency record: the hex SHA-256 key that the writer chose, and the hex SHA-256 of
+    -- the origin and the operation of the command. One key of a connection names one write; the
+    -- same key with another digest is refused (OBS-024 spec notes-write-command).
+    idempotency_key text       not null,
+    request_digest  text       not null,
     -- `platform` or `site:<site id>`.
     origin         text        not null,
     kind           text        not null,
@@ -286,7 +292,10 @@ create table notes.writes (
     constraint writes_revision_is_sha256 check (revision ~ '^[0-9a-f]{64}$'),
     constraint writes_content_length_is_not_negative check (content_length >= 0),
     constraint writes_path_is_bounded check (length(path) between 1 and 1024),
-    constraint writes_failure_has_a_code check ((state = 'failed') = (error_code is not null))
+    constraint writes_failure_has_a_code check ((state = 'failed') = (error_code is not null)),
+    constraint writes_one_per_idempotency_key unique (connection_id, idempotency_key),
+    constraint writes_idempotency_key_is_sha256 check (idempotency_key ~ '^[0-9a-f]{64}$'),
+    constraint writes_request_digest_is_sha256 check (request_digest ~ '^[0-9a-f]{64}$')
 );
 
 comment on table notes.writes is
@@ -295,7 +304,18 @@ comment on table notes.writes is
 create index writes_open_idx on notes.writes (connection_id, path_key, position)
     where state in ('queued', 'delivering');
 
-create index writes_operation_idx on notes.writes (operation_id);
+-- Every operation that waits for a write: the first one, and each one that repeated its
+-- idempotency key. Each of them reports the outcome of the write.
+create table notes.write_operations (
+    operation_id uuid        primary key,
+    write_id     uuid        not null references notes.writes (write_id),
+    created_at   timestamptz not null
+);
+
+comment on table notes.write_operations is
+    'The operations that report the outcome of one write: the first, and each retry of its key.';
+
+create index write_operations_write_idx on notes.write_operations (write_id);
 
 -- ---------------------------------------------------------------------------------------------
 -- outbox: events Notes owes the bus, written in the same transaction as their cause

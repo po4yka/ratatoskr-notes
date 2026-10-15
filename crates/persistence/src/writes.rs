@@ -16,6 +16,10 @@ pub struct NewWrite<'a> {
     pub write_id: Uuid,
     /// The operation that Edge minted for it.
     pub operation_id: Uuid,
+    /// The hex SHA-256 idempotency key of the writer.
+    pub idempotency_key: &'a str,
+    /// The hex SHA-256 of the origin and the operation of the command.
+    pub request_digest: &'a str,
     /// `platform` or `site:<site id>`.
     pub origin: &'a str,
     /// The wire word of the operation.
@@ -130,14 +134,17 @@ impl FileTransaction {
     pub async fn insert_write(&mut self, write: &NewWrite<'_>) -> Result<(), PersistenceError> {
         sqlx::query(
             "insert into notes.writes
-                 (write_id, connection_id, operation_id, origin, kind, path, path_key,
-                  target_path, base_hash, content_hash, content_length, state, created_at,
-                  updated_at)
-             values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'queued', now(), now())",
+                 (write_id, connection_id, operation_id, idempotency_key, request_digest, origin,
+                  kind, path, path_key, target_path, base_hash, content_hash, content_length,
+                  state, created_at, updated_at)
+             values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, 'queued', now(),
+                     now())",
         )
         .bind(write.write_id)
         .bind(self.connection_id)
         .bind(write.operation_id)
+        .bind(write.idempotency_key)
+        .bind(write.request_digest)
         .bind(write.origin)
         .bind(write.kind)
         .bind(write.path)
@@ -150,6 +157,52 @@ impl FileTransaction {
                 .content_length
                 .map(|length| i64::try_from(length).unwrap_or(i64::MAX)),
         )
+        .execute(&mut *self.transaction)
+        .await
+        .map_err(query_error)?;
+        self.attach_operation(write.operation_id, write.write_id)
+            .await
+    }
+
+    /// The write of this connection with the idempotency key `key`, and the digest of its
+    /// request.
+    ///
+    /// # Errors
+    ///
+    /// [`PersistenceError::Query`] when the statement fails.
+    pub async fn write_of_key(
+        &mut self,
+        key: &str,
+    ) -> Result<Option<(Uuid, String)>, PersistenceError> {
+        sqlx::query_as(
+            "select write_id, request_digest from notes.writes
+             where connection_id = $1 and idempotency_key = $2",
+        )
+        .bind(self.connection_id)
+        .bind(key)
+        .fetch_optional(&mut *self.transaction)
+        .await
+        .map_err(query_error)
+    }
+
+    /// Let the operation `operation_id` report the outcome of the write `write_id`. An operation
+    /// that already waits for it changes nothing.
+    ///
+    /// # Errors
+    ///
+    /// [`PersistenceError::Query`] when the statement fails.
+    pub async fn attach_operation(
+        &mut self,
+        operation_id: Uuid,
+        write_id: Uuid,
+    ) -> Result<(), PersistenceError> {
+        sqlx::query(
+            "insert into notes.write_operations (operation_id, write_id, created_at)
+             values ($1, $2, now())
+             on conflict (operation_id) do nothing",
+        )
+        .bind(operation_id)
+        .bind(write_id)
         .execute(&mut *self.transaction)
         .await
         .map_err(query_error)?;
@@ -277,7 +330,8 @@ impl Database {
         Ok(rows.into_iter().map(write_row).collect())
     }
 
-    /// The write of the operation `operation_id`.
+    /// The write that the operation `operation_id` reports: the write it asked for, or the
+    /// earlier write whose idempotency key it repeated.
     ///
     /// # Errors
     ///
@@ -288,8 +342,8 @@ impl Database {
     ) -> Result<Option<WriteRow>, PersistenceError> {
         let row: Option<WriteTuple> = sqlx::query_as(&format!(
             "select {WRITE_COLUMNS} from notes.writes
-             where operation_id = $1
-             order by position limit 1"
+             where write_id = (select write_id from notes.write_operations
+                               where operation_id = $1)"
         ))
         .bind(operation_id)
         .fetch_optional(self.pool())

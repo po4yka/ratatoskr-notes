@@ -146,6 +146,10 @@ impl Writes {
     /// uploaded or holds as a revision, with the declared length; otherwise the command is
     /// refused with `notes.write.content_missing`.
     ///
+    /// A command whose idempotency key names an earlier write of the connection queues nothing:
+    /// with the same origin and operation its operation reports the outcome of that write, and
+    /// with others it is refused with `notes.request.invalid`.
+    ///
     /// # Errors
     ///
     /// [`WriteError`] when the database fails; the command is delivered again.
@@ -161,6 +165,17 @@ impl Writes {
                 code: CONNECTION_NOT_FOUND,
             });
         };
+        if let Some((write_id, digest)) = transaction.write_of_key(&request.idempotency_key).await?
+        {
+            if digest != request.digest {
+                return Ok(Handled::Refused { code: INVALID });
+            }
+            transaction
+                .attach_operation(request.operation_id, write_id)
+                .await?;
+            transaction.commit().await?;
+            return Ok(Handled::Repeated { write_id });
+        }
         if let Some(digest) = &request.content_hash {
             let usable = self
                 .recorder

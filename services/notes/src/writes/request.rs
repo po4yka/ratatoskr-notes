@@ -4,12 +4,15 @@ use ratatoskr_event_envelope::CommandEnvelope;
 use ratatoskr_notes_contracts::{FileWriteRequested, PropertyChange, WriteOperation};
 use ratatoskr_notes_index::paths::{nfc_path, path_key};
 use ratatoskr_notes_persistence::NewWrite;
+use sha2::{Digest as _, Sha256};
 use uuid::Uuid;
 
 /// The facts of one write command.
 #[derive(Debug, Clone)]
 pub(super) struct Request {
     pub(super) operation_id: Uuid,
+    pub(super) idempotency_key: String,
+    pub(super) digest: String,
     pub(super) connection_id: Uuid,
     pub(super) origin: String,
     pub(super) kind: &'static str,
@@ -76,7 +79,11 @@ impl Request {
             _ => return None,
         };
         let path = nfc_path(path);
+        // The digest of what the writer asked for, to tell a retry from a reused key.
+        let request = serde_json::to_vec(&(payload.origin.as_str(), &payload.operation)).ok()?;
         Some(Self {
+            idempotency_key: payload.idempotency_key.hex.as_str().to_owned(),
+            digest: format!("{:x}", Sha256::digest(&request)),
             operation_id,
             connection_id: payload.connection_id.0,
             origin: payload.origin.as_str().to_owned(),
@@ -95,6 +102,8 @@ impl Request {
         NewWrite {
             write_id,
             operation_id: self.operation_id,
+            idempotency_key: &self.idempotency_key,
+            request_digest: &self.digest,
             origin: &self.origin,
             kind: self.kind,
             path: &self.path,
