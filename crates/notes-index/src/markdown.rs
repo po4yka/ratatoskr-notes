@@ -16,31 +16,37 @@ use crate::text::{
     has_scheme, is_tag_char, nfc, percent_decode, tag_body_is_valid, wikilink_display,
 };
 
-/// One link or embed and where it starts in the body.
+/// One link or embed and where it is in the body.
 struct Found {
     at: usize,
+    end: usize,
     embed: bool,
+    /// Whether a Markdown link is inline, `[text](target)`, and not a reference or a shortcut.
+    inline: bool,
     link: Link,
+}
+
+/// Where one link or embed of a body is: the text from `[[` or `[` (with the `!` of an embed) to
+/// its end, and its form.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Reference {
+    pub(crate) range: Range<usize>,
+    pub(crate) form: LinkForm,
 }
 
 /// A Markdown link or image whose text the reader still collects.
 struct Open {
     at: usize,
+    end: usize,
     embed: bool,
+    inline: bool,
     target: Option<String>,
     text: String,
 }
 
 /// Read the body of a note into `index`: links, embeds, tags, headings and block ids.
 pub(crate) fn read(body: &str, index: &mut NoteIndex) {
-    let mut blank: Vec<Range<usize>> = Vec::new();
-    let mut found: Vec<Found> = Vec::new();
-    let mut link_ranges: Vec<Range<usize>> = Vec::new();
-    read_events(body, index, &mut blank, &mut found, &mut link_ranges);
-
-    let visible = blanked(body, &blank);
-    read_wikilinks(&visible, &mut found, &mut link_ranges);
-    found.sort_by_key(|found| found.at);
+    let (found, visible, mut link_ranges) = find_links(body, index);
     for found in found {
         if found.embed {
             index.embeds.push(found.link);
@@ -52,6 +58,33 @@ pub(crate) fn read(body: &str, index: &mut NoteIndex) {
     link_ranges.extend(urls(&visible));
     read_tags(&blanked(&visible, &link_ranges), &mut index.tags);
     read_blocks(&visible, &mut index.blocks);
+}
+
+/// Where each wikilink, embed and inline Markdown link of `body` is, outside code, in the order of
+/// the body. A reference-style Markdown link is left out: it names no target in its own text.
+pub(crate) fn references(body: &str) -> Vec<Reference> {
+    let (found, _, _) = find_links(body, &mut NoteIndex::default());
+    found
+        .into_iter()
+        .filter(|found| found.link.form == LinkForm::Wiki || found.inline)
+        .map(|found| Reference {
+            range: found.at..found.end,
+            form: found.link.form,
+        })
+        .collect()
+}
+
+/// The links and embeds of `body` in its order, the body with code, HTML comments and math blanked
+/// out, and the ranges of the links. The headings go to `index`.
+fn find_links(body: &str, index: &mut NoteIndex) -> (Vec<Found>, String, Vec<Range<usize>>) {
+    let mut blank: Vec<Range<usize>> = Vec::new();
+    let mut found: Vec<Found> = Vec::new();
+    let mut link_ranges: Vec<Range<usize>> = Vec::new();
+    read_events(body, index, &mut blank, &mut found, &mut link_ranges);
+    let visible = blanked(body, &blank);
+    read_wikilinks(&visible, &mut found, &mut link_ranges);
+    found.sort_by_key(|found| found.at);
+    (found, visible, link_ranges)
 }
 
 /// The events of the `CommonMark` parser: what to blank, the Markdown links and images, and the
@@ -108,7 +141,9 @@ fn read_events(
                 }
                 open = Some(Open {
                     at: range.start,
+                    end: range.end,
                     embed,
+                    inline: link_type == LinkType::Inline,
                     target,
                     text: String::new(),
                 });
@@ -121,14 +156,18 @@ fn read_events(
             Event::End(TagEnd::Link | TagEnd::Image) => {
                 if let Some(Open {
                     at,
+                    end,
                     embed,
+                    inline,
                     target: Some(target),
                     text,
                 }) = open.take()
                 {
                     found.push(Found {
                         at,
+                        end,
                         embed,
+                        inline,
                         link: Link {
                             link: target,
                             display_text: text,
@@ -208,7 +247,9 @@ fn read_wikilinks(text: &str, found: &mut Vec<Found>, link_ranges: &mut Vec<Rang
             let start = if embed { open - 1 } else { open };
             found.push(Found {
                 at: start,
+                end,
                 embed,
+                inline: false,
                 link: wikilink(inner),
             });
             link_ranges.push(start..end);
