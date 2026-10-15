@@ -1,6 +1,7 @@
 //! The write path helpers: an active `plugin` connection with write mode on, the commands that
 //! Edge would publish, and a fake channel that sees the deliveries and acknowledges them.
 
+use axum::http::StatusCode;
 use ratatoskr_event_envelope::{
     CommandEnvelope, CommandPayload as _, EnvelopeSchemaVersion, ProducerName,
 };
@@ -11,7 +12,7 @@ use ratatoskr_notes_contracts::FileWriteRequested;
 use serde_json::{Value, json};
 use uuid::Uuid;
 
-use crate::support::channel::{Channel, OWNER, entry, sha256};
+use crate::support::channel::{Channel, OWNER, change, entry, sha256};
 
 /// A domain router, its blob store and the pending writes of one test database.
 pub(crate) struct Writer {
@@ -77,6 +78,28 @@ impl Writer {
             .execute(self.channel.fixture.pool())
             .await
             .expect("the write mode is set");
+    }
+
+    /// The device of [`OWNER`] reports that `path` of `connection_id` has `bytes` now.
+    pub(crate) async fn vault_change(&self, connection_id: Uuid, path: &str, bytes: &[u8]) {
+        self.channel.hold(OWNER, connection_id, bytes).await;
+        let committed: i64 = sqlx::query_scalar(
+            "select device_sequence from notes.connections where connection_id = $1",
+        )
+        .bind(connection_id)
+        .fetch_one(self.channel.fixture.pool())
+        .await
+        .expect("the connection exists");
+        let next = u64::try_from(committed).expect("a sequence") + 1;
+        let answer = self
+            .channel
+            .batch(
+                OWNER,
+                connection_id,
+                vec![change(next, "updated", path, bytes)],
+            )
+            .await;
+        assert_eq!(answer.status, StatusCode::OK, "{:?}", answer.body);
     }
 
     /// Upload `bytes` for `connection_id` of [`OWNER`] and return their notes-owned `BlobRef`.
