@@ -577,6 +577,11 @@ async fn a_group_base_mismatch_names_the_local_hash_of_each_file() {
         json!(sha256(index_local)),
         "the conflict names the local hash that the device reported for that file"
     );
+    assert_eq!(
+        raised[0]["stale_paths"],
+        json!(["Index.md", "Note.md"]),
+        "the event names every stale member of the write group"
+    );
     let conflict_id = raised[0]["conflict_id"].as_str().expect("a conflict id");
     let conflict = writer.conflict(OWNER, conflict_id).await;
     assert_eq!(

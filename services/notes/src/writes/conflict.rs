@@ -117,6 +117,7 @@ pub(super) struct Raised<'a> {
     pub(super) operation_id: Uuid,
     pub(super) connection_id: Uuid,
     pub(super) path: &'a str,
+    pub(super) stale_paths: Option<&'a [String]>,
     pub(super) origin: &'a str,
     pub(super) media_type: &'a str,
     pub(super) sides: Sides<'a>,
@@ -144,11 +145,22 @@ pub(super) fn raised_envelope(
         }),
         None => None,
     };
+    let stale_paths = raised
+        .stale_paths
+        .map(|paths| {
+            paths
+                .iter()
+                .map(|path| VaultPath::parse(path))
+                .collect::<Result<Vec<_>, _>>()
+        })
+        .transpose()
+        .map_err(|_| EnvelopeBuildError::STAGE)?;
     let payload = ConflictRaised {
         conflict_id: NotesConflictId(raised.conflict_id),
         operation_id: OperationId(raised.operation_id),
         connection_id: NotesConnectionId(raised.connection_id),
         path: VaultPath::parse(raised.path).map_err(|_| EnvelopeBuildError::STAGE)?,
+        stale_paths,
         origin: WriteOrigin::parse(raised.origin).map_err(|_| EnvelopeBuildError::STAGE)?,
         media_type: MediaType::parse(raised.media_type).map_err(|_| EnvelopeBuildError::STAGE)?,
         base_hash: hash(raised.sides.base)?,

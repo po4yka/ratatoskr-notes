@@ -800,6 +800,7 @@ impl Writes {
                 operation_id: conflict.operation_id,
                 connection_id: conflict.connection_id,
                 path: &conflict.path,
+                stale_paths: conflict.stale_paths.as_deref(),
                 origin: &conflict.origin,
                 media_type: &conflict.media_type,
                 sides,

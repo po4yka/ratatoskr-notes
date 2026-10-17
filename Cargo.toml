@@ -23,14 +23,14 @@ ratatoskr-notes-persistence = { version = "0.1.0", path = "crates/persistence" }
 # repository as two different crates, so a mixed pin would split the envelope types in two.
 # 66bdb0c is the one contracts revision of the fleet. It includes the SITE-028 build identity
 # and the OBS-024 write/conflict types beside the OBS-023 notes types.
-ratatoskr-error-contracts = { git = "https://github.com/po4yka/ratatoskr-contracts.git", rev = "66bdb0c0545363f06137f13687084c21db9b27c5" }
-ratatoskr-event-envelope  = { git = "https://github.com/po4yka/ratatoskr-contracts.git", rev = "66bdb0c0545363f06137f13687084c21db9b27c5" }
-ratatoskr-identifiers     = { git = "https://github.com/po4yka/ratatoskr-contracts.git", rev = "66bdb0c0545363f06137f13687084c21db9b27c5" }
-ratatoskr-notes-contracts = { git = "https://github.com/po4yka/ratatoskr-contracts.git", rev = "66bdb0c0545363f06137f13687084c21db9b27c5" }
+ratatoskr-error-contracts = { git = "https://github.com/po4yka/ratatoskr-contracts.git", rev = "1756034314a15d3a83d5c7d15b172da502990e98" }
+ratatoskr-event-envelope  = { git = "https://github.com/po4yka/ratatoskr-contracts.git", rev = "1756034314a15d3a83d5c7d15b172da502990e98" }
+ratatoskr-identifiers     = { git = "https://github.com/po4yka/ratatoskr-contracts.git", rev = "1756034314a15d3a83d5c7d15b172da502990e98" }
+ratatoskr-notes-contracts = { git = "https://github.com/po4yka/ratatoskr-contracts.git", rev = "1756034314a15d3a83d5c7d15b172da502990e98" }
 # The report of the connect operation, `platform.operation.reported.v1` (workspace design D10).
-ratatoskr-operation-contracts = { git = "https://github.com/po4yka/ratatoskr-contracts.git", rev = "66bdb0c0545363f06137f13687084c21db9b27c5" }
+ratatoskr-operation-contracts = { git = "https://github.com/po4yka/ratatoskr-contracts.git", rev = "1756034314a15d3a83d5c7d15b172da502990e98" }
 # The blob receipt of the device channels: the shared chunked, resumable transfer contract.
-ratatoskr-blob-transfer-contracts = { git = "https://github.com/po4yka/ratatoskr-contracts.git", rev = "66bdb0c0545363f06137f13687084c21db9b27c5" }
+ratatoskr-blob-transfer-contracts = { git = "https://github.com/po4yka/ratatoskr-contracts.git", rev = "1756034314a15d3a83d5c7d15b172da502990e98" }
 
 # ---- persistence ----
 # No `migrate` feature: the schema is one file, `include_str!`d into the binary by
