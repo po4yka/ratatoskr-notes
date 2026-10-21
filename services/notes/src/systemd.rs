@@ -445,3 +445,6 @@ mod tests {
         assert_eq!(journal_line(no_unit), None, "an entry without a unit");
     }
 }
+
+#[cfg(test)]
+mod protocol_tests;
