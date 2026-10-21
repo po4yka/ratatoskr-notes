@@ -32,6 +32,29 @@ The test makes the stream `notes_test_events` for the subjects `evt.notes.>` and
 `evt.platform.operation.reported.v1` on that server. Do not point it at a server that holds the
 stream `ratatoskr_events`, which takes the same subjects.
 
+### Private D-Bus test prerequisite
+
+The four `systemd::protocol_tests` start a private `dbus-daemon` child on a temporary Unix
+socket. Put `dbus-daemon` on `PATH` before running the workspace tests: on macOS install the
+[official Homebrew dbus package](https://formulae.brew.sh/formula/dbus) with `brew install dbus`;
+on Debian/Ubuntu install the `dbus-daemon` package. GitHub's Ubuntu runner already provides it.
+Check the executable with `dbus-daemon --version`.
+
+Do not start a system/session service, enable a login daemon, change polkit, or set
+`DBUS_SESSION_BUS_ADDRESS`. Each test creates and terminates its own isolated bus. An absent
+executable is a missing test prerequisite, not a reason to skip these tests.
+
+Minimal `rust:1.97` images do not include this prerequisite. Install it inside the disposable
+container before the workspace test command (keep the existing PostgreSQL/NATS connections):
+
+```bash
+apt-get update && apt-get install -y --no-install-recommends dbus-daemon
+cargo test --workspace --locked
+```
+
+These commands are for the disposable Linux container, not the host. The focused
+`secret_custody` integration-test command below does not invoke the protocol unit tests.
+
 ### Rust — also the CI gate
 
 The gate is `.github/workflows/ci.yml`; this list and that job's `run:` steps are one list, and a step in ci.yml fails when they differ. Run them in this order before you declare a change done:
