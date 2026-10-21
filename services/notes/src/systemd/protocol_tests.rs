@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 
 use super::{DbusSystemd, JobResult, SystemdBus, UnitName};
 use tokio::io::AsyncBufReadExt as _;
-use zbus::zvariant::OwnedObjectPath;
+use zbus::OwnedObjectPath;
 
 const JOB: &str = "/org/freedesktop/systemd1/job/1";
 const SERVICE: &str = "/org/freedesktop/systemd1/unit/test";
@@ -129,8 +129,8 @@ impl Fixture {
             .ok_or("D-Bus exited before publishing its address")?;
         let code = Arc::new(AtomicI32::new(super::CLD_EXITED));
         let status = Arc::new(AtomicI32::new(7));
-        let server = zbus::connection::Builder::address(address.as_str())?
-            .name(super::SYSTEMD)?
+        let server = zbus::connection::Builder::address(address.as_str())
+            .name(super::SYSTEMD)
             .serve_at(
                 super::MANAGER_PATH,
                 Manager {
@@ -138,17 +138,17 @@ impl Fixture {
                     unrelated,
                     service_path: SERVICE,
                 },
-            )?
+            )
             .serve_at(
                 SERVICE,
                 Service {
                     code: code.clone(),
                     status: status.clone(),
                 },
-            )?
+            )
             .build()
             .await?;
-        let client = zbus::connection::Builder::address(address.as_str())?
+        let client = zbus::connection::Builder::address(address.as_str())
             .build()
             .await?;
         Ok(Self {
