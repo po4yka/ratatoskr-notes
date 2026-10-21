@@ -232,7 +232,7 @@ impl DbusSystemd {
             .await
             .map_err(|error| BusError::Refused(error.into()))?;
 
-        let job: zbus::zvariant::OwnedObjectPath =
+        let job: zbus::OwnedObjectPath =
             match manager.call(method, &(unit.as_str(), "replace")).await {
                 Ok(job) => job,
                 Err(zbus::Error::MethodError(name, _, _))
@@ -244,11 +244,10 @@ impl DbusSystemd {
             };
 
         while let Some(message) = removed.next().await {
-            let (_id, path, _unit, result): (u32, zbus::zvariant::OwnedObjectPath, String, String) =
-                message
-                    .body()
-                    .deserialize()
-                    .map_err(|error| BusError::Refused(error.into()))?;
+            let (_id, path, _unit, result): (u32, zbus::OwnedObjectPath, String, String) = message
+                .body()
+                .deserialize()
+                .map_err(|error| BusError::Refused(error.into()))?;
             if path == job {
                 return Ok(if result == "done" {
                     JobResult::Done
@@ -274,15 +273,14 @@ impl SystemdBus for DbusSystemd {
 
     async fn exit_status(&self, unit: &UnitName) -> Result<Option<i32>, BusError> {
         let manager = self.manager().await?;
-        let path: zbus::zvariant::OwnedObjectPath = manager
+        let path: zbus::OwnedObjectPath = manager
             .call("GetUnit", &(unit.as_str(),))
             .await
             .map_err(|error| BusError::Refused(error.into()))?;
         let service: zbus::Proxy<'_> = zbus::proxy::Builder::new(manager.connection())
             .destination(SYSTEMD)
-            .and_then(|builder| builder.path(path))
-            .and_then(|builder| builder.interface(SERVICE_INTERFACE))
-            .map_err(|error| BusError::Refused(error.into()))?
+            .path(path)
+            .interface(SERVICE_INTERFACE)
             .cache_properties(zbus::proxy::CacheProperties::No)
             .build()
             .await
@@ -445,3 +443,6 @@ mod tests {
         assert_eq!(journal_line(no_unit), None, "an entry without a unit");
     }
 }
+
+#[cfg(test)]
+mod protocol_tests;
