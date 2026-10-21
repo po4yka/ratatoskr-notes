@@ -45,6 +45,8 @@ zbus.workspace                        = true
 inotify.workspace = true
 
 [dev-dependencies]
+# The private D-Bus fixture exposes only a test service.
+zbus                       = { workspace = true, features = ["service"] }
 ratatoskr-notes-persistence = { workspace = true, features = ["test-support"] }
 tempfile.workspace          = true
 http-body-util.workspace    = true
