@@ -62,7 +62,7 @@ futures-util = { version = "0.3", default-features = false, features = ["std"] }
 chacha20poly1305 = { version = "0.11", default-features = false, features = ["alloc", "getrandom", "zeroize"] }
 # The key file is opened with O_NOFOLLOW, and its owner is compared with the effective uid of the
 # service. rustix makes both calls without `unsafe`; zbus already depends on the same version.
-rustix = { version = "1.1", default-features = false, features = ["std", "fs", "process"] }
+rustix = { version = "1.1.6", default-features = false, features = ["std", "fs", "process"] }
 
 # ---- working tree and blob root ----
 # The SHA-256 of a revision (workspace design D7). RustCrypto, pure Rust; sqlx already depends on it.
@@ -78,7 +78,7 @@ unicode-normalization = { version = "0.1.25", default-features = false, features
 caseless = "0.2.2"
 # CommonMark, to find the code, the HTML comments, the math and the Markdown links of a note. The
 # Obsidian extensions (wikilinks, embeds, tags, block ids, comments) are read beside it.
-pulldown-cmark = { version = "0.13.4", default-features = false }
+pulldown-cmark = { version = "0.13.6", default-features = false }
 # The frontmatter. YAML 1.2 core schema, so `2024-01-01` stays a string, as in Obsidian.
 yaml-rust2 = { version = "0.13", default-features = false }
 # The line diff under the three-way merge proposal of a text conflict (OBS-024 design D2). Myers
